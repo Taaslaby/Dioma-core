@@ -105,6 +105,10 @@ name = "poc-ecosystem"
 path = "src/bin/poc_ecosystem.rs"
 
 [[bin]]
+name = "observatory-eco"
+path = "src/bin/observatory_eco.rs"
+
+[[bin]]
 name = "evolution"
 path = "src/bin/evolution.rs"
 
