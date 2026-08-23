@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_2" data-name="Слой 2" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 81.85 82.98">
+  <defs>
+    <style>
+      .cls-1, .cls-2, .cls-3 {
+        fill: none;
+      }
+
+      .cls-2, .cls-4 {
+        stroke: #1d1d1b;
+      }
+
+      .cls-2, .cls-4, .cls-3 {
+        stroke-miterlimit: 10;
+      }
+
+      .cls-2, .cls-3 {
+        stroke-width: 2px;
+      }
+
+      .cls-4 {
+        fill: #fff;
+        stroke-width: 3px;
+      }
+
+      .cls-5 {
+        fill: #12110a;
+        font-family: SegoeUIVariable-BoldDisplay, 'Segoe UI Variable';
+        font-size: 10px;
+        font-variation-settings: 'wght' 700, 'opsz' 36;
+        font-weight: 700;
+      }
+
+      .cls-3 {
+        stroke: #12110a;
+      }
+
+      .cls-6 {
+        clip-path: url(#clippath);
+      }
+    </style>
+    <clipPath id="clippath">
+      <rect class="cls-1" x="7.69" y="7.22" width="66.46" height="43.65" rx="8.37" ry="8.37"/>
+    </clipPath>
+  </defs>
+  <g id="_Слой_1-2" data-name="Слой 1">
+    <g>
+      <rect class="cls-4" x="1.5" y="1.5" width="78.85" height="79.98" rx="10.31" ry="10.31"/>
+      <g>
+        <g class="cls-6">
+          <image width="294" height="199" transform="translate(5.69 5.22) scale(.24)" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASYAAADGCAYAAAB/9y3sAAAACXBIWXMAAC4jAAAuIwF4pT92AAADn0lEQVR4nO3aQY6jQBAAQbP//zN7Wmk10sxg6G7SdsTZBk6pqobHAwAAAAAAAJhru/sBvtr3fb/7GeDTbNuWasHtDyNE0HN3qG65uRjBa7grUEtvKkjwmlYHasnNBAnew6pATb+JKMH7mR2oaRcXJHhvM+M05cKiBJ9jRqCGX1CU4POMjtPQi4kSfK6RcRp2IVECRsVpyEVECfhnRJwuX0CUgK+uxunSn0UJ+M6VOP05+0dRAmY5HSaAn1wZXk6NWqYl4KgzK93TE5MoAbNZ5YCpzgwzT4XJtASsYGICpnt2qDkcJtMSsIqJCVjimeFGmICcQ2GyxgErmZiAZY4OOcIE5AgTkPNrmJwvAauZmIAcYQJyhAlY6sjxkDABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABOcIE5AgTkCNMQI4wATnCBOQIE5AjTECOMAE5wgTkCBOQI0xAjjABS23btv32G2ECcoQJyPk1TEfGLoCRTExAjjAByxzdwA6FyToHrGRiAnKECVjimc3rcJisc8AqJiYg5+kpaN/3fcaDAO/r2Y3LxATknDo3MjUBR505nzYxAdOcfWl2Kkze0AEzXQqMlQ74zpUBxioHDHd1q7q8kpmagP+NOOoZclYkTsDjMe78ecgq5zAcGGloUExO8JlGDyfDJx1xgs8yY2OasoKJE3yGWcc4U8+GBAre18yz5emH1uIE72XFy65lb9MECl7byrfvy1/zCxS8ljs+B7r1+yORgq47v0/MfBgpUnC/ysfSiYf4jljBPJUIAQAAAAAAAAAAAHDAXz/PqUnTEaSTAAAAAElFTkSuQmCC"/>
+        </g>
+        <rect class="cls-3" x="7.69" y="7.22" width="66.46" height="43.65" rx="8.37" ry="8.37"/>
+      </g>
+      <text class="cls-5" transform="translate(47.35 63.83)"><tspan x="0" y="0">SciKit</tspan></text>
+      <circle class="cls-2" cx="16.6" cy="66.27" r="9.75"/>
+      <circle class="cls-2" cx="16.6" cy="66.27" r="5.47"/>
+      <path class="cls-2" d="M7.69,32.05c1.88-2.52,3.77-5.05,5.65-7.57.83-1.11,2.56-.84,3.01.47,1.81,5.31,3.63,10.61,5.44,15.92.53,1.57,2.75,1.55,3.27-.02,2.16-6.63,4.33-13.26,6.49-19.88.51-1.58,2.74-1.59,3.27-.02,1.28,3.78,2.55,7.55,3.83,11.33.51,1.51,2.63,1.58,3.23.1.9-2.22,1.8-4.44,2.7-6.66.59-1.47,2.69-1.42,3.22.07,2.17,6.1,4.34,12.2,6.51,18.3.54,1.52,2.68,1.53,3.24.02l3.42-9.32c.58-1.57,2.83-1.48,3.28.13s.91,3.28,1.36,4.92c.4,1.45,2.33,1.72,3.12.45,1.66-2.66,3.31-5.32,4.97-7.97"/>
+    </g>
+  </g>
+</svg>

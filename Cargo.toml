@@ -1,0 +1,61 @@
+[package]
+name = "dioma"
+version = "0.1.0"
+edition = "2021"
+description = "Игра о выращиваемых спикинг-агентах поверх движка taas-checkmate"
+
+[dependencies]
+pillars = { path = "../Проекты/asm_engines/taas_checkmate/crates/pillars" }
+pillars-connectome = { path = "../Проекты/asm_engines/taas_checkmate/crates/pillars-connectome" }
+prometheus-grow = { path = "../Проекты/asm_engines/taas_checkmate/crates/prometheus-grow" }
+eframe = "0.29"
+egui = "0.29"
+egui_plot = "0.29"
+
+[[bin]]
+name = "poc-reflex"
+path = "src/bin/reflex.rs"
+
+[[bin]]
+name = "poc-arena"
+path = "src/bin/arena.rs"
+
+[[bin]]
+name = "poc-evolve"
+path = "src/bin/evolve.rs"
+
+[[bin]]
+name = "poc-gnw"
+path = "src/bin/gnw.rs"
+
+[[bin]]
+name = "poc-chemo"
+path = "src/bin/chemo.rs"
+
+[[bin]]
+name = "observatory"
+path = "src/bin/observatory.rs"
+
+[[bin]]
+name = "poc-genome"
+path = "src/bin/genome.rs"
+
+[[bin]]
+name = "haap-debug"
+path = "src/bin/haap_debug.rs"
+
+[[bin]]
+name = "brain-lab"
+path = "src/bin/brain_lab.rs"
+
+[[bin]]
+name = "pm-tune"
+path = "src/bin/pm_tune.rs"
+
+[[bin]]
+name = "poc-organs"
+path = "src/bin/poc_organs.rs"
+
+[[bin]]
+name = "grow-probe"
+path = "src/bin/grow_probe.rs"

@@ -1,0 +1,5 @@
+# SIMD-пути wide::f32x8 — как в taas-checkmate (см. его README).
+# Бинари непереносимы между машинами; для портабельной сборки:
+# RUSTFLAGS="-C target-cpu=x86-64" cargo build ...
+[build]
+rustflags = ["-C", "target-cpu=native"]
