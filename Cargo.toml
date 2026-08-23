@@ -84,10 +84,13 @@ path = "src/bin/poc_delayed_haap.rs"
 name = "poc-sardaana-brain"
 path = "src/bin/poc_sardaana_brain.rs"
 
-
 [[bin]]
 name = "poc-hetero-cognitive"
 path = "src/bin/poc_hetero_cognitive.rs"
+
+[[bin]]
+name = "sardaana-control"
+path = "src/bin/sardaana_control.rs"
 
 [[bin]]
 name = "poc-heredity"
