@@ -109,9 +109,21 @@ impl WorldSim {
     }
 
     pub(crate) fn move_body(&mut self, spikes_l: i32, spikes_r: i32, blood: &Blood) {
+        self.move_body_gated(spikes_l, spikes_r, blood, 1.0);
+    }
+
+    /// То же с гейтом скорости [0..1]: молчащая кора → существо стоит
+    /// («сидит»), активная → полный ход.
+    pub(crate) fn move_body_gated(
+        &mut self,
+        spikes_l: i32,
+        spikes_r: i32,
+        blood: &Blood,
+        gate: f32,
+    ) {
         let d = (spikes_l - spikes_r) as f64;
         self.heading += blood.turn_gain() * d;
-        let sp = blood.speed();
+        let sp = blood.speed() * f64::from(gate.clamp(0.0, 1.0));
         self.agent_x += sp * self.heading.cos();
         self.agent_y += sp * self.heading.sin();
         self.last_wall_hit = false;

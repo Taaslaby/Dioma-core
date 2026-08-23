@@ -11,7 +11,7 @@
 // -------------------------------------------------------------------------
 use crate::arena::{arena_gains, grow_agent, Genome, N_REGIONS, N_SL, N_SR};
 use crate::brain::PlasticityParams;
-use crate::free_life::{WorldSim, FOOD_PORTION, GLUCOSE_FED_THRESHOLD};
+use crate::free_life::{WorldSim, FOOD_PORTION};
 use crate::metabolism::{chem, locus, Blood};
 use crate::organs::{standard_spine_conn, Axon, OrganBrain, OrganId};
 
@@ -35,6 +35,13 @@ const MID_GAIN: f32 = 0.018;
 const PAIN_TICKS: usize = 8;
 /// Боль в спину: ток на сенсорный пул (HH-единицы).
 const PAIN_AMNT: f32 = 15.0;
+/// Порог сытости органной жизни: выше него дефицита нет и голод гаснет
+/// (в free_life порог 150 — существо никогда не наедается и не сидит).
+const ORGAN_FED_THRESHOLD: f32 = 100.0;
+/// Тормоз покоя на ML/MR: сытое существо сидит (голод снимает тормоз).
+const REST_INHIBIT: f32 = 0.6;
+/// Полная скорость при сумме моторных спайков за тик ≥ этого порога.
+const MOTOR_GATE_FULL: f32 = 24.0;
 
 /// Пошаговая свободная жизнь на органном мозге.
 pub struct OrganSim {
@@ -103,6 +110,7 @@ impl OrganSim {
         let (left, right) = self.world.sensors();
 
         // Кора: тоник + сенсорика (как в арене).
+        let hunger = self.blood.conc[chem::HUNGER];
         let mut cortex_ext = vec![self.blood.motor_tonic(); n_cortex];
         let sg = self.blood.sensor_gain();
         for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL) {
@@ -110,6 +118,19 @@ impl OrganSim {
         }
         for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL + N_SR).skip(N_SL) {
             *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32);
+        }
+        // Тормоз покоя: сытому существу незачем двигаться — подавляем
+        // моторные пулы (голод снимает тормоз линейно к порогу рта).
+        let rest = REST_INHIBIT * (1.0 - (hunger / 40.0).min(1.0));
+        if rest > 0.0 {
+            let (ml0, ml1) = self.organs.cortex.region_bounds(3);
+            let (mr0, mr1) = self.organs.cortex.region_bounds(4);
+            for cell in cortex_ext[ml0..ml1].iter_mut() {
+                *cell -= rest;
+            }
+            for cell in cortex_ext[mr0..mr1].iter_mut() {
+                *cell -= rest;
+            }
         }
 
         // Средний мозг: голод из крови → драйв.
@@ -151,16 +172,16 @@ impl OrganSim {
         let (ml, mr) = (cortex_regions[3], cortex_regions[4]);
         self.blood.loci[locus::RATE_MOTOR] = (ml + mr) as f32;
         {
-            let deficit =
-                (GLUCOSE_FED_THRESHOLD - self.blood.conc[chem::GLUCOSE]).max(0.0);
+            let deficit = (ORGAN_FED_THRESHOLD - self.blood.conc[chem::GLUCOSE]).max(0.0);
             self.blood.loci[locus::GLUCOSE_DEFICIT] = deficit;
         }
 
         // Рот и награда.
         let ate = self.world.try_eat(self.tick, &self.blood);
         if ate {
-            // Порция меньше арены: голодные циклы чаще.
-            self.blood.ingest_food(FOOD_PORTION * 0.6);
+            // Полная порция: после еды дефицит обнуляется и наступает
+            // сытость (покой), пока запас не выгорит.
+            self.blood.ingest_food(FOOD_PORTION);
             self.organs.cortex.schedule_reward(1.0);
             self.rewards_pending += 1;
         }
@@ -169,7 +190,10 @@ impl OrganSim {
         }
 
         self.blood.update();
-        self.world.move_body(ml, mr, &self.blood);
+        // Гейт скорости: молчащая кора → существо сидит на месте.
+        let gate = ((ml + mr) as f32 / MOTOR_GATE_FULL).min(1.0);
+        let sitting = (ml + mr) < 6;
+        self.world.move_body_gated(ml, mr, &self.blood, gate);
         self.tick += 1;
 
         OrganTickObs {
@@ -184,6 +208,7 @@ impl OrganSim {
             ate,
             wall_hit: self.world.last_wall_hit,
             alive: self.blood.organ.damage < 1.0,
+            sitting,
         }
     }
 
@@ -209,6 +234,8 @@ pub struct OrganTickObs {
     pub ate: bool,
     pub wall_hit: bool,
     pub alive: bool,
+    /// Моторы молчат (существо сидит).
+    pub sitting: bool,
 }
 
 /// Отчёт жизни органного существа.

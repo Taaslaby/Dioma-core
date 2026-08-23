@@ -49,6 +49,8 @@ struct ObsView {
     midbrain_spikes: i64,
     /// Моторные спайки спины (арена: 0).
     spine_m_spikes: i64,
+    /// Существо сидит (органный режим).
+    sitting: bool,
     x: f64,
     y: f64,
     ate: bool,
@@ -90,6 +92,7 @@ impl LifeModel {
                     ],
                     midbrain_spikes: 0,
                     spine_m_spikes: 0,
+                    sitting: false,
                     chemicals: o.chemicals,
                     x: o.x,
                     y: o.y,
@@ -102,6 +105,7 @@ impl LifeModel {
                     region_spikes: o.cortex_regions,
                     midbrain_spikes: o.midbrain_spikes,
                     spine_m_spikes: o.spine_m_spikes,
+                    sitting: o.sitting,
                     chemicals: o.chemicals,
                     x: o.x,
                     y: o.y,
@@ -163,6 +167,8 @@ struct Observatory {
     seed: u64,
     eaten_total: usize,
     trace_on: bool,
+    /// Существо сидит (последний тик) — визуальный режим «покой».
+    sitting: bool,
     /// Агрегированный граф регионов: (pre, post, средний вес).
     region_edges: Vec<(usize, usize, f32)>,
     /// Позиции регионов (центры layout, x/y).
@@ -212,6 +218,7 @@ impl Observatory {
             seed,
             eaten_total: 0,
             trace_on: false,
+            sitting: false,
             region_edges,
             region_pos,
         }
@@ -220,6 +227,7 @@ impl Observatory {
     /// Продвинуть симуляцию на один тик и записать историю.
     fn advance(&mut self) {
         let obs = self.model.step();
+        self.sitting = obs.sitting;
         self.eaten_total += obs.ate as usize;
         self.chem_history.push_back(obs.chemicals.try_into().unwrap());
         self.motor_history
@@ -369,13 +377,23 @@ impl Observatory {
         let alive = self.model.alive();
         let color = if alive { t.colors.agent } else { t.colors.dead };
         dot(painter.clone(), at, t.viz.agent_radius, color);
-        heading_arrow(
-            painter.clone(),
-            at,
-            world.heading,
-            t.viz.agent_radius,
-            color,
-        );
+        if self.sitting {
+            // Покой: стрелки нет, над агентом «z z».
+            label(
+                painter.clone(),
+                Pos2::new(at.x, at.y - t.viz.agent_radius - t.spacing.inner),
+                "z z",
+                t.colors.text_dim,
+            );
+        } else {
+            heading_arrow(
+                painter.clone(),
+                at,
+                world.heading,
+                t.viz.agent_radius,
+                color,
+            );
+        }
     }
 
     /// Граф мозга: узлы регионов с вспышками, рёбра по среднему весу.

@@ -54,6 +54,12 @@ fn main() {
     let mut peckish = Band::new();
     let mut hungry = Band::new();
     let mut starving = Band::new();
+    let mut sit_ticks = 0usize;
+    let mut sit_runs = 0usize;
+    let mut in_sit = false;
+    let mut longest_sit = 0usize;
+    let mut cur_sit = 0usize;
+    let mut lookarounds_during_sit = 0i64;
 
     for _ in 0..SIM_TICKS {
         let obs = sim.step_tick();
@@ -72,11 +78,38 @@ fn main() {
             &mut starving
         };
         band.push(speed, ml + mr, (ml - mr).abs(), dist, obs.midbrain_spikes);
+
+        if obs.sitting {
+            sit_ticks += 1;
+            cur_sit += 1;
+            if !in_sit {
+                sit_runs += 1;
+                in_sit = true;
+            }
+            lookarounds_during_sit += obs.midbrain_spikes;
+        } else {
+            in_sit = false;
+            longest_sit = longest_sit.max(cur_sit);
+            cur_sit = 0;
+        }
     }
+    longest_sit = longest_sit.max(cur_sit);
 
     println!("полосы голода (химия):");
     sated.report("сытый <15");
     peckish.report("лёгкий 15-40");
     hungry.report("голодный 40-150");
     starving.report("голодуха >150");
+    println!(
+        "покой: тиков сидения {}/{} ({}%), сессий {}, самая длинная {} тиков",
+        sit_ticks,
+        SIM_TICKS,
+        (sit_ticks as f64 / SIM_TICKS as f64 * 100.0) as usize,
+        sit_runs,
+        longest_sit
+    );
+    println!(
+        "«изучает» в покое: средний мозг во время сидения = {:.1} сп/тик (спонтанные осмотры)",
+        lookarounds_during_sit as f64 / sit_ticks.max(1) as f64
+    );
 }
