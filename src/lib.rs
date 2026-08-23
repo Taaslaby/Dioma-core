@@ -12,6 +12,7 @@ pub mod rng;
 
 pub mod brain;
 pub mod grow;
+pub mod heritage;
 pub mod metabolism;
 pub mod mind;
 pub mod organ_life;

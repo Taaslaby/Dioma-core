@@ -157,6 +157,26 @@ impl CreatureMind {
         self.brain.weight_heat()
     }
 
+    /// Перезаписать W2 (наследование) с опциональной мутацией.
+    pub fn set_weights_mutated(&mut self, w: &[f32], sigma: f32, seed: u64) {
+        let mut out = w.to_vec();
+        if sigma > 0.0 {
+            for (i, v) in out.iter_mut().enumerate() {
+                let x = seed
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    .wrapping_add(i as u64 * 0xBF58_476D_1CE4_E5B9);
+                let noise = (((x >> 40) & 0xFFFF) as f32 / 65536.0) * 2.0 - 1.0;
+                *v += sigma * noise;
+            }
+        }
+        self.brain.set_weights(&out);
+    }
+
+    /// Точная перезапись W2 без мутации (загрузка из файла).
+    pub fn set_weights(&mut self, w: &[f32]) {
+        self.brain.set_weights(w);
+    }
+
     /// Средние частоты выходных пулов по действиям.
     pub fn action_rates(&self) -> &[f32] {
         self.brain.action_rates()

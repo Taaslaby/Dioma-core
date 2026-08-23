@@ -480,6 +480,18 @@ impl Brain {
         self.pre_of.len()
     }
 
+    /// Копия текущих значений CSR (сохранение существа).
+    pub fn csr_values(&self) -> Vec<f32> {
+        self.runner.connectome.values.clone()
+    }
+
+    /// Перезаписать значения CSR (наследование выученных весов). Длины
+    /// должны совпадать с построенным CSR.
+    pub fn set_csr_values(&mut self, vals: &[f32]) {
+        let n = vals.len().min(self.runner.connectome.values.len());
+        self.runner.connectome.values[..n].copy_from_slice(&vals[..n]);
+    }
+
     /// Мин/макс всех синаптических весов (интроспекция/отладка).
     pub fn values_minmax(&self) -> (f32, f32) {
         self.runner

@@ -62,6 +62,8 @@ const FEVER_DRIVE_PER_DEG: f32 = 1.2;
 
 /// Пошаговая свободная жизнь на органном мозге.
 pub struct OrganSim {
+    /// Сид генома/мира — рост детерминирован, сохранять не нужно.
+    pub seed: u64,
     pub organs: OrganBrain,
     pub blood: Blood,
     pub world: WorldSim,
@@ -119,6 +121,7 @@ impl OrganSim {
                 }
                 b
             },
+            seed,
             world: WorldSim::new(seed ^ 0xB100),
             tick: 0,
             body_temp: START_TEMP,
@@ -134,6 +137,11 @@ impl OrganSim {
     pub fn with_mind(mut self, seed: u64) -> Self {
         self.mind = Some(crate::mind::CreatureMind::new(seed));
         self
+    }
+
+    /// Съедено за текущую жизнь (для сохранения существа).
+    pub fn eaten_total(&self) -> usize {
+        self.rewards_pending
     }
 
     /// Один тик мира (25 мс).
