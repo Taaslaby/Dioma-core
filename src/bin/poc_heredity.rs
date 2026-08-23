@@ -8,6 +8,7 @@
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
 use dioma::heritage::{save_creature, spawn_child, ticks_to_first_meal};
+use rayon::prelude::*;
 use dioma::organ_life::{OrganSim, SIM_TICKS};
 use taas_format::TaasReader;
 
@@ -56,50 +57,47 @@ fn run() {
         r.get_f32("cortex_csr").map(|v| v.len()).unwrap_or(0)
     );
 
-    // ── Дети наследников против новорождённых ──
+    // ── Дети наследников против новорождённых — параллельно ──
     const N: usize = 5;
-    const SHORT: usize = 800; // короткая жизнь: кто успеет поесть
+    const SHORT: usize = 800;
 
-    let mut heir_ticks = Vec::new();
-    let mut heir_eaten = Vec::new();
-    for k in 0..N {
-        let seed = 0x1000 + k as u64;
-        println!("  ребёнок-наследник {k}: растём...");
-        let mut child = if std::env::var("DIOMA_NO_INHERIT").is_ok() {
-            // Бисект: только создание тела, без перелива весов.
-            OrganSim::new(false, seed).with_mind(seed)
-        } else {
-            spawn_child(&parent, seed, true)
-        };
-        // Влить точный родительский файл? spawn_child уже перенёс веса —
-        // здесь проверяем именно наследование с мутацией.
-        let t = ticks_to_first_meal(&mut child);
-        heir_ticks.push(t);
-        let mut eaten_k = 0;
-        for _ in 0..SHORT.saturating_sub(t.min(SHORT)) {
-            if child.step_tick().ate {
-                eaten_k += 1;
+    let t0 = std::time::Instant::now();
+    let heir_results: Vec<(usize, usize)> = (0..N)
+        .into_par_iter()
+        .map(|k| {
+            let seed = 0x1000 + k as u64;
+            let grown = dioma::arena::grow_agent(&dioma::arena::Genome::wildtype(seed));
+            let mut child = spawn_child(&parent, seed, true);
+            let t = ticks_to_first_meal(&mut child);
+            let mut eaten_k = 0usize;
+            for _ in 0..SHORT.saturating_sub(t.min(SHORT)) {
+                if child.step_tick().ate { eaten_k += 1; }
             }
-        }
-        heir_eaten.push(eaten_k);
-    }
+            (t, eaten_k)
+        })
+        .collect();
+    println!("наследники оценены за {:.1} с", t0.elapsed().as_secs_f64());
 
-    let mut newborn_ticks = Vec::new();
-    let mut newborn_eaten = Vec::new();
-    for k in 0..N {
-        let seed = 0x2000 + k as u64;
-        println!("  новорождённый {k}: растём...");
-        let mut baby = OrganSim::new(false, seed).with_mind(seed);
-        let t = ticks_to_first_meal(&mut baby);
-        newborn_ticks.push(t);
-        let mut eaten_k = 0;
-        for _ in 0..SHORT.saturating_sub(t.min(SHORT)) {
-            if baby.step_tick().ate {
-                eaten_k += 1;
+    let t1 = std::time::Instant::now();
+    let newborn_results: Vec<(usize, usize)> = (0..N)
+        .into_par_iter()
+        .map(|k| {
+            let seed = 0x2000 + k as u64;
+            let mut baby = OrganSim::new(false, seed).with_mind(seed);
+            let mut eaten_k = 0usize;
+            let t = ticks_to_first_meal(&mut baby);
+            for _ in 0..SHORT.saturating_sub(t.min(SHORT)) {
+                if baby.step_tick().ate { eaten_k += 1; }
             }
-        }
-        newborn_eaten.push(eaten_k);
-    }
+            (t, eaten_k)
+        })
+        .collect();
+    println!("новорождённые оценены за {:.1} с", t1.elapsed().as_secs_f64());
+
+    let heir_ticks: Vec<usize> = heir_results.iter().map(|(t, _)| *t).collect();
+    let heir_eaten: Vec<usize> = heir_results.iter().map(|(_, e)| *e).collect();
+    let newborn_ticks: Vec<usize> = newborn_results.iter().map(|(t, _)| *t).collect();
+    let newborn_eaten: Vec<usize> = newborn_results.iter().map(|(_, e)| *e).collect();
 
     let mean = |v: &[usize]| -> f64 {
         v.iter().filter(|&&x| x != usize::MAX).map(|&x| x as f64).sum::<f64>()

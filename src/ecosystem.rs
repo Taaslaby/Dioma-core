@@ -11,6 +11,7 @@
 use crate::heritage::MUTATE_W2_SIGMA;
 use crate::organ_life::OrganSim;
 use crate::rng::XorShift;
+use rayon::prelude::*;
 
 pub const ECO_TICKS: usize = 8000; // 200 с
 pub const EAT_RADIUS: f64 = 14.0;
@@ -118,7 +119,7 @@ impl Ecosystem {
         }
     }
 
-    /// Один тик мира: все живые существа шагают, едят, умирают, размножаются.
+    /// Один тик мира: все живые существа шагают параллельно, потом едят.
     pub fn step_tick(&mut self) -> usize {
         self.tick += 1;
 
@@ -131,7 +132,7 @@ impl Ecosystem {
             }
         }
 
-        // Собираем позиции еды для сенсорики.
+        // Собираем позиции еды для сенсорики (иммутабельно).
         let food_snapshot: Vec<(f64, f64)> = self
             .foods
             .iter()
@@ -139,67 +140,88 @@ impl Ecosystem {
             .map(|f| (f.x, f.y))
             .collect();
 
-        // Шаг каждого живого существа.
-        let mut ate_flags = vec![false; self.creatures.len()];
-        #[allow(clippy::needless_range_loop)]
-        for ci in 0..self.creatures.len() {
-            if !self.creatures[ci].alive {
-                continue;
-            }
-            let (x, y) = (self.creatures[ci].x, self.creatures[ci].y);
+        // ─── Фаза 1: Параллельный шаг мозга каждого существа ───
+        // Каждое существо независимо — rayon раскидывает по ядрам.
+        struct StepResult {
+            ml: i32,
+            mr: i32,
+            new_x: f64,
+            new_y: f64,
+            new_heading: f64,
+        }
+        let step_results: Vec<Option<StepResult>> = self
+            .creatures
+            .par_iter_mut()
+            .enumerate()
+            .map(|(ci, c)| {
+                if !c.alive {
+                    return None;
+                }
+                let (x, y) = (c.x, c.y);
 
-            // Ближайшая еда.
-            let (fx, fy) = food_snapshot
-                .iter()
-                .map(|&(fx, fy)| {
-                    let d = (fx - x).powi(2) + (fy - y).powi(2);
-                    (d, fx, fy)
+                // Ближайшая еда из снимка.
+                let (fx, fy) = food_snapshot
+                    .iter()
+                    .map(|&(fx, fy)| {
+                        let d = (fx - x).powi(2) + (fy - y).powi(2);
+                        (d, fx, fy)
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, fx, fy)| (fx, fy))
+                    .unwrap_or((0.0, 0.0));
+
+                // Сенсорика.
+                let dx = fx - x;
+                let dy = fy - y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                let prox = 60.0 / (60.0 + dist);
+                let mut rel = dy.atan2(dx) - c.heading;
+                while rel > std::f64::consts::PI { rel -= 2.0 * std::f64::consts::PI; }
+                while rel < -std::f64::consts::PI { rel += 2.0 * std::f64::consts::PI; }
+                let smell_l = rel.sin().max(0.0) * prox;
+                let smell_r = (-rel.sin()).max(0.0) * prox;
+
+                // Шаг мозга.
+                let step_obs = c.sim.brain_step_sensed(smell_l, smell_r);
+                let ml = step_obs.cortex_regions[3] as f64;
+                let mr = step_obs.cortex_regions[4] as f64;
+
+                // Движение.
+                let gate = ((ml + mr) as f32 / 24.0).min(1.0) as f64;
+                let speed = 2.0 * gate;
+                c.heading += 0.06 * (ml - mr);
+                c.x += speed * c.heading.cos();
+                c.y += speed * c.heading.sin();
+                if c.x.abs() > ARENA_HALF {
+                    c.x = c.x.clamp(-ARENA_HALF, ARENA_HALF);
+                    c.heading = std::f64::consts::PI - c.heading;
+                }
+                if c.y.abs() > ARENA_HALF {
+                    c.y = c.y.clamp(-ARENA_HALF, ARENA_HALF);
+                    c.heading = -c.heading;
+                }
+
+                Some(StepResult {
+                    ml: step_obs.cortex_regions[3],
+                    mr: step_obs.cortex_regions[4],
+                    new_x: c.x,
+                    new_y: c.y,
+                    new_heading: c.heading,
                 })
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, fx, fy)| (fx, fy))
-                .unwrap_or((0.0, 0.0));
+            })
+            .collect();
 
-            // Сенсорика.
-            let dx = fx - x;
-            let dy = fy - y;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let prox = 60.0 / (60.0 + dist);
-            let mut rel = dy.atan2(dx) - self.creatures[ci].heading;
-            while rel > std::f64::consts::PI { rel -= 2.0 * std::f64::consts::PI; }
-            while rel < -std::f64::consts::PI { rel += 2.0 * std::f64::consts::PI; }
-            let smell_l = rel.sin().max(0.0) * prox;
-            let smell_r = (-rel.sin()).max(0.0) * prox;
-
-            // Шаг мозга (органы + кровь) с внешней сенсорикой.
-            let step_obs = self.creatures[ci].sim.brain_step_sensed(smell_l, smell_r);
-            let ml = step_obs.cortex_regions[3] as f64;
-            let mr = step_obs.cortex_regions[4] as f64;
-
-            // Движение: гейт скорости от моторной активности.
-            let gate = ((ml + mr) as f32 / 24.0).min(1.0) as f64;
-            let speed = 2.0 * gate;
-            self.creatures[ci].heading += 0.06 * (ml - mr);
-            self.creatures[ci].x += speed * self.creatures[ci].heading.cos();
-            self.creatures[ci].y += speed * self.creatures[ci].heading.sin();
-            if self.creatures[ci].x.abs() > ARENA_HALF {
-                self.creatures[ci].x = self.creatures[ci].x.clamp(-ARENA_HALF, ARENA_HALF);
-                self.creatures[ci].heading = std::f64::consts::PI - self.creatures[ci].heading;
-            }
-            if self.creatures[ci].y.abs() > ARENA_HALF {
-                self.creatures[ci].y = self.creatures[ci].y.clamp(-ARENA_HALF, ARENA_HALF);
-                self.creatures[ci].heading = -self.creatures[ci].heading;
-            }
-
-            // Еда.
-            if self.blood_wants_food(ci) {
+        // ─── Фаза 2: Последовательная еда (общий ресурс). ───
+        let mut ate_flags = vec![false; self.creatures.len()];
+        for (ci, result) in step_results.iter().enumerate() {
+            let Some(sr) = result else { continue };
+            if self.blood_wants_food_pub(ci) {
                 for f in self.foods.iter_mut() {
                     if !f.alive { continue; }
-                    let d = ((f.x - self.creatures[ci].x).powi(2)
-                        + (f.y - self.creatures[ci].y).powi(2)).sqrt();
+                    let d = ((f.x - sr.new_x).powi(2) + (f.y - sr.new_y).powi(2)).sqrt();
                     if d < EAT_RADIUS {
                         f.alive = false;
                         f.regrow_at = self.tick + FOOD_REGROW;
-                        // Еда → награда разуму и дофамин коре.
                         self.creatures[ci].sim.blood.ingest_food(90.0);
                         self.creatures[ci].sim.organs.cortex.schedule_reward(1.0);
                         if let Some(m) = &mut self.creatures[ci].sim.mind {
@@ -312,6 +334,10 @@ impl Ecosystem {
     #[allow(dead_code)]
     fn blood_fatigue(&self, ci: usize) -> f32 {
         self.creatures[ci].sim.blood.conc[chem_fatigue()]
+    }
+
+    fn blood_wants_food_pub(&self, ci: usize) -> bool {
+        self.creatures[ci].sim.blood.wants_food()
     }
 
     fn blood_wants_food(&self, ci: usize) -> bool {

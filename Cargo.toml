@@ -11,6 +11,7 @@ prometheus-grow = { path = "../Проекты/asm_engines/taas_checkmate/crates/
 taas-format = { path = "../Проекты/asm_engines/taas_checkmate/crates/taas-format" }
 # Когнитивный рантайм karmac (SpikingBrain: каналы→GNW→базальные ганглии).
 taas-checkmate = { path = "../Проекты/asm_engines/taas_checkmate", default-features = false, features = ["karmac"] }
+rayon = "1"
 eframe = "0.29"
 egui = "0.29"
 egui_plot = "0.29"

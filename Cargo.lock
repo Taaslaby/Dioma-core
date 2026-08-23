@@ -790,6 +790,7 @@ dependencies = [
  "pillars",
  "pillars-connectome",
  "prometheus-grow",
+ "rayon",
  "taas-checkmate",
  "taas-format",
 ]
