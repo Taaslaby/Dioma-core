@@ -32,8 +32,10 @@ fn hunger_drive(hunger: f32) -> f32 {
 /// (~300 сп/тик) → +5.4 — сенсорика гейтится на полную.
 const MID_GAIN: f32 = 0.018;
 /// Длительность болевого разряда в спине после удара о стену (тиков).
+#[allow(dead_code)]
 const PAIN_TICKS: usize = 8;
 /// Боль в спину: ток на сенсорный пул (HH-единицы).
+#[allow(dead_code)]
 const PAIN_AMNT: f32 = 15.0;
 /// Порог сытости органной жизни: выше него дефицита нет и голод гаснет
 /// (в free_life порог 150 — существо никогда не наедается и не сидит).
@@ -41,19 +43,24 @@ const ORGAN_FED_THRESHOLD: f32 = 100.0;
 /// Тормоз покоя на ML/MR: сытое существо сидит (голод снимает тормоз).
 const REST_INHIBIT: f32 = 0.6;
 /// Полная скорость при сумме моторных спайков за тик ≥ этого порога.
+#[allow(dead_code)]
 const MOTOR_GATE_FULL: f32 = 24.0;
 
 // ─── Температура тела («кипящий суп» спины) ────────────────────────────────
 /// Окружающая среда (°C), к ней остывает тело.
+#[allow(dead_code)]
 const AMBIENT_TEMP: f32 = 20.0;
 /// Стартовая температура тела.
 const START_TEMP: f32 = 24.0;
 /// Скорость охлаждения: доля разницы с средой в секунду.
+#[allow(dead_code)]
 const TEMP_COOL_PER_S: f32 = 0.18;
 /// Нагрев от моторной активности: при длительной активной погоне
 /// (motor_norm ≈ 1) равновесие ≈ 35°C — спина «закипает».
+#[allow(dead_code)]
 const TEMP_HEAT_PER_S: f32 = 2.7;
 /// Боль дополнительно греет (мышечный тонус).
+#[allow(dead_code)]
 const PAIN_HEAT: f32 = 0.6;
 /// Перегрев: выше этой температуры спина входит в спонтанные разряды
 /// («горит»: дёргается без боли), ток на градус перегрева.
@@ -72,7 +79,7 @@ pub struct OrganSim {
     pub body_temp: f32,
     pain_ticks: usize,
     /// Затухающая свежая боль (для канала pain разума).
-    pain_recent: f32,
+    pub pain_recent: f32,
     /// Были в лихорадке на прошлом тике (штраф только за вход).
     was_fever: bool,
     /// Шум сенсорики [0..1] — добавка к запаху, экзамен T3.
@@ -147,24 +154,34 @@ impl OrganSim {
         self.rewards_pending
     }
 
-    /// Один тик мира (25 мс).
-    pub fn step_tick(&mut self) -> OrganTickObs {
+    /// Шаг мозга с внешней сенсорикой — для экосистемы где запах приходит
+    /// из общего мира. `sensory_noise` игнорируется (шум на стороне мира).
+    pub fn brain_step_sensed(&mut self, left: f64, right: f64) -> BrainStepObs {
         let n_cortex = self.organs.cortex.n;
-        self.world.regrow(self.tick);
-        let (left, right) = self.world.sensors();
-
-        // Каналы разума: тело → семантика. Решение ДО сборки входов коры —
-        // действие модулирует тормоз покоя и сенсорный гейт.
         let hunger = self.blood.conc[chem::HUNGER];
         let glucose = self.blood.conc[chem::GLUCOSE];
         let fatigue = self.blood.conc[chem::FATIGUE];
-        self.pain_recent *= 0.97; // затухание свежей боли
-        if self.world.last_wall_hit {
-            self.pain_recent = (self.pain_recent + 0.6).min(1.0);
+        self.pain_recent *= 0.97;
+
+        // Средний мозг: голод → драйв.
+        let mid_ext = vec![hunger_drive(hunger); 24];
+        // Спина: лихорадка.
+        let fever_drive = ((self.body_temp - FEVER_TEMP).max(0.0) * FEVER_DRIVE_PER_DEG) as f32;
+        let spine_ext = vec![fever_drive; crate::organs::SPINE_N_S];
+
+        // Кора: тоник + внешняя сенсорика × sensor_gain.
+        let mut cortex_ext = vec![self.blood.motor_tonic(); n_cortex];
+        let sg = self.blood.sensor_gain();
+        for (i, cell) in cortex_ext.iter_mut().enumerate().take(20) {
+            *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32);
         }
-        let mind_action = if let Some(mind) = &mut self.mind {
-            // Сытость — от ГЛЮКОЗЫ (запаса), не от голода: голод — это
-            // отдельный канал «ищи еду», а комфорт покоя — «запас полон».
+        for (i, cell) in cortex_ext.iter_mut().enumerate().take(40).skip(20) {
+            *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32);
+        }
+
+        // Тормоз покоя + разум.
+        let mut rest = REST_INHIBIT * (1.0 - (hunger / 40.0).min(1.0));
+        if let Some(mind) = &mut self.mind {
             let sated01 = (glucose / ORGAN_FED_THRESHOLD).clamp(0.0, 1.0);
             let channels = crate::mind::CreatureMind::channels(
                 hunger / 255.0,
@@ -176,106 +193,73 @@ impl OrganSim {
                 ((self.body_temp - FEVER_TEMP).max(0.0) / 5.0).clamp(0.0, 1.0),
                 (glucose / ORGAN_FED_THRESHOLD).clamp(0.0, 1.0),
             );
-            Some(mind.decide(&channels))
-        } else {
-            None
-        };
-
-        // Кора: тоник + сенсорика (как в арене).
-        let mut cortex_ext = vec![self.blood.motor_tonic(); n_cortex];
-        let sg = self.blood.sensor_gain();
-        let noise_tick = self.tick * 7919;
-        for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL) {
-            if self.sensory_noise > 0.0 {
-                *cell += (crate::rng::hash01(i + noise_tick) as f32 - 0.5)
-                    * 2.0
-                    * self.sensory_noise;
+            let action = mind.decide(&channels);
+            if action == crate::mind::CreatureAction::Rest {
+                rest = REST_INHIBIT;
             }
-            *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32);
-        }
-        for (i, cell) in cortex_ext
-            .iter_mut()
-            .enumerate()
-            .take(N_SL + N_SR)
-            .skip(N_SL)
-        {
-            if self.sensory_noise > 0.0 {
-                *cell += (crate::rng::hash01((i + 999) + noise_tick) as f32 - 0.5)
-                    * 2.0
-                    * self.sensory_noise;
-            }
-            *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32);
-        }
-        // Тормоз покоя: базово от голода; разум может форсировать покой
-        // (Rest) даже при лёгком голоде — «сижу, изучаю».
-        let mut rest = REST_INHIBIT * (1.0 - (hunger / 40.0).min(1.0));
-        if mind_action == Some(crate::mind::CreatureAction::Rest) {
-            rest = REST_INHIBIT;
         }
         if rest > 0.0 {
             let (ml0, ml1) = self.organs.cortex.region_bounds(3);
             let (mr0, mr1) = self.organs.cortex.region_bounds(4);
-            for cell in cortex_ext[ml0..ml1].iter_mut() {
-                *cell -= rest;
-            }
-            for cell in cortex_ext[mr0..mr1].iter_mut() {
-                *cell -= rest;
-            }
+            for cell in cortex_ext[ml0..ml1].iter_mut() { *cell -= rest; }
+            for cell in cortex_ext[mr0..mr1].iter_mut() { *cell -= rest; }
         }
 
-        // Средний мозг: голод из крови → драйв.
-        let mid_ext = vec![hunger_drive(self.blood.conc[chem::HUNGER]); 24];
-
-        // Спина: боль после удара о стену + лихорадка при перегреве
-        // (каналы ускорились — спина «горит» и дёргается сама).
-        let fever = (self.body_temp - FEVER_TEMP).max(0.0) * FEVER_DRIVE_PER_DEG;
-        if self.world.last_wall_hit && self.pain_ticks == 0 {
-            self.pain_ticks = PAIN_TICKS;
-        }
-        let spine_ext = if self.pain_ticks > 0 || fever > 0.0 {
-            let mut e = vec![0.0f32; crate::organs::SPINE_N];
-            for cell in e.iter_mut().take(crate::organs::SPINE_N_S) {
-                *cell = PAIN_AMNT * (self.pain_ticks > 0) as u8 as f32 + fever;
-            }
-            if self.pain_ticks > 0 {
-                self.pain_ticks -= 1;
-            }
-            e
-        } else {
-            vec![0.0f32; crate::organs::SPINE_N]
-        };
-
+        // Шаг органов.
         let world_in = crate::organs::WorldInputs {
             spine: spine_ext,
             midbrain: mid_ext,
             cortex: cortex_ext,
         };
-        let spikes = self.organs.tick(&world_in);
+        let spike_data = self.organs.tick(&world_in);
         self.organs.set_spine_temperature(self.body_temp);
 
-        let mut cortex_regions = [0i32; N_REGIONS];
-        for (r, sum) in cortex_regions.iter_mut().enumerate() {
-            *sum = self.organs.cortex.region_spikes(&spikes.cortex, r);
-        }
-        let midbrain_total: i64 = spikes.midbrain.iter().map(|&x| x as i64).sum();
-        let spine_m: i64 = spikes.spine[crate::organs::SPINE_N_S + crate::organs::SPINE_N_I..]
-            .iter()
-            .map(|&x| x as i64)
-            .sum();
+        let cortex_regions: [i32; 5] = std::array::from_fn(|r| {
+            self.organs.cortex.region_spikes(&spike_data.cortex, r)
+        });
+        let midbrain_total: i64 = spike_data.midbrain.iter().map(|&x| x as i64).sum();
+        let spine_m: i64 = spike_data.spine[crate::organs::SPINE_N_S + crate::organs::SPINE_N_I..]
+            .iter().map(|&x| x as i64).sum();
 
-        // Кровь: моторная активность коры и дефицит глюкозы.
+        // Кровь.
         let (ml, mr) = (cortex_regions[3], cortex_regions[4]);
-        self.blood.loci[locus::RATE_MOTOR] = (ml + mr) as f32;
-        {
-            let deficit = (ORGAN_FED_THRESHOLD - self.blood.conc[chem::GLUCOSE]).max(0.0);
-            self.blood.loci[locus::GLUCOSE_DEFICIT] = deficit;
+        self.blood.loci[dioma_metabolism_locus_rate_motor()] = (ml + mr) as f32;
+        self.blood.loci[dioma_metabolism_locus_deficit()] =
+            (ORGAN_FED_THRESHOLD - glucose).max(0.0);
+        self.blood.update();
+
+        BrainStepObs {
+            cortex_regions,
+            midbrain_spikes: midbrain_total,
+            spine_m_spikes: spine_m,
+            action: self.mind.as_ref().map(|m| m.last_action),
+            sitting: (ml + mr) < 6,
         }
+    }
+
+    /// Награда разуму (фазичный дофамин).
+    pub fn mind_reward(&mut self, r: f32) {
+        if let Some(mind) = &mut self.mind {
+            mind.reward(r);
+        }
+    }
+
+    /// Затухание боли + фиксация удара.
+    pub fn register_pain(&mut self) {
+        self.pain_recent = (self.pain_recent + 0.6).min(1.0);
+    }
+
+    /// Один тик мира (25 мс).
+    pub fn step_tick(&mut self) -> OrganTickObs {
+        let obs = self.brain_step();
+        // Движение телом (используем собственный мир).
+        let (ml, mr) = (obs.cortex_regions[3], obs.cortex_regions[4]);
+        self.world.move_body(ml, mr, &self.blood);
+        self.world.regrow(self.tick);
 
         // Рот и награда.
         let ate = self.world.try_eat(self.tick, &self.blood);
         if ate {
-            // Полная порция: после еды дефицит обнуляется и наступает
-            // сытость (покой), пока запас не выгорит.
             self.blood.ingest_food(FOOD_PORTION);
             self.organs.cortex.schedule_reward(1.0);
             self.rewards_pending += 1;
@@ -284,60 +268,114 @@ impl OrganSim {
             self.blood.bump_wall();
         }
 
-        // Награды разуму — ТОЛЬКО события (фазичный дофамин). Вызов
-        // apply_reward на каждом тике стачивал бы веса: DA = 0 − baseline
-        // ≠ 0 из-за EMA, и выигравшее действие медленно стирается.
-        let fever_now = self.body_temp > FEVER_TEMP;
-        if let Some(mind) = &mut self.mind {
-            let mut r = 0.0f32;
-            if ate {
-                r += 1.0;
-            }
-            if self.world.last_wall_hit {
-                r -= 0.5;
-                self.pain_recent = (self.pain_recent + 0.4).min(1.0);
-            }
-            if fever_now && !self.was_fever {
-                r -= 0.6; // вошёл в лихорадку — разовый штраф
-            }
-            if r != 0.0 {
-                mind.reward(r);
-            }
-        }
-        self.was_fever = fever_now;
-
-        self.blood.update();
-        // Гейт скорости: молчащая кора → существо сидит на месте.
-        let gate = ((ml + mr) as f32 / MOTOR_GATE_FULL).min(1.0);
-        let sitting = (ml + mr) < 6;
-        self.world.move_body_gated(ml, mr, &self.blood, gate);
-
-        // Термодинамика тела: мотор греет, среда охлаждает. Спина —
-        // «кипящий суп»: Q10 каналов пересчитывается от температуры.
-        {
-            let motor_norm = ((ml + mr) as f32 / 60.0).min(1.5);
-            let heat = TEMP_HEAT_PER_S * motor_norm + if self.pain_ticks > 0 { PAIN_HEAT } else { 0.0 };
-            let dt_s = crate::organs::TICK_MS / 1000.0;
-            self.body_temp += (heat - TEMP_COOL_PER_S * (self.body_temp - AMBIENT_TEMP)) * dt_s;
-            self.organs.set_spine_temperature(self.body_temp);
-        }
         self.tick += 1;
-
         OrganTickObs {
             tick: self.tick,
             chemicals: self.blood.conc.clone(),
-            cortex_regions,
-            midbrain_spikes: midbrain_total,
-            spine_m_spikes: spine_m,
+            cortex_regions: obs.cortex_regions,
+            midbrain_spikes: obs.midbrain_spikes,
+            spine_m_spikes: obs.spine_m_spikes,
             x: self.world.agent_x,
             y: self.world.agent_y,
             heading: self.world.heading,
             ate,
             wall_hit: self.world.last_wall_hit,
             alive: self.blood.organ.damage < 1.0,
-            sitting,
+            sitting: obs.sitting,
             body_temp: self.body_temp,
-            action: mind_action,
+            action: obs.action,
+        }
+    }
+
+    /// Шаг мозга без движения тела — для экосистемы где позицию контролирует
+    /// внешний мир. Возвращает наблюдение с кортикальными регионами.
+    pub fn brain_step(&mut self) -> BrainStepObs {
+        let n_cortex = self.organs.cortex.n;
+        let hunger = self.blood.conc[chem::HUNGER];
+        let glucose = self.blood.conc[chem::GLUCOSE];
+        let fatigue = self.blood.conc[chem::FATIGUE];
+        self.pain_recent *= 0.97;
+
+        let mut cortex_ext = vec![self.blood.motor_tonic(); n_cortex];
+        let sg = self.blood.sensor_gain();
+
+        // Средний мозг.
+        let mid_ext = vec![hunger_drive(hunger); 24];
+
+        // Спина.
+        let fever = (self.body_temp - FEVER_TEMP).max(0.0) * FEVER_DRIVE_PER_DEG;
+        let spine_ext = vec![fever; crate::organs::SPINE_N_S];
+
+        // Кора: тоник.
+        for cell in cortex_ext.iter_mut() {
+            *cell += 0.12; // тоник
+        }
+        // Сенсорика из собственного мира.
+        let (left, right) = self.world.sensors();
+        let sg = sg;
+        for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL) {
+            *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32);
+        }
+        for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL + N_SR).skip(N_SL) {
+            *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32);
+        }
+
+        // Тормоз покоя.
+        let mut rest = REST_INHIBIT * (1.0 - (hunger / 40.0).min(1.0));
+        if let Some(mind) = &mut self.mind {
+            let sated01 = (glucose / ORGAN_FED_THRESHOLD).clamp(0.0, 1.0);
+            let channels = crate::mind::CreatureMind::channels(
+                hunger / 255.0,
+                fatigue / 255.0,
+                left as f32,
+                right as f32,
+                self.pain_recent,
+                sated01,
+                ((self.body_temp - FEVER_TEMP).max(0.0) / 5.0).clamp(0.0, 1.0),
+                (glucose / ORGAN_FED_THRESHOLD).clamp(0.0, 1.0),
+            );
+            let action = mind.decide(&channels);
+            if action == crate::mind::CreatureAction::Rest {
+                rest = REST_INHIBIT;
+            }
+        }
+        // Без разума — голодный тормоз работает сам.
+        if rest > 0.0 {
+            let (ml0, ml1) = self.organs.cortex.region_bounds(3);
+            let (mr0, mr1) = self.organs.cortex.region_bounds(4);
+            for cell in cortex_ext[ml0..ml1].iter_mut() { *cell -= rest; }
+            for cell in cortex_ext[mr0..mr1].iter_mut() { *cell -= rest; }
+        }
+
+        // Шаг органов.
+        let world_in = crate::organs::WorldInputs {
+            spine: spine_ext,
+            midbrain: mid_ext,
+            cortex: cortex_ext.clone(),
+        };
+        let _spike_data = self.organs.tick(&world_in);
+        self.organs.set_spine_temperature(self.body_temp);
+
+        // Кровь.
+        let cortex_regions: [i32; 5] = std::array::from_fn(|r| {
+            self.organs.cortex.region_spikes(&_spike_data.cortex, r)
+        });
+        let (ml, mr) = (cortex_regions[3], cortex_regions[4]);
+        self.blood.loci[locus::RATE_MOTOR] = (ml + mr) as f32;
+        self.blood.loci[locus::GLUCOSE_DEFICIT] =
+            (ORGAN_FED_THRESHOLD - glucose).max(0.0);
+        self.blood.update();
+
+        let midbrain_total: i64 = _spike_data.midbrain.iter().map(|&x| x as i64).sum();
+        let spine_m: i64 = _spike_data.spine[crate::organs::SPINE_N_S + crate::organs::SPINE_N_I..]
+            .iter().map(|&x| x as i64).sum();
+
+        BrainStepObs {
+            cortex_regions,
+            midbrain_spikes: midbrain_total,
+            spine_m_spikes: spine_m,
+            action: self.mind.as_ref().map(|m| m.last_action),
+            sitting: (ml + mr) < 6,
         }
     }
 
@@ -345,6 +383,23 @@ impl OrganSim {
     pub fn cortex_path_weight(&self, a: usize, b: usize) -> (f32, usize) {
         self.organs.cortex.mean_path_weight(a, b)
     }
+}
+
+fn dioma_metabolism_locus_rate_motor() -> usize {
+    crate::metabolism::locus::RATE_MOTOR
+}
+fn dioma_metabolism_locus_deficit() -> usize {
+    crate::metabolism::locus::GLUCOSE_DEFICIT
+}
+
+/// Наблюдение за шагом мозга (без движения тела) — для экосистемы.
+pub struct BrainStepObs {
+    /// Спайки коры по регионам арены [SL, SR, I, ML, MR].
+    pub cortex_regions: [i32; 5],
+    pub midbrain_spikes: i64,
+    pub spine_m_spikes: i64,
+    pub action: Option<crate::mind::CreatureAction>,
+    pub sitting: bool,
 }
 
 /// Наблюдение за тиком органной жизни.
