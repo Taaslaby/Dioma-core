@@ -17,6 +17,8 @@ pub const ECO_TICKS: usize = 8000; // 200 с
 pub const EAT_RADIUS: f64 = 14.0;
 pub const BREED_RADIUS: f64 = 30.0;
 pub const BREED_GLUCOSE_MIN: f32 = 80.0;
+/// Максимум существ в экосистеме — без капа размножение экспоненциальное.
+pub const MAX_CREATURES: usize = 20;
 pub const ARENA_HALF: f64 = 200.0;
 pub const N_FOOD: usize = 24;
 pub const FOOD_REGROW: usize = 300;
@@ -239,8 +241,10 @@ impl Ecosystem {
         }
 
         // Размножение: два сытых существа рядом → ребёнок.
-        let breed_pairs = self.find_breed_pairs();
-        for (a_idx, b_idx) in breed_pairs {
+        // Кап популяции: без него размножение экспоненциальное → зависание.
+        if self.alive_count() < MAX_CREATURES {
+            let breed_pairs = self.find_breed_pairs();
+            for (a_idx, b_idx) in breed_pairs {
             let child_id = self.next_id;
             self.next_id += 1;
             let gen = self.creatures[a_idx].generation.max(self.creatures[b_idx].generation) + 1;
@@ -284,16 +288,17 @@ impl Ecosystem {
                 meals: 0,
             });
         }
+        } // конец капа популяции
 
         // Смерть и очистка.
         let mut died = Vec::new();
-        for (i, c) in self.creatures.iter_mut().enumerate() {
+        for c in self.creatures.iter_mut() {
             if !c.alive { continue; }
-            c.sim.step_tick(); // мозг + кровь
+            let obs = c.sim.brain_step(); // мозг + кровь (без движения — уже подвинуты)
+            if obs.sitting { /* сидит */ }
             if c.sim.blood.organ.damage >= 1.0 || c.sim.blood.conc[chem_glucose()] <= -20.0 {
                 c.alive = false;
                 died.push((c.id, c.generation, self.tick));
-                let _ = i;
             }
         }
         for d in &died {
