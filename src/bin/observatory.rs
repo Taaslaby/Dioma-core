@@ -495,6 +495,107 @@ impl Observatory {
             });
     }
 
+    /// Панель разума (karmac SpikingBrain): полосы действий, дофамин,
+    /// теплокарта W2 [5 действий × 128 выходных нейронов].
+    fn mind_panel(&self, ui: &mut egui::Ui) {
+        let t = &self.theme;
+        let mind = match &self.model {
+            LifeModel::Organs(s) => s.mind.as_ref(),
+            _ => None,
+        };
+        let Some(mind) = mind else {
+            return;
+        };
+
+        // Полосы действий: частота пула + подсветка выбранного.
+        let names = ["сидит", "ищет", "подходит", "бежит", "бродит"];
+        let rates = mind.action_rates();
+        let max = rates.iter().cloned().fold(0.0f32, f32::max).max(1e-6);
+        for (i, name) in names.iter().enumerate() {
+            let selected = self.last_action_index() == Some(i);
+            ui.horizontal(|ui| {
+                let w = 64.0;
+                ui.add_sized([w, 14.0], egui::Label::new(
+                    egui::RichText::new(*name).color(if selected {
+                        t.colors.accent
+                    } else {
+                        t.colors.text_dim
+                    }),
+                ));
+                let rect = ui.allocate_exact_size(
+                    egui::Vec2::new(ui.available_width(), 10.0),
+                    egui::Sense::hover(),
+                ).0;
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(rect, 2.0, t.colors.panel);
+                let fill_w = rect.width() * (rates[i] / max).clamp(0.0, 1.0);
+                if fill_w > 1.0 {
+                    let color = if selected { t.colors.accent } else { t.colors.trail };
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(rect.min, egui::Vec2::new(fill_w, rect.height())),
+                        2.0,
+                        color,
+                    );
+                }
+            });
+        }
+
+        // Дофамин и базлайн.
+        ui.horizontal(|ui| {
+            let da = mind.dopamine();
+            let col = if da >= 0.0 {
+                egui::Color32::from_rgb(120, 220, 120)
+            } else {
+                egui::Color32::from_rgb(230, 90, 90)
+            };
+            ui.colored_label(col, format!("DA {da:+.2}"));
+            ui.colored_label(t.colors.text_dim, format!("base {:.2}", mind.baseline()));
+        });
+
+        ui.add_space(t.spacing.gap);
+        ui.label("W2 (5×128)");
+
+        // Теплокарта W2: строки — действия, столбцы — выходные нейроны.
+        let heat = mind.weight_heat();
+        let cols = 128usize;
+        let rows = 5usize;
+        let cell_w = ui.available_width() / cols as f32;
+        let cell_h = 4.0;
+        let (rect, _) = ui.allocate_exact_size(
+            egui::Vec2::new(ui.available_width(), cell_h * rows as f32),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0.0, t.colors.panel);
+        for r in 0..rows {
+            for c in 0..cols {
+                let v = heat[r * cols + c];
+                // Отрицательные — красные, положительные — зелёные,
+                // интенсивность по модулю.
+                let a = (v.abs() / W2_HEAT_MAX).clamp(0.05, 1.0);
+                let col32 = if v < 0.0 {
+                    egui::Color32::from_rgba_unmultiplied(230, 90, 90, (a * 255.0) as u8)
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(90, 220, 130, (a * 255.0) as u8)
+                };
+                let p = Pos2::new(rect.left() + c as f32 * cell_w, rect.top() + r as f32 * cell_h);
+                painter.rect_filled(
+                    egui::Rect::from_min_size(p, egui::Vec2::new(cell_w, cell_h)),
+                    0.0,
+                    col32,
+                );
+            }
+        }
+    }
+
+    /// Индекс последнего действия разума (для подсветки полос).
+    fn last_action_index(&self) -> Option<usize> {
+        match &self.model {
+            LifeModel::Organs(s) => s.mind.as_ref().map(|m| m.last_action as usize),
+            _ => None,
+        }
+    }
+
     /// Графики химий, моторной активности и органов.
     fn plots(&self, ui: &mut egui::Ui) {
         let t = &self.theme;
@@ -620,6 +721,11 @@ impl eframe::App for Observatory {
                 ui.vertical(|ui| {
                     ui.heading("brain");
                     self.brain_graph(ui);
+                    if self.model.kind() == BrainKind::Organs {
+                        ui.add_space(self.theme.spacing.gap);
+                        ui.heading("mind");
+                        self.mind_panel(ui);
+                    }
                     ui.add_space(self.theme.spacing.gap);
                     ui.heading("blood");
                     self.plots(ui);
@@ -651,3 +757,4 @@ const DEFAULT_SEED: u64 = 0x0000_AE11;
 const TRACE_CAP: usize = 256;
 const TRACE_ROWS: usize = 12;
 const TRACE_PANEL_HEIGHT_FRAC: f32 = 0.5;
+const W2_HEAT_MAX: f32 = 0.35;

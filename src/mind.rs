@@ -156,4 +156,24 @@ impl CreatureMind {
     pub fn weight_heat(&self) -> Vec<f32> {
         self.brain.weight_heat()
     }
+
+    /// Средние частоты выходных пулов по действиям.
+    pub fn action_rates(&self) -> &[f32] {
+        self.brain.action_rates()
+    }
+
+    /// Текущий дофамин.
+    pub fn dopamine(&self) -> f32 {
+        self.brain.dopamine()
+    }
+
+    /// EMA-базлайн награды.
+    pub fn baseline(&self) -> f32 {
+        self.brain.baseline()
+    }
+
+    /// Гейт регионов (кто выиграл гонку моторов).
+    pub fn region_gate(&self) -> &[f32] {
+        self.brain.region_gate()
+    }
 }
