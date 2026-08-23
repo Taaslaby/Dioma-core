@@ -96,3 +96,7 @@ path = "src/bin/exam.rs"
 [[bin]]
 name = "poc-ecosystem"
 path = "src/bin/poc_ecosystem.rs"
+
+[[bin]]
+name = "evolution"
+path = "src/bin/evolution.rs"
