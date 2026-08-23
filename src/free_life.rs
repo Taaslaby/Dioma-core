@@ -66,6 +66,18 @@ impl WorldSim {
         }
     }
 
+    pub fn nearest_food_dist(&self) -> f64 {
+        self.foods
+            .iter()
+            .filter(|f| f.alive)
+            .map(|f| {
+                let (dx, dy) = (f.x - self.agent_x, f.y - self.agent_y);
+                (dx * dx + dy * dy).sqrt()
+            })
+            .min_by(|a, b| a.total_cmp(b))
+            .unwrap_or(f64::INFINITY)
+    }
+
     fn nearest_food(&self) -> Option<(f64, f64)> {
         self.foods
             .iter()
