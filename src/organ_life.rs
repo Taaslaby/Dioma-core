@@ -65,9 +65,12 @@ pub struct OrganSim {
     pub organs: OrganBrain,
     pub blood: Blood,
     pub world: WorldSim,
+    pub mind: Option<crate::mind::CreatureMind>,
     pub tick: usize,
     pub body_temp: f32,
     pain_ticks: usize,
+    /// Затухающая свежая боль (для канала pain разума).
+    pain_recent: f32,
     /// Накопитель наград коры между дофаминовыми доставками.
     rewards_pending: usize,
 }
@@ -118,8 +121,16 @@ impl OrganSim {
             tick: 0,
             body_temp: START_TEMP,
             pain_ticks: 0,
+            pain_recent: 0.0,
             rewards_pending: 0,
+            mind: None,
         }
+    }
+
+    /// Включить когнитивный разум (karmac SpikingBrain).
+    pub fn with_mind(mut self, seed: u64) -> Self {
+        self.mind = Some(crate::mind::CreatureMind::new(seed));
+        self
     }
 
     /// Один тик мира (25 мс).
@@ -128,8 +139,35 @@ impl OrganSim {
         self.world.regrow(self.tick);
         let (left, right) = self.world.sensors();
 
-        // Кора: тоник + сенсорика (как в арене).
+        // Каналы разума: тело → семантика. Решение ДО сборки входов коры —
+        // действие модулирует тормоз покоя и сенсорный гейт.
         let hunger = self.blood.conc[chem::HUNGER];
+        let glucose = self.blood.conc[chem::GLUCOSE];
+        let fatigue = self.blood.conc[chem::FATIGUE];
+        self.pain_recent *= 0.97; // затухание свежей боли
+        if self.world.last_wall_hit {
+            self.pain_recent = (self.pain_recent + 0.6).min(1.0);
+        }
+        let mind_action = if let Some(mind) = &mut self.mind {
+            // Сытость — от ГЛЮКОЗЫ (запаса), не от голода: голод — это
+            // отдельный канал «ищи еду», а комфорт покоя — «запас полон».
+            let sated01 = (glucose / ORGAN_FED_THRESHOLD).clamp(0.0, 1.0);
+            let channels = crate::mind::CreatureMind::channels(
+                hunger / 255.0,
+                fatigue / 255.0,
+                left as f32,
+                right as f32,
+                self.pain_recent,
+                sated01,
+                ((self.body_temp - FEVER_TEMP).max(0.0) / 5.0).clamp(0.0, 1.0),
+                (glucose / ORGAN_FED_THRESHOLD).clamp(0.0, 1.0),
+            );
+            Some(mind.decide(&channels))
+        } else {
+            None
+        };
+
+        // Кора: тоник + сенсорика (как в арене).
         let mut cortex_ext = vec![self.blood.motor_tonic(); n_cortex];
         let sg = self.blood.sensor_gain();
         for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL) {
@@ -138,9 +176,12 @@ impl OrganSim {
         for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL + N_SR).skip(N_SL) {
             *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32);
         }
-        // Тормоз покоя: сытому существу незачем двигаться — подавляем
-        // моторные пулы (голод снимает тормоз линейно к порогу рта).
-        let rest = REST_INHIBIT * (1.0 - (hunger / 40.0).min(1.0));
+        // Тормоз покоя: базово от голода; разум может форсировать покой
+        // (Rest) даже при лёгком голоде — «сижу, изучаю».
+        let mut rest = REST_INHIBIT * (1.0 - (hunger / 40.0).min(1.0));
+        if mind_action == Some(crate::mind::CreatureAction::Rest) {
+            rest = REST_INHIBIT;
+        }
         if rest > 0.0 {
             let (ml0, ml1) = self.organs.cortex.region_bounds(3);
             let (mr0, mr1) = self.organs.cortex.region_bounds(4);
@@ -213,6 +254,22 @@ impl OrganSim {
             self.blood.bump_wall();
         }
 
+        // Награды разуму за последствия его решений.
+        if let Some(mind) = &mut self.mind {
+            let mut r = 0.0f32;
+            if ate {
+                r += 1.0;
+            }
+            if self.world.last_wall_hit {
+                r -= 0.5;
+                self.pain_recent = (self.pain_recent + 0.4).min(1.0);
+            }
+            if self.body_temp > FEVER_TEMP {
+                r -= 0.1; // лихорадка — плохое решение греться без дела
+            }
+            mind.reward(r);
+        }
+
         self.blood.update();
         // Гейт скорости: молчащая кора → существо сидит на месте.
         let gate = ((ml + mr) as f32 / MOTOR_GATE_FULL).min(1.0);
@@ -244,6 +301,7 @@ impl OrganSim {
             alive: self.blood.organ.damage < 1.0,
             sitting,
             body_temp: self.body_temp,
+            action: mind_action,
         }
     }
 
@@ -273,6 +331,8 @@ pub struct OrganTickObs {
     pub sitting: bool,
     /// Температура тела (°C) — она же температура спины.
     pub body_temp: f32,
+    /// Решение разума на этом тике (None — разум выключен).
+    pub action: Option<crate::mind::CreatureAction>,
 }
 
 /// Отчёт жизни органного существа.

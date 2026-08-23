@@ -13,6 +13,7 @@ pub mod rng;
 pub mod brain;
 pub mod grow;
 pub mod metabolism;
+pub mod mind;
 pub mod organ_life;
 pub mod organs;
 pub mod physiology;

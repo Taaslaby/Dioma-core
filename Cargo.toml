@@ -8,6 +8,8 @@ description = "Игра о выращиваемых спикинг-агента�
 pillars = { path = "../Проекты/asm_engines/taas_checkmate/crates/pillars" }
 pillars-connectome = { path = "../Проекты/asm_engines/taas_checkmate/crates/pillars-connectome" }
 prometheus-grow = { path = "../Проекты/asm_engines/taas_checkmate/crates/prometheus-grow" }
+# Когнитивный рантайм karmac (SpikingBrain: каналы→GNW→базальные ганглии).
+taas-checkmate = { path = "../Проекты/asm_engines/taas_checkmate", default-features = false, features = ["karmac"] }
 eframe = "0.29"
 egui = "0.29"
 egui_plot = "0.29"
@@ -67,3 +69,7 @@ path = "src/bin/poc_organ_life.rs"
 [[bin]]
 name = "organ-diag"
 path = "src/bin/organ_diag.rs"
+
+[[bin]]
+name = "poc-mind"
+path = "src/bin/poc_mind.rs"
