@@ -76,6 +76,15 @@ name = "poc-mind"
 path = "src/bin/poc_mind.rs"
 
 [[bin]]
+name = "poc-delayed-haap"
+path = "src/bin/poc_delayed_haap.rs"
+
+
+[[bin]]
+name = "poc-hetero-cognitive"
+path = "src/bin/poc_hetero_cognitive.rs"
+
+[[bin]]
 name = "poc-heredity"
 path = "src/bin/poc_heredity.rs"
 
