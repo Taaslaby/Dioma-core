@@ -67,7 +67,9 @@ impl LifeModel {
     fn new(kind: BrainKind, seed: u64) -> Self {
         match kind {
             BrainKind::Arena => LifeModel::Arena(Sim::new(false, seed)),
-            BrainKind::Organs => LifeModel::Organs(OrganSim::new(false, seed)),
+            BrainKind::Organs => {
+                LifeModel::Organs(OrganSim::new(false, seed).with_mind(seed ^ 0x5EED))
+            }
         }
     }
 
@@ -718,18 +720,20 @@ impl eframe::App for Observatory {
             .exact_width(self.theme.layout.right_panel_width)
             .show(ctx, |ui| {
                 ui.add_space(self.theme.spacing.pad);
-                ui.vertical(|ui| {
-                    ui.heading("brain");
-                    self.brain_graph(ui);
-                    if self.model.kind() == BrainKind::Organs {
-                        ui.add_space(self.theme.spacing.gap);
-                        ui.heading("mind");
-                        self.mind_panel(ui);
-                    }
-                    ui.add_space(self.theme.spacing.gap);
-                    ui.heading("blood");
-                    self.plots(ui);
-                    self.trace_panel(ui);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.heading("brain");
+                        self.brain_graph(ui);
+                        if self.model.kind() == BrainKind::Organs {
+                            ui.add_space(self.theme.spacing.gap);
+                            ui.heading("mind");
+                            self.mind_panel(ui);
+                            ui.add_space(self.theme.spacing.gap);
+                        }
+                        ui.heading("blood");
+                        self.plots(ui);
+                        self.trace_panel(ui);
+                    });
                 });
             });
 

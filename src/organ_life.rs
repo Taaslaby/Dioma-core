@@ -71,6 +71,8 @@ pub struct OrganSim {
     pain_ticks: usize,
     /// Затухающая свежая боль (для канала pain разума).
     pain_recent: f32,
+    /// Были в лихорадке на прошлом тике (штраф только за вход).
+    was_fever: bool,
     /// Накопитель наград коры между дофаминовыми доставками.
     rewards_pending: usize,
 }
@@ -122,6 +124,7 @@ impl OrganSim {
             body_temp: START_TEMP,
             pain_ticks: 0,
             pain_recent: 0.0,
+            was_fever: false,
             rewards_pending: 0,
             mind: None,
         }
@@ -254,7 +257,10 @@ impl OrganSim {
             self.blood.bump_wall();
         }
 
-        // Награды разуму за последствия его решений.
+        // Награды разуму — ТОЛЬКО события (фазичный дофамин). Вызов
+        // apply_reward на каждом тике стачивал бы веса: DA = 0 − baseline
+        // ≠ 0 из-за EMA, и выигравшее действие медленно стирается.
+        let fever_now = self.body_temp > FEVER_TEMP;
         if let Some(mind) = &mut self.mind {
             let mut r = 0.0f32;
             if ate {
@@ -264,11 +270,14 @@ impl OrganSim {
                 r -= 0.5;
                 self.pain_recent = (self.pain_recent + 0.4).min(1.0);
             }
-            if self.body_temp > FEVER_TEMP {
-                r -= 0.1; // лихорадка — плохое решение греться без дела
+            if fever_now && !self.was_fever {
+                r -= 0.6; // вошёл в лихорадку — разовый штраф
             }
-            mind.reward(r);
+            if r != 0.0 {
+                mind.reward(r);
+            }
         }
+        self.was_fever = fever_now;
 
         self.blood.update();
         // Гейт скорости: молчащая кора → существо сидит на месте.

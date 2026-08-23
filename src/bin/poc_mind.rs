@@ -57,9 +57,16 @@ fn main() {
         explore as f64 / total * 100.0,
     );
 
-    // Обучение видно? Веса после жизни.
-    let heat_sum: f32 = sim.mind.as_ref().map(|m| m.weight_heat().iter().sum()).unwrap_or(0.0);
-    println!("сумма |W2| после жизни: {heat_sum:.2}");
+    // Обучение видно? Статистика весов до и после жизни.
+    let heat = sim.mind.as_ref().map(|m| m.weight_heat()).unwrap_or_default();
+    if !heat.is_empty() {
+        let mean_abs: f32 = heat.iter().map(|v| v.abs()).sum::<f32>() / heat.len() as f32;
+        let zeros = heat.iter().filter(|&&v| v.abs() < 1e-4).count();
+        println!(
+            "W2 после жизни: |w̄|={mean_abs:.4}  нулевых={zeros}/{}",
+            heat.len()
+        );
+    }
 
     // ── Контроль: тело без разума ──
     let mut plain = OrganSim::new(false, 0x0000_AE11);
