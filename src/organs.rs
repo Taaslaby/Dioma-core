@@ -22,6 +22,35 @@ const DT_FINE: f32 = 0.05;
 /// Подшагов тонкого органа на тик.
 const SUBSTEPS_FINE: usize = 500;
 
+// ─── Стандартная спина: 10 S (боль) → 10 I (inh) → 10 M ────────────────────
+pub const SPINE_N_S: usize = 10;
+pub const SPINE_N_I: usize = 10;
+pub const SPINE_N_M: usize = 10;
+pub const SPINE_N: usize = SPINE_N_S + SPINE_N_I + SPINE_N_M;
+/// Вес S→M моносинапса (проводимость, единицы движка hh_synaptic).
+pub const SPINE_W_SM: f32 = 0.40;
+
+/// CSR спинальной дуги для `BrainConfig::hh_synaptic` (рецепторы строятся).
+pub fn standard_spine_conn() -> ConnectomeData {
+    let n = SPINE_N;
+    let mut rp = vec![0i32; n + 1];
+    let mut ci = Vec::new();
+    let mut vals = Vec::new();
+    for (s, rp_s) in rp.iter_mut().enumerate().take(SPINE_N_S) {
+        let m = SPINE_N_S + SPINE_N_I + s % SPINE_N_M;
+        *rp_s = ci.len() as i32;
+        ci.push(m as i32);
+        vals.push(SPINE_W_SM);
+    }
+    for n_ in (0..n).rev() {
+        rp[n_ + 1] = ci.len() as i32;
+    }
+    let nt = vec![1.0f32; n];
+    let mut conn = ConnectomeData::new(rp, ci, vals, nt, vec![]);
+    conn.build_receptor_types();
+    conn
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrganId {
     Spine = 0,

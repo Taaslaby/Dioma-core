@@ -59,3 +59,7 @@ path = "src/bin/poc_organs.rs"
 [[bin]]
 name = "grow-probe"
 path = "src/bin/grow_probe.rs"
+
+[[bin]]
+name = "poc-organ-life"
+path = "src/bin/poc_organ_life.rs"

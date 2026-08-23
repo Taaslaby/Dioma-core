@@ -19,7 +19,7 @@ pub const FOOD_REGROW_TICKS: usize = 400; // 10 с
 pub const SIM_TICKS: usize = 4000; // 100 с жизни
 const EAT_RADIUS: f64 = 14.0;
 pub const ARENA_HALF: f64 = 200.0;
-const FOOD_PORTION: f32 = 90.0;
+pub const FOOD_PORTION: f32 = 90.0;
 /// Порог сытости для локуса дефицита глюкозы.
 pub const GLUCOSE_FED_THRESHOLD: f32 = 150.0;
 /// Пауза между приёмами пищи, разделяющая «меалы» (тиков).
@@ -40,7 +40,7 @@ pub struct WorldSim {
     pub agent_x: f64,
     pub agent_y: f64,
     pub heading: f64,
-    last_wall_hit: bool,
+    pub(crate) last_wall_hit: bool,
 }
 
 impl WorldSim {
@@ -79,7 +79,7 @@ impl WorldSim {
             .map(|(i, _)| (self.foods[i].x, self.foods[i].y))
     }
 
-    fn sensors(&self) -> (f64, f64) {
+    pub(crate) fn sensors(&self) -> (f64, f64) {
         let Some((fx, fy)) = self.nearest_food() else {
             return (0.0, 0.0);
         };
@@ -96,7 +96,7 @@ impl WorldSim {
         (rel.sin().max(0.0) * prox, (-rel.sin()).max(0.0) * prox)
     }
 
-    fn move_body(&mut self, spikes_l: i32, spikes_r: i32, blood: &Blood) {
+    pub(crate) fn move_body(&mut self, spikes_l: i32, spikes_r: i32, blood: &Blood) {
         let d = (spikes_l - spikes_r) as f64;
         self.heading += blood.turn_gain() * d;
         let sp = blood.speed();
@@ -116,7 +116,7 @@ impl WorldSim {
     }
 
     /// Рецептор «рта»: есть только голодный.
-    fn try_eat(&mut self, tick: usize, blood: &Blood) -> bool {
+    pub(crate) fn try_eat(&mut self, tick: usize, blood: &Blood) -> bool {
         if !blood.wants_food() {
             return false;
         }
@@ -139,7 +139,7 @@ impl WorldSim {
         self.foods.iter().map(|f| (f.x, f.y, f.alive)).collect()
     }
 
-    fn regrow(&mut self, tick: usize) {
+    pub(crate) fn regrow(&mut self, tick: usize) {
         for f in self.foods.iter_mut() {
             if !f.alive && tick >= f.regrow_at {
                 f.alive = true;
