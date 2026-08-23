@@ -78,3 +78,7 @@ path = "src/bin/poc_mind.rs"
 [[bin]]
 name = "poc-heredity"
 path = "src/bin/poc_heredity.rs"
+
+[[bin]]
+name = "exam"
+path = "src/bin/exam.rs"

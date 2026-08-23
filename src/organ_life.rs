@@ -75,6 +75,8 @@ pub struct OrganSim {
     pain_recent: f32,
     /// Были в лихорадке на прошлом тике (штраф только за вход).
     was_fever: bool,
+    /// Шум сенсорики [0..1] — добавка к запаху, экзамен T3.
+    pub sensory_noise: f32,
     /// Накопитель наград коры между дофаминовыми доставками.
     rewards_pending: usize,
 }
@@ -128,6 +130,7 @@ impl OrganSim {
             pain_ticks: 0,
             pain_recent: 0.0,
             was_fever: false,
+            sensory_noise: 0.0,
             rewards_pending: 0,
             mind: None,
         }
@@ -182,10 +185,25 @@ impl OrganSim {
         let mut cortex_ext = vec![self.blood.motor_tonic(); n_cortex];
         let sg = self.blood.sensor_gain();
         for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL) {
-            *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32);
+            let noise = if self.sensory_noise > 0.0 {
+                ((crate::rng::hash01(i as usize + self.tick * 7919) * 2.0 - 1.0) as f32 * self.sensory_noise)
+                    as f32
+            } else {
+                0.0
+            };
+            *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32)
+                + noise;
         }
         for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL + N_SR).skip(N_SL) {
-            *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32);
+            let noise = if self.sensory_noise > 0.0 {
+                ((crate::rng::hash01((i + 999) as usize + self.tick * 7919) * 2.0 - 1.0)
+                    as f32)
+                    * self.sensory_noise
+            } else {
+                0.0
+            };
+            *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32)
+                + noise;
         }
         // Тормоз покоя: базово от голода; разум может форсировать покой
         // (Rest) даже при лёгком голоде — «сижу, изучаю».

@@ -12,6 +12,7 @@ pub mod rng;
 
 pub mod brain;
 pub mod grow;
+pub mod exam;
 pub mod heritage;
 pub mod metabolism;
 pub mod mind;
