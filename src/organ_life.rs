@@ -77,9 +77,11 @@ pub struct OrganSim {
     pub mind: Option<crate::mind::CreatureMind>,
     pub tick: usize,
     pub body_temp: f32,
+    #[allow(dead_code)]
     pain_ticks: usize,
     /// Затухающая свежая боль (для канала pain разума).
     pub pain_recent: f32,
+    #[allow(dead_code)]
     /// Были в лихорадке на прошлом тике (штраф только за вход).
     was_fever: bool,
     /// Шум сенсорики [0..1] — добавка к запаху, экзамен T3.
@@ -166,7 +168,7 @@ impl OrganSim {
         // Средний мозг: голод → драйв.
         let mid_ext = vec![hunger_drive(hunger); 24];
         // Спина: лихорадка.
-        let fever_drive = ((self.body_temp - FEVER_TEMP).max(0.0) * FEVER_DRIVE_PER_DEG) as f32;
+        let fever_drive = (self.body_temp - FEVER_TEMP).max(0.0) * FEVER_DRIVE_PER_DEG;
         let spine_ext = vec![fever_drive; crate::organs::SPINE_N_S];
 
         // Кора: тоник + внешняя сенсорика × sensor_gain.
@@ -312,7 +314,6 @@ impl OrganSim {
         }
         // Сенсорика из собственного мира.
         let (left, right) = self.world.sensors();
-        let sg = sg;
         for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL) {
             *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32);
         }

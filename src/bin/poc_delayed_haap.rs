@@ -7,7 +7,7 @@
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
 use dioma::delayed::{
-    cognitive_gains, grow_cognitive, run_episode, Agent, EpisodeStats, SEED,
+    cognitive_gains, grow_cognitive, run_episode, Agent, SEED,
 };
 use dioma::physiology;
 use dioma::brain::{Brain, PlasticityParams};
@@ -31,7 +31,7 @@ fn lif_brain(grown: &dioma::Grown) -> Brain {
     Brain::new(grown, cognitive_gains(), PlasticityParams::default())
 }
 
-fn run_n(brain: &mut Brain, grown: &dioma::Grown, n: usize, tag: &str) {
+fn run_n(brain: &mut Brain, _grown: &dioma::Grown, n: usize, tag: &str) {
     let mut results = Vec::with_capacity(n);
     for k in 0..n {
         let mut agent = Agent::new(SEED.wrapping_add(k as u64));

@@ -35,7 +35,7 @@ fn main() {
         if tick % 1000 == 0 {
             let alive = eco.alive_count();
             let gen_max = eco.creatures.iter().map(|c| c.generation).max().unwrap_or(0);
-            let meals: usize = eco.creatures.iter().map(|c| c.meals).sum();
+            let _meals: usize = eco.creatures.iter().map(|c| c.meals).sum();
             let avg_glucose: f32 = if eco.creatures.is_empty() { 0.0 } else {
                 eco.creatures.iter()
                     .map(|c| c.sim.blood.conc[dioma::metabolism::chem::GLUCOSE])

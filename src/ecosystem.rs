@@ -141,6 +141,7 @@ impl Ecosystem {
 
         // Шаг каждого живого существа.
         let mut ate_flags = vec![false; self.creatures.len()];
+        #[allow(clippy::needless_range_loop)]
         for ci in 0..self.creatures.len() {
             if !self.creatures[ci].alive {
                 continue;
@@ -318,8 +319,11 @@ impl Ecosystem {
     }
 }
 
+#[allow(dead_code)]
 fn chem_hunger() -> usize { crate::metabolism::chem::HUNGER }
+#[allow(dead_code)]
 fn chem_glucose() -> usize { crate::metabolism::chem::GLUCOSE }
+#[allow(dead_code)]
 fn chem_fatigue() -> usize { crate::metabolism::chem::FATIGUE }
 
 fn child_seed(id: usize) -> u64 {
