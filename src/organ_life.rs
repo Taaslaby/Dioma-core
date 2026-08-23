@@ -184,26 +184,27 @@ impl OrganSim {
         // Кора: тоник + сенсорика (как в арене).
         let mut cortex_ext = vec![self.blood.motor_tonic(); n_cortex];
         let sg = self.blood.sensor_gain();
+        let noise_tick = self.tick * 7919;
         for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL) {
-            let noise = if self.sensory_noise > 0.0 {
-                ((crate::rng::hash01(i as usize + self.tick * 7919) * 2.0 - 1.0) as f32 * self.sensory_noise)
-                    as f32
-            } else {
-                0.0
-            };
-            *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32)
-                + noise;
+            if self.sensory_noise > 0.0 {
+                *cell += (crate::rng::hash01(i + noise_tick) as f32 - 0.5)
+                    * 2.0
+                    * self.sensory_noise;
+            }
+            *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32);
         }
-        for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL + N_SR).skip(N_SL) {
-            let noise = if self.sensory_noise > 0.0 {
-                ((crate::rng::hash01((i + 999) as usize + self.tick * 7919) * 2.0 - 1.0)
-                    as f32)
-                    * self.sensory_noise
-            } else {
-                0.0
-            };
-            *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32)
-                + noise;
+        for (i, cell) in cortex_ext
+            .iter_mut()
+            .enumerate()
+            .take(N_SL + N_SR)
+            .skip(N_SL)
+        {
+            if self.sensory_noise > 0.0 {
+                *cell += (crate::rng::hash01((i + 999) + noise_tick) as f32 - 0.5)
+                    * 2.0
+                    * self.sensory_noise;
+            }
+            *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32);
         }
         // Тормоз покоя: базово от голода; разум может форсировать покой
         // (Rest) даже при лёгком голоде — «сижу, изучаю».
