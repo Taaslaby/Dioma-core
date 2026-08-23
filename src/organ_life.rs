@@ -41,7 +41,7 @@ pub struct OrganSim {
     pub organs: OrganBrain,
     pub blood: Blood,
     pub world: WorldSim,
-    tick: usize,
+    pub tick: usize,
     pain_ticks: usize,
     /// Накопитель наград коры между дофаминовыми доставками.
     rewards_pending: usize,

@@ -2,17 +2,20 @@
 //! Filename:    src/bin/observatory.rs
 //! Class:       DebugSuite
 //! Purpose:     poc-observatory: egui live view of a creature
-//! Description: free-life Sim in real time — world canvas, brain graph
-//!              with flash, chemistry plots, playback controls.
+//! Description: free life in real time — world canvas, brain graph with
+//!              flash, chemistry plots, playback controls. Two brains:
+//!              arena (LIF) и органный (HH спина + HAAP средний мозг +
+//!              LIF кора) — переключаются в top bar.
 //!              Every constant comes from ui::theme tokens.
 //!
 //! author: Atlasov anton
-//! -------------------------------------------------------------------------
+// -------------------------------------------------------------------------
 
-use dioma::free_life::{Sim, TickObs, ARENA_HALF};
+use dioma::free_life::{Sim, ARENA_HALF};
 use dioma::arena::{grow_agent, Genome};
 use dioma::grow::agent_layout;
 use dioma::metabolism::chem;
+use dioma::organ_life::OrganSim;
 use dioma::ui::theme::{region_color, ARENA_REGION_NAMES, CHEM_NAMES, Theme};
 use dioma::ui::{dot, heading_arrow, label, mix, WorldTransform};
 
@@ -21,14 +24,136 @@ use egui::{Pos2, Stroke};
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use std::collections::VecDeque;
 
+/// Какой мозг живёт в обсерватории.
+#[derive(Clone, Copy, PartialEq)]
+enum BrainKind {
+    Arena,
+    Organs,
+}
+
+impl BrainKind {
+    fn label(self) -> &'static str {
+        match self {
+            BrainKind::Arena => "arena (LIF)",
+            BrainKind::Organs => "organs (HH+HAAP+LIF)",
+        }
+    }
+}
+
+/// Унифицированное наблюдение за тиком (для UI).
+struct ObsView {
+    chemicals: Vec<f32>,
+    /// Спайки коры по регионам [SL, SR, I, ML, MR].
+    region_spikes: [i32; dioma::arena::N_REGIONS],
+    /// Суммарные спайки среднего мозга (арена: 0).
+    midbrain_spikes: i64,
+    /// Моторные спайки спины (арена: 0).
+    spine_m_spikes: i64,
+    x: f64,
+    y: f64,
+    ate: bool,
+}
+
+/// Модель жизни: классическая арена или органный мозг.
+#[allow(clippy::large_enum_variant)]
+enum LifeModel {
+    Arena(Sim),
+    Organs(OrganSim),
+}
+
+impl LifeModel {
+    fn new(kind: BrainKind, seed: u64) -> Self {
+        match kind {
+            BrainKind::Arena => LifeModel::Arena(Sim::new(false, seed)),
+            BrainKind::Organs => LifeModel::Organs(OrganSim::new(false, seed)),
+        }
+    }
+
+    fn kind(&self) -> BrainKind {
+        match self {
+            LifeModel::Arena(_) => BrainKind::Arena,
+            LifeModel::Organs(_) => BrainKind::Organs,
+        }
+    }
+
+    fn step(&mut self) -> ObsView {
+        match self {
+            LifeModel::Arena(sim) => {
+                let o = sim.step_tick();
+                ObsView {
+                    region_spikes: [
+                        o.region_spikes[0],
+                        o.region_spikes[1],
+                        o.region_spikes[2],
+                        o.region_spikes[3],
+                        o.region_spikes[4],
+                    ],
+                    midbrain_spikes: 0,
+                    spine_m_spikes: 0,
+                    chemicals: o.chemicals,
+                    x: o.x,
+                    y: o.y,
+                    ate: o.ate,
+                }
+            }
+            LifeModel::Organs(sim) => {
+                let o = sim.step_tick();
+                ObsView {
+                    region_spikes: o.cortex_regions,
+                    midbrain_spikes: o.midbrain_spikes,
+                    spine_m_spikes: o.spine_m_spikes,
+                    chemicals: o.chemicals,
+                    x: o.x,
+                    y: o.y,
+                    ate: o.ate,
+                }
+            }
+        }
+    }
+
+    fn blood(&self) -> &dioma::metabolism::Blood {
+        match self {
+            LifeModel::Arena(s) => &s.blood,
+            LifeModel::Organs(s) => &s.blood,
+        }
+    }
+
+    fn blood_mut(&mut self) -> &mut dioma::metabolism::Blood {
+        match self {
+            LifeModel::Arena(s) => &mut s.blood,
+            LifeModel::Organs(s) => &mut s.blood,
+        }
+    }
+
+    fn tick(&self) -> usize {
+        match self {
+            LifeModel::Arena(s) => s.tick,
+            LifeModel::Organs(s) => s.tick,
+        }
+    }
+
+    fn world(&self) -> &dioma::free_life::WorldSim {
+        match self {
+            LifeModel::Arena(s) => &s.world,
+            LifeModel::Organs(s) => &s.world,
+        }
+    }
+
+    fn alive(&self) -> bool {
+        self.blood().organ.damage < 1.0
+    }
+}
+
 /// Состояние обсерватории.
 struct Observatory {
     theme: Theme,
-    sim: Sim,
+    model: LifeModel,
     /// История химий: тик → концентрации.
     chem_history: VecDeque<[f32; chem::N]>,
     /// История моторной активности (спайков/тик).
     motor_history: VecDeque<f32>,
+    /// История органов: (midbrain, spine_m) спайков/тик.
+    organ_history: VecDeque<[f64; 2]>,
     /// Сглаженная «вспышка» регионов [0..1].
     flash: Vec<f32>,
     /// След агента.
@@ -45,9 +170,10 @@ struct Observatory {
 }
 
 impl Observatory {
-    fn new(seed: u64) -> Self {
-        let sim = Sim::new(false, seed);
-        // Тот же сид — тот же коннектом: агрегируем рёбра по регионам.
+    fn new(kind: BrainKind, seed: u64) -> Self {
+        let model = LifeModel::new(kind, seed);
+        // Тот же сид — тот же коннектом: агрегируем рёбра по регионам
+        // (кора органного мозга — та же арена-схема).
         let genome = Genome::wildtype(seed);
         let grown = grow_agent(&genome);
         let mut sums = [0.0f32; dioma::arena::N_REGIONS * dioma::arena::N_REGIONS];
@@ -75,9 +201,10 @@ impl Observatory {
         let n_regions = dioma::arena::N_REGIONS;
         Self {
             theme: Theme::default(),
-            sim,
+            model,
             chem_history: VecDeque::new(),
             motor_history: VecDeque::new(),
+            organ_history: VecDeque::new(),
             flash: vec![0.0; n_regions],
             trail: VecDeque::new(),
             playing: true,
@@ -92,16 +219,19 @@ impl Observatory {
 
     /// Продвинуть симуляцию на один тик и записать историю.
     fn advance(&mut self) {
-        let obs: TickObs = self.sim.step_tick();
+        let obs = self.model.step();
         self.eaten_total += obs.ate as usize;
         self.chem_history.push_back(obs.chemicals.try_into().unwrap());
         self.motor_history
             .push_back((obs.region_spikes[dioma::arena::REG_ML] + obs.region_spikes[dioma::arena::REG_MR]) as f32);
+        self.organ_history
+            .push_back([obs.midbrain_spikes as f64, obs.spine_m_spikes as f64]);
         self.trail.push_back([obs.x, obs.y]);
         let hist = self.theme.viz.history_points;
         if self.chem_history.len() > hist {
             self.chem_history.pop_front();
             self.motor_history.pop_front();
+            self.organ_history.pop_front();
         }
         if self.trail.len() > self.theme.viz.trail_len {
             self.trail.pop_front();
@@ -112,12 +242,11 @@ impl Observatory {
             let norm = obs.region_spikes[r] as f32 / sizes[r].max(1) as f32;
             *f = (*f + self.theme.viz.flash_rise * norm).min(1.0);
         }
-        let _ = obs.alive;
     }
 
 
-    fn reset(&mut self, seed: u64) {
-        *self = Observatory::new(seed);
+    fn reset(&mut self, kind: BrainKind, seed: u64) {
+        *self = Observatory::new(kind, seed);
     }
 
     /// Верхняя панель: воспроизведение, скорость, сброс, сводка.
@@ -139,26 +268,45 @@ impl Observatory {
                 });
 
             ui.add_space(self.theme.spacing.gap);
+            ui.label("brain");
+            egui::ComboBox::from_id_salt("brain_kind")
+                .selected_text(self.model.kind().label())
+                .show_ui(ui, |ui| {
+                    let current = self.model.kind();
+                    for kind in [BrainKind::Arena, BrainKind::Organs] {
+                        if ui
+                            .selectable_label(current == kind, kind.label())
+                            .clicked()
+                            && current != kind
+                        {
+                            self.reset(kind, self.seed);
+                        }
+                    }
+                });
+
+            ui.add_space(self.theme.spacing.gap);
             if ui.checkbox(&mut self.trace_on, "trace blood").changed()
                 && self.trace_on {
-                    self.sim.blood.enable_trace(TRACE_CAP);
+                    self.model.blood_mut().enable_trace(TRACE_CAP);
                 }
             if ui.button("↺ reset").clicked() {
-                self.reset(self.seed);
+                let kind = self.model.kind();
+                self.reset(kind, self.seed);
             }
             if ui.button("🎲 new seed").clicked() {
                 self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                self.reset(self.seed);
+                let kind = self.model.kind();
+                self.reset(kind, self.seed);
             }
 
             ui.add_space(self.theme.spacing.gap);
-            let blood = &self.sim.blood;
+            let blood = self.model.blood();
             ui.colored_label(
                 self.theme.colors.text_dim,
                 format!(
                     "tick {} ({:.1} s) · eaten {} · glucose {:.0} · hunger {:.0} · fatigue {:.0} · damage {:.2}",
-                    self.sim.tick,
-                    self.sim.tick as f64 * 0.025,
+                    self.model.tick(),
+                    self.model.tick() as f64 * 0.025,
                     self.eaten_total,
                     blood.conc[chem::GLUCOSE],
                     blood.conc[chem::HUNGER],
@@ -195,7 +343,7 @@ impl Observatory {
         }
 
         // Еда.
-        for (x, y, alive) in self.sim.world.foods_snapshot() {
+        for (x, y, alive) in self.model.world().foods_snapshot() {
             let c = if alive { t.colors.food } else { t.colors.trail };
             dot(painter.clone(), tr.to_screen(x, y), t.viz.food_radius, c);
         }
@@ -216,14 +364,15 @@ impl Observatory {
         }
 
         // Агент.
-        let at = tr.to_screen(self.sim.world.agent_x, self.sim.world.agent_y);
-        let alive = self.sim.blood.organ.damage < 1.0;
+        let world = self.model.world();
+        let at = tr.to_screen(world.agent_x, world.agent_y);
+        let alive = self.model.alive();
         let color = if alive { t.colors.agent } else { t.colors.dead };
         dot(painter.clone(), at, t.viz.agent_radius, color);
         heading_arrow(
             painter.clone(),
             at,
-            self.sim.world.heading,
+            world.heading,
             t.viz.agent_radius,
             color,
         );
@@ -308,7 +457,7 @@ impl Observatory {
         egui::ScrollArea::vertical()
             .max_height(self.theme.layout.plot_height * TRACE_PANEL_HEIGHT_FRAC)
             .show(ui, |ui| {
-                let Some(trace) = self.sim.blood.trace() else {
+                let Some(trace) = self.model.blood().trace() else {
                     ui.label("trace выключен");
                     return;
                 };
@@ -328,7 +477,7 @@ impl Observatory {
             });
     }
 
-    /// Графики химий и моторной активности.
+    /// Графики химий, моторной активности и органов.
     fn plots(&self, ui: &mut egui::Ui) {
         let t = &self.theme;
         Plot::new("chemistry")
@@ -374,6 +523,42 @@ impl Observatory {
                         .width(t.viz.line_width),
                 );
             });
+
+        // Органный режим: активность среднего мозга и спинного рефлекса.
+        if self.model.kind() == BrainKind::Organs {
+            ui.add_space(t.spacing.gap);
+            Plot::new("organs")
+                .height(t.layout.plot_height * MOTOR_PLOT_HEIGHT_FRAC)
+                .legend(Legend::default())
+                .include_y(0.0)
+                .show_background(true)
+                .show(ui, |plot_ui| {
+                    let mid: PlotPoints = self
+                        .organ_history
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| [i as f64, v[0]])
+                        .collect();
+                    plot_ui.line(
+                        Line::new(mid)
+                            .name("midbrain (мотивация)")
+                            .color(egui::Color32::from_rgb(255, 170, 60))
+                            .width(t.viz.line_width),
+                    );
+                    let spine: PlotPoints = self
+                        .organ_history
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| [i as f64, v[1] * 10.0]) // ×10 для видимости
+                        .collect();
+                    plot_ui.line(
+                        Line::new(spine)
+                            .name("спина ×10 (рефлекс)")
+                            .color(egui::Color32::from_rgb(230, 90, 90))
+                            .width(t.viz.line_width),
+                    );
+                });
+        }
     }
 }
 
@@ -391,7 +576,7 @@ impl eframe::App for Observatory {
         if self.playing {
             for _ in 0..self.theme.viz.speed_steps[self.speed_idx] {
                 self.advance();
-                if self.sim.blood.organ.damage >= 1.0 {
+                if !self.model.alive() {
                     self.playing = false;
                     break;
                 }
@@ -440,11 +625,11 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "dioma observatory",
         options,
-        Box::new(|_cc| Ok(Box::new(Observatory::new(DEFAULT_SEED)))),
+        Box::new(|_cc| Ok(Box::new(Observatory::new(BrainKind::Organs, DEFAULT_SEED)))),
     )
 }
 
-const DEFAULT_SEED: u64 = 0xA_E11;
+const DEFAULT_SEED: u64 = 0x0000_AE11;
 const TRACE_CAP: usize = 256;
 const TRACE_ROWS: usize = 12;
 const TRACE_PANEL_HEIGHT_FRAC: f32 = 0.5;
