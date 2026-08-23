@@ -80,6 +80,10 @@ path = "src/bin/poc_mind.rs"
 name = "poc-delayed-haap"
 path = "src/bin/poc_delayed_haap.rs"
 
+[[bin]]
+name = "poc-sardaana-brain"
+path = "src/bin/poc_sardaana_brain.rs"
+
 
 [[bin]]
 name = "poc-hetero-cognitive"
