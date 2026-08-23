@@ -16,19 +16,34 @@ struct Band {
     diff: f64,
     dist: f64,
     midbrain: f64,
+    temp: f64,
+    spine_m: f64,
+}
+
+/// Снимок полосы за тик.
+struct Sample {
+    speed: f64,
+    motor: f64,
+    diff: f64,
+    dist: f64,
+    midbrain: f64,
+    temp: f32,
+    spine_m: f64,
 }
 
 impl Band {
     fn new() -> Self {
-        Self { n: 0, speed: 0.0, motor: 0.0, diff: 0.0, dist: 0.0, midbrain: 0.0 }
+        Self { n: 0, speed: 0.0, motor: 0.0, diff: 0.0, dist: 0.0, midbrain: 0.0, temp: 0.0, spine_m: 0.0 }
     }
-    fn push(&mut self, speed: f64, motor: f64, diff: f64, dist: f64, mid: i64) {
+    fn push(&mut self, s: Sample) {
         self.n += 1;
-        self.speed += speed;
-        self.motor += motor;
-        self.diff += diff;
-        self.dist += dist;
-        self.midbrain += mid as f64;
+        self.speed += s.speed;
+        self.motor += s.motor;
+        self.diff += s.diff;
+        self.dist += s.dist;
+        self.midbrain += s.midbrain;
+        self.temp += s.temp as f64;
+        self.spine_m += s.spine_m;
     }
     fn report(&self, name: &str) {
         if self.n == 0 {
@@ -37,13 +52,15 @@ impl Band {
         }
         let n = self.n as f64;
         println!(
-            "{name:>12}: n={:<5} speed={:.2} motor={:6.1} |ML-MR|={:5.2} dist={:6.1} mid={:6.1}",
+            "{name:>12}: n={:<5} speed={:.2} motor={:6.1} |ML-MR|={:5.2} dist={:6.1} mid={:6.1} T={:5.1}°C рефлекс={:5.1}",
             self.n,
             self.speed / n,
             self.motor / n,
             self.diff / n,
             self.dist / n,
             self.midbrain / n,
+            self.temp / n,
+            self.spine_m / n,
         );
     }
 }
@@ -60,9 +77,15 @@ fn main() {
     let mut longest_sit = 0usize;
     let mut cur_sit = 0usize;
     let mut lookarounds_during_sit = 0i64;
+    let mut fever_ticks = 0usize;
+    let mut max_temp = 0f32;
 
     for _ in 0..SIM_TICKS {
         let obs = sim.step_tick();
+        if obs.body_temp > dioma::organ_life::FEVER_TEMP {
+            fever_ticks += 1;
+        }
+        max_temp = max_temp.max(obs.body_temp);
         let h = sim.blood.conc[chem::HUNGER];
         let speed = sim.blood.speed();
         let ml = obs.cortex_regions[3] as f64;
@@ -77,7 +100,15 @@ fn main() {
         } else {
             &mut starving
         };
-        band.push(speed, ml + mr, (ml - mr).abs(), dist, obs.midbrain_spikes);
+        band.push(Sample {
+            speed,
+            motor: ml + mr,
+            diff: (ml - mr).abs(),
+            dist,
+            midbrain: obs.midbrain_spikes as f64,
+            temp: obs.body_temp,
+            spine_m: obs.spine_m_spikes as f64,
+        });
 
         if obs.sitting {
             sit_ticks += 1;
@@ -111,5 +142,11 @@ fn main() {
     println!(
         "«изучает» в покое: средний мозг во время сидения = {:.1} сп/тик (спонтанные осмотры)",
         lookarounds_during_sit as f64 / sit_ticks.max(1) as f64
+    );
+    println!(
+        "температура: лихорадочных тиков {fever_ticks}/{} (порог {}°C), максимум {:.1}°C",
+        SIM_TICKS,
+        dioma::organ_life::FEVER_TEMP,
+        max_temp
     );
 }

@@ -43,12 +43,30 @@ const REST_INHIBIT: f32 = 0.6;
 /// Полная скорость при сумме моторных спайков за тик ≥ этого порога.
 const MOTOR_GATE_FULL: f32 = 24.0;
 
+// ─── Температура тела («кипящий суп» спины) ────────────────────────────────
+/// Окружающая среда (°C), к ней остывает тело.
+const AMBIENT_TEMP: f32 = 20.0;
+/// Стартовая температура тела.
+const START_TEMP: f32 = 24.0;
+/// Скорость охлаждения: доля разницы с средой в секунду.
+const TEMP_COOL_PER_S: f32 = 0.18;
+/// Нагрев от моторной активности: при длительной активной погоне
+/// (motor_norm ≈ 1) равновесие ≈ 35°C — спина «закипает».
+const TEMP_HEAT_PER_S: f32 = 2.7;
+/// Боль дополнительно греет (мышечный тонус).
+const PAIN_HEAT: f32 = 0.6;
+/// Перегрев: выше этой температуры спина входит в спонтанные разряды
+/// («горит»: дёргается без боли), ток на градус перегрева.
+pub const FEVER_TEMP: f32 = 28.0;
+const FEVER_DRIVE_PER_DEG: f32 = 1.2;
+
 /// Пошаговая свободная жизнь на органном мозге.
 pub struct OrganSim {
     pub organs: OrganBrain,
     pub blood: Blood,
     pub world: WorldSim,
     pub tick: usize,
+    pub body_temp: f32,
     pain_ticks: usize,
     /// Накопитель наград коры между дофаминовыми доставками.
     rewards_pending: usize,
@@ -98,6 +116,7 @@ impl OrganSim {
             },
             world: WorldSim::new(seed ^ 0xB100),
             tick: 0,
+            body_temp: START_TEMP,
             pain_ticks: 0,
             rewards_pending: 0,
         }
@@ -136,16 +155,20 @@ impl OrganSim {
         // Средний мозг: голод из крови → драйв.
         let mid_ext = vec![hunger_drive(self.blood.conc[chem::HUNGER]); 24];
 
-        // Спина: боль после удара о стену.
+        // Спина: боль после удара о стену + лихорадка при перегреве
+        // (каналы ускорились — спина «горит» и дёргается сама).
+        let fever = (self.body_temp - FEVER_TEMP).max(0.0) * FEVER_DRIVE_PER_DEG;
         if self.world.last_wall_hit && self.pain_ticks == 0 {
             self.pain_ticks = PAIN_TICKS;
         }
-        let spine_ext = if self.pain_ticks > 0 {
+        let spine_ext = if self.pain_ticks > 0 || fever > 0.0 {
             let mut e = vec![0.0f32; crate::organs::SPINE_N];
             for cell in e.iter_mut().take(crate::organs::SPINE_N_S) {
-                *cell = PAIN_AMNT;
+                *cell = PAIN_AMNT * (self.pain_ticks > 0) as u8 as f32 + fever;
             }
-            self.pain_ticks -= 1;
+            if self.pain_ticks > 0 {
+                self.pain_ticks -= 1;
+            }
             e
         } else {
             vec![0.0f32; crate::organs::SPINE_N]
@@ -157,6 +180,7 @@ impl OrganSim {
             cortex: cortex_ext,
         };
         let spikes = self.organs.tick(&world_in);
+        self.organs.set_spine_temperature(self.body_temp);
 
         let mut cortex_regions = [0i32; N_REGIONS];
         for (r, sum) in cortex_regions.iter_mut().enumerate() {
@@ -194,6 +218,16 @@ impl OrganSim {
         let gate = ((ml + mr) as f32 / MOTOR_GATE_FULL).min(1.0);
         let sitting = (ml + mr) < 6;
         self.world.move_body_gated(ml, mr, &self.blood, gate);
+
+        // Термодинамика тела: мотор греет, среда охлаждает. Спина —
+        // «кипящий суп»: Q10 каналов пересчитывается от температуры.
+        {
+            let motor_norm = ((ml + mr) as f32 / 60.0).min(1.5);
+            let heat = TEMP_HEAT_PER_S * motor_norm + if self.pain_ticks > 0 { PAIN_HEAT } else { 0.0 };
+            let dt_s = crate::organs::TICK_MS / 1000.0;
+            self.body_temp += (heat - TEMP_COOL_PER_S * (self.body_temp - AMBIENT_TEMP)) * dt_s;
+            self.organs.set_spine_temperature(self.body_temp);
+        }
         self.tick += 1;
 
         OrganTickObs {
@@ -209,6 +243,7 @@ impl OrganSim {
             wall_hit: self.world.last_wall_hit,
             alive: self.blood.organ.damage < 1.0,
             sitting,
+            body_temp: self.body_temp,
         }
     }
 
@@ -236,6 +271,8 @@ pub struct OrganTickObs {
     pub alive: bool,
     /// Моторы молчат (существо сидит).
     pub sitting: bool,
+    /// Температура тела (°C) — она же температура спины.
+    pub body_temp: f32,
 }
 
 /// Отчёт жизни органного существа.

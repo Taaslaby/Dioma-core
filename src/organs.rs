@@ -175,6 +175,15 @@ impl OrganBrain {
         self.axons.push(axon);
     }
 
+    /// Температура спины (°C) → Q10 колонка HH-каналов. Холодная спина
+    /// (6.3°C, Q10=1) вялая; тёплая (37°C, Q10=29) гипервозбудимая.
+    pub fn set_spine_temperature(&mut self, celsius: f32) {
+        use pillars::zoo::HHModelParamIdx;
+        let q10 = pillars::q10_from_celsius_s(celsius);
+        self.spine
+            .set_hh_param_column(HHModelParamIdx::q10 as usize, &[q10; SPINE_N]);
+    }
+
     fn size_of(&self, o: OrganId) -> usize {
         match o {
             OrganId::Spine => self.spine.n_neurons(),
