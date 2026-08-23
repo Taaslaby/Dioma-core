@@ -481,15 +481,15 @@ impl Brain {
     }
 
     /// Копия текущих значений CSR (сохранение существа).
+    /// Делегирует в канонический снапшот движка.
     pub fn csr_values(&self) -> Vec<f32> {
-        self.runner.connectome.values.clone()
+        self.runner.connectome.export_values()
     }
 
     /// Перезаписать значения CSR (наследование выученных весов). Длины
-    /// должны совпадать с построенным CSR.
-    pub fn set_csr_values(&mut self, vals: &[f32]) {
-        let n = vals.len().min(self.runner.connectome.values.len());
-        self.runner.connectome.values[..n].copy_from_slice(&vals[..n]);
+    /// должны совпадать с построенным CSR — иначе движок отвергнет снапшот.
+    pub fn set_csr_values(&mut self, vals: &[f32]) -> Result<(), String> {
+        self.runner.connectome.import_values(vals)
     }
 
     /// Мин/макс всех синаптических весов (интроспекция/отладка).

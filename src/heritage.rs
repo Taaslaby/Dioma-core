@@ -63,7 +63,10 @@ pub fn load_creature_into(
     let had_mind = r.get_f32("w2").is_ok();
 
     let csr = r.get_f32("cortex_csr")?;
-    sim.organs.cortex.set_csr_values(&csr);
+    sim.organs
+        .cortex
+        .set_csr_values(&csr)
+        .map_err(|e| format!("cortex CSR: {e}"))?;
 
     if let (Some(mind), Ok(w2)) = (&mut sim.mind, r.get_f32("w2")) {
         mind.set_weights(&w2);
@@ -88,7 +91,11 @@ pub fn spawn_child(parent: &OrganSim, child_seed: u64, mutate: bool) -> OrganSim
             parent_csr[i]
         };
     }
-    child.organs.cortex.set_csr_values(&csr);
+    // Тот же сид → та же топология CSR → длины гарантированно совпадают.
+    child.organs
+        .cortex
+        .set_csr_values(&csr)
+        .expect("child CSR: same genome must give same topology");
 
     // Политика родителя → стартовые веса разума ребёнка (± мутация).
     if let (Some(pm), Some(cm)) = (&parent.mind, &mut child.mind) {
