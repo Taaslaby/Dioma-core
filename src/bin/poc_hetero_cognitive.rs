@@ -8,6 +8,7 @@
 // -------------------------------------------------------------------------
 use pillars_connectome::{BrainConfig, ConnectomeData, HeteroGroup, HeteroRunner};
 
+#[allow(clippy::needless_range_loop)]
 fn main() {
     println!("poc-hetero-cognitive: LIF сенсорика/моторы + HH workspace");
 

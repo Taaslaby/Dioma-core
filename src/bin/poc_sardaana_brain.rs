@@ -9,6 +9,7 @@
 use pillars_connectome::{BrainConfig, BrainRunner, ConnectomeData};
 use taas_format::TaasReader;
 
+#[allow(clippy::needless_range_loop)]
 fn main() {
     println!("poc-sardaana-brain: мозг от sarDNA трансформера");
 

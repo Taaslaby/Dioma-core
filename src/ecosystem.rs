@@ -143,17 +143,20 @@ impl Ecosystem {
         // ─── Фаза 1: Параллельный шаг мозга каждого существа ───
         // Каждое существо независимо — rayon раскидывает по ядрам.
         struct StepResult {
+            #[allow(dead_code)]
             ml: i32,
+            #[allow(dead_code)]
             mr: i32,
             new_x: f64,
             new_y: f64,
+            #[allow(dead_code)]
             new_heading: f64,
         }
         let step_results: Vec<Option<StepResult>> = self
             .creatures
             .par_iter_mut()
             .enumerate()
-            .map(|(ci, c)| {
+            .map(|(_ci, c)| {
                 if !c.alive {
                     return None;
                 }
@@ -336,10 +339,12 @@ impl Ecosystem {
         self.creatures[ci].sim.blood.conc[chem_fatigue()]
     }
 
+    #[allow(dead_code)]
     fn blood_wants_food_pub(&self, ci: usize) -> bool {
         self.creatures[ci].sim.blood.wants_food()
     }
 
+    #[allow(dead_code)]
     fn blood_wants_food(&self, ci: usize) -> bool {
         self.creatures[ci].sim.blood.wants_food()
     }

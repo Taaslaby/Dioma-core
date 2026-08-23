@@ -19,6 +19,7 @@ struct Evaluated {
     seed: u64,
     parent: OrganSim,
     meals: usize,
+    #[allow(dead_code)]
     ticks_median: usize,
 }
 
@@ -67,7 +68,7 @@ fn run() {
 
     for gen in 0..GENERATIONS {
         // Сортируем по еде (убывание).
-        population.sort_by(|a, b| b.meals.cmp(&a.meals));
+        population.sort_by_key(|p| std::cmp::Reverse(p.meals));
 
         let total_meals: usize = population.iter().map(|p| p.meals).sum();
         let best_meals = population[0].meals;

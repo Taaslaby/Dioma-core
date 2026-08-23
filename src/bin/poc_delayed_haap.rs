@@ -18,10 +18,10 @@ fn haap_brain(grown: &dioma::Grown) -> Brain {
         physiology::cognitive_archetype,
         &Default::default(),
     );
-    let mut params = PlasticityParams::default();
+    let mut params = PlasticityParams { homeo_every_ticks: 1, ..Default::default() };
     // HAAP на когнитивной схеме: рекуррентность через WS/WM без тормоза
     // уходит в самоподдерживающуюся активацию — гомеостаз каждый тик.
-    params.homeo_every_ticks = 1;
+    // гомеостаз каждый тик задан в инициализации
     // S→S и WM→WS рекуррентности не учатся (урок арены).
     params.frozen_pairs = vec![(5, 5), (6, 6), (7, 7), (8, 8)];
     Brain::new_haap(grown, cognitive_gains(), params, &cols)

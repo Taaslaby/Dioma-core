@@ -3,6 +3,7 @@ use pillars_connectome::{BrainConfig, BrainRunner, ConnectomeData};
 use taas_format::TaasReader;
 use std::collections::HashSet;
 
+#[allow(dead_code)]
 struct BenchResult {
     stim_spikes: f64,
     stim_neurons: usize,

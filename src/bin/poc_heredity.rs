@@ -66,7 +66,7 @@ fn run() {
         .into_par_iter()
         .map(|k| {
             let seed = 0x1000 + k as u64;
-            let grown = dioma::arena::grow_agent(&dioma::arena::Genome::wildtype(seed));
+            let _grown = dioma::arena::grow_agent(&dioma::arena::Genome::wildtype(seed));
             let mut child = spawn_child(&parent, seed, true);
             let t = ticks_to_first_meal(&mut child);
             let mut eaten_k = 0usize;
