@@ -228,6 +228,7 @@ mod tests {
             nt: vec![1.0; 8],
             growth_s: 0.0,
             rule_genes: Vec::new(),
+            instincts: Vec::new(),
         }
     }
 

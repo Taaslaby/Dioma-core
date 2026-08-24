@@ -294,6 +294,7 @@ pub fn run_protocol_n(edges: &[(usize, usize, f32)], n_episodes: usize) -> Vec<E
         },
         growth_s: 0.0,
         rule_genes: Vec::new(),
+        instincts: Vec::new(),
     };
     let mut brain = cognitive_brain(&grown_stub);
     let mut stats = Vec::with_capacity(n_episodes);

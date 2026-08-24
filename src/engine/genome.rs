@@ -21,6 +21,8 @@ pub struct Grown {
     /// Ген правила динамики на регион (Пифия). Пустой = нейтральный
     /// интегратор везде; наследуется с мутацией вместе с весами.
     pub rule_genes: Vec<RuleGene>,
+    /// Врождённые рефлексы, прожигаемые во сне при рождении.
+    pub instincts: Vec<crate::engine::instincts::Instinct>,
 }
 
 impl Grown {

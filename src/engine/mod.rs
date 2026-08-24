@@ -13,10 +13,12 @@
 pub mod genome;
 pub mod graph;
 pub mod grow;
+pub mod instincts;
 pub mod neurons;
 pub mod rules;
 
 /// Ключевые типы ядра на один импорт.
 pub use genome::Grown;
+pub use instincts::Instinct;
 pub use neurons::{Brain, BrainModel, PlasticityParams};
 pub use rules::RuleGene;

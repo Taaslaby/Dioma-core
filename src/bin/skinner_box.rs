@@ -18,6 +18,7 @@ fn skinner_grown() -> dioma::Grown {
         nt: vec![1.0f32; N_TOTAL],
         growth_s: 0.0,
         rule_genes: Vec::new(),
+        instincts: Vec::new(),
     }
 }
 

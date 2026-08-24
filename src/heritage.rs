@@ -64,6 +64,7 @@ pub fn sardna_to_grown(
         nt: nt_raw.iter().map(|&v| v.clamp(-1.0, 1.0)).collect(),
         growth_s: 0.0,
         rule_genes: Vec::new(),
+        instincts: Vec::new(),
     })
 }
 
