@@ -17,6 +17,7 @@ fn skinner_grown() -> dioma::Grown {
             .chain(vec![1usize; N_MOTORS]).collect(),
         nt: vec![1.0f32; N_TOTAL],
         growth_s: 0.0,
+        rule_genes: Vec::new(),
     }
 }
 

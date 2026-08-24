@@ -88,6 +88,8 @@ pub struct OrganSim {
     pub sensory_noise: f32,
     /// Накопитель наград коры между дофаминовыми доставками.
     rewards_pending: usize,
+    /// Гены правил Пифии по регионам (наследуются с мутацией).
+    pub rule_genes: Vec<crate::pythia::RuleGene>,
 }
 
 impl OrganSim {
@@ -142,6 +144,7 @@ impl OrganSim {
             sensory_noise: 0.0,
             rewards_pending: 0,
             mind: None,
+            rule_genes: Vec::new(),
         }
     }
 
@@ -154,6 +157,12 @@ impl OrganSim {
     /// Заменить кору на внешний коннектом (например sarDNA трансформер).
     pub fn with_external_cortex(mut self, conn: pillars_connectome::ConnectomeData) -> Self {
         let _ = self.organs.cortex.set_csr_values(&conn.export_values());
+        self
+    }
+
+    /// Задать гены правил Пифии (наследству/лаборатории).
+    pub fn with_rule_genes(mut self, genes: Vec<crate::pythia::RuleGene>) -> Self {
+        self.rule_genes = genes;
         self
     }
 

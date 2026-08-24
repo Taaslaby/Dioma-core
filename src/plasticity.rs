@@ -227,6 +227,7 @@ mod tests {
             region_of: vec![0, 0, 0, 0, 1, 1, 1, 1],
             nt: vec![1.0; 8],
             growth_s: 0.0,
+            rule_genes: Vec::new(),
         }
     }
 

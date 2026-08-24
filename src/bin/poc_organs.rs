@@ -78,6 +78,7 @@ fn cortex_grown() -> Grown {
             .collect(),
         nt: vec![1.0; n],
         growth_s: 0.0,
+        rule_genes: Vec::new(),
     }
 }
 

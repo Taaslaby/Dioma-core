@@ -63,6 +63,7 @@ pub fn sardna_to_grown(
         region_of,
         nt: nt_raw.iter().map(|&v| v.clamp(-1.0, 1.0)).collect(),
         growth_s: 0.0,
+        rule_genes: Vec::new(),
     })
 }
 
@@ -70,6 +71,45 @@ pub fn sardna_to_grown(
 pub const MUTATE_CSR_SIGMA: f32 = 0.05;
 /// Мутация W2 наследника (абсолютная, на вес).
 pub const MUTATE_W2_SIGMA: f32 = 0.02;
+/// Мутация генов правил наследника (абсолютная, на параметр).
+pub const MUTATE_RULE_SIGMA: f32 = 0.08;
+
+/// Гены правил → колонки .taas (rg_template + rg_p0..p7).
+fn write_rule_genes(w: &mut TaasWriter, genes: &[crate::pythia::RuleGene]) {
+    if genes.is_empty() {
+        return;
+    }
+    let tmpl: Vec<f32> = genes.iter().map(|g| g.template as f32).collect();
+    w.add_f32("rg_template", "f32", &tmpl);
+    for j in 0..8 {
+        let col: Vec<f32> = genes.iter().map(|g| g.p[j]).collect();
+        w.add_f32(&format!("rg_p{j}"), "f32", &col);
+    }
+}
+
+/// Колонки .taas → гены правил (None если их нет в файле).
+fn read_rule_genes(r: &TaasReader) -> Result<Option<Vec<crate::pythia::RuleGene>>, String> {
+    let tmpl = match r.get_f32("rg_template") {
+        Ok(t) => t,
+        Err(_) => return Ok(None),
+    };
+    let mut cols: Vec<[f32; 8]> = Vec::new();
+    for _ in &tmpl {
+        cols.push([0.0; 8]);
+    }
+    for j in 0..8 {
+        let c = r.get_f32(&format!("rg_p{j}"))?;
+        for (i, slot) in cols.iter_mut().enumerate() {
+            slot[j] = *c.get(i).unwrap_or(&0.0);
+        }
+    }
+    let genes = tmpl
+        .iter()
+        .zip(&cols)
+        .map(|(&t, p)| crate::pythia::RuleGene { template: t as u8, p: *p })
+        .collect();
+    Ok(Some(genes))
+}
 
 /// Сохранить существо: сид + выученные веса + счётчики.
 pub fn save_creature(path: impl AsRef<std::path::Path>, sim: &OrganSim) -> Result<(), String> {
@@ -85,6 +125,8 @@ pub fn save_creature(path: impl AsRef<std::path::Path>, sim: &OrganSim) -> Resul
     if let Some(mind) = sim.mind.as_ref() {
         w.add_f32("w2", "f32", &mind.weight_heat());
     }
+
+    write_rule_genes(&mut w, &sim.rule_genes);
 
     w.save_to_file(path)
 }
@@ -126,6 +168,10 @@ pub fn load_creature_into(
         mind.set_weights(&w2);
     }
 
+    if let Some(genes) = read_rule_genes(&r)? {
+        sim.rule_genes = genes;
+    }
+
     Ok(CreatureMeta { seed, eaten, had_mind })
 }
 
@@ -157,6 +203,22 @@ pub fn spawn_child(parent: &OrganSim, child_seed: u64, mutate: bool) -> OrganSim
         cm.set_weights_mutated(&pw, if mutate { MUTATE_W2_SIGMA } else { 0.0 }, child_seed ^ 0xC41D);
     }
 
+    // Гены правил родителя → ребёнку (± мутация): динамика регионов
+    // наследуется наравне с весами.
+    if mutate && !parent.rule_genes.is_empty() {
+        child.rule_genes = parent
+            .rule_genes
+            .iter()
+            .enumerate()
+            .map(|(ri, g)| {
+                let mut rng = crate::rng::XorShift::new(child_seed ^ (0x9E37_79B9 ^ ri as u64));
+                g.mutate(&mut rng, MUTATE_RULE_SIGMA)
+            })
+            .collect();
+    } else {
+        child.rule_genes = parent.rule_genes.clone();
+    }
+
     child
 }
 
@@ -181,4 +243,60 @@ fn gauss(seed: u64, i: u64) -> f32 {
         .wrapping_add(i.wrapping_mul(0xBF58_476D_1CE4_E5B9));
     let hi = ((x >> 40) & 0xFFFF) as f32 / 65536.0;
     hi * 2.0 - 1.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pythia::{templates, RuleGene};
+
+    #[test]
+    fn rule_genes_roundtrip_through_taas() {
+        let genes = vec![
+            RuleGene::spiker(0.7, 0.5, 0.42, 2.0),
+            RuleGene::default(),
+            RuleGene::consolidator(0.9, 0.6),
+        ];
+        let path = std::env::temp_dir().join("dioma_rg_test.taas");
+        let mut w = TaasWriter::new();
+        w.add_f32("cortex_csr", "f32", &[1.0]);
+        write_rule_genes(&mut w, &genes);
+        w.save_to_file(&path).unwrap();
+
+        let r = TaasReader::from_file(&path).unwrap();
+        let back = read_rule_genes(&r).unwrap().expect("гены должны быть");
+        assert_eq!(back.len(), genes.len());
+        for (a, b) in back.iter().zip(&genes) {
+            assert_eq!(a.template, b.template);
+            assert!((a.p[2] - b.p[2]).abs() < 1e-6);
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn no_genes_in_file_means_none() {
+        let path = std::env::temp_dir().join("dioma_rg_none.taas");
+        let mut w = TaasWriter::new();
+        w.add_f32("cortex_csr", "f32", &[1.0]);
+        w.save_to_file(&path).unwrap();
+        let r = TaasReader::from_file(&path).unwrap();
+        assert!(read_rule_genes(&r).unwrap().is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn child_mutates_rule_genes_only_params() {
+        // Родитель без OrganSim: мутация — чистая функция гена+сида,
+        // проверяем через RuleGene::mutate с тем же выводом, что spawn_child.
+        let parent_genes = [RuleGene::spiker(0.7, 0.5, 0.5, 2.0); 5];
+        let child_seed = 777u64;
+        let ri = 3usize;
+        let mut rng =
+            crate::rng::XorShift::new(child_seed ^ (0x9E37_79B9 ^ ri as u64));
+        let mutated = parent_genes[ri].mutate(&mut rng, MUTATE_RULE_SIGMA);
+        assert_eq!(mutated.template, templates::SPIKER);
+        assert_ne!(mutated.p, parent_genes[ri].p);
+        // Все параметры в допустимом диапазоне.
+        assert!(mutated.p.iter().all(|&v| (0.0..=2.0).contains(&v)));
+    }
 }

@@ -258,6 +258,7 @@ pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
         region_of,
         nt,
         growth_s,
+        rule_genes: Vec::new(),
     }
 }
 

@@ -38,9 +38,22 @@ pub struct Grown {
     /// +1 возбуждающий, −1 тормозной.
     pub nt: Vec<f32>,
     pub growth_s: f64,
+    /// Ген правила динамики на регион (Пифия). Пустой = нейтральный
+    /// интегратор везде; наследуется с мутацией вместе с весами.
+    pub rule_genes: Vec<crate::pythia::RuleGene>,
 }
 
 impl Grown {
+    /// Число регионов (по максимальному индексу).
+    pub fn n_regions(&self) -> usize {
+        self.region_of.iter().copied().max().map_or(0, |m| m + 1)
+    }
+
+    /// Ген региона; пустой список = нейтральный интегратор.
+    pub fn gene_for(&self, region: usize) -> crate::pythia::RuleGene {
+        self.rule_genes.get(region).copied().unwrap_or_default()
+    }
+
     /// Границы нейронов региона [start, end). Регионы в region_of идут
     /// сплошными блоками по порядку добавления (так растит grow()).
     pub fn region_bounds(&self, region: usize) -> (usize, usize) {

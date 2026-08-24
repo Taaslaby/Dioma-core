@@ -163,3 +163,7 @@ path = "src/bin/probe_sardaana.rs"
 [[bin]]
 name = "evolved-rules"
 path = "src/bin/evolved_rules.rs"
+
+[[bin]]
+name = "dynasty"
+path = "src/bin/dynasty.rs"
