@@ -97,6 +97,10 @@ name = "sardaana-control"
 path = "src/bin/sardaana_control.rs"
 
 [[bin]]
+name = "sardana-battery"
+path = "src/bin/sardana_battery.rs"
+
+[[bin]]
 name = "poc-heredity"
 path = "src/bin/poc_heredity.rs"
 
