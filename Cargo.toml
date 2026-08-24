@@ -117,6 +117,10 @@ name = "maze-test"
 path = "src/bin/maze_test.rs"
 
 [[bin]]
+name = "conditioning"
+path = "src/bin/conditioning.rs"
+
+[[bin]]
 name = "poc-sardana-10k"
 path = "src/bin/poc_sardana_10k.rs"
 
