@@ -153,7 +153,7 @@ impl OrganSim {
 
     /// Заменить кору на внешний коннектом (например sarDNA трансформер).
     pub fn with_external_cortex(mut self, conn: pillars_connectome::ConnectomeData) -> Self {
-        self.organs.cortex.set_csr_values(&conn.export_values());
+        let _ = self.organs.cortex.set_csr_values(&conn.export_values());
         self
     }
 

@@ -159,3 +159,7 @@ path = "src/bin/evolution.rs"
 [[bin]]
 name = "probe-sardaana"
 path = "src/bin/probe_sardaana.rs"
+
+[[bin]]
+name = "evolved-rules"
+path = "src/bin/evolved_rules.rs"

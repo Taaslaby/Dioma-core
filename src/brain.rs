@@ -118,6 +118,8 @@ pub struct Brain {
     syn_scale: f32,
     pending_reward: Vec<(usize, f32)>,
     step_count: usize,
+    /// Долговременная копия весов для сна-восстановления (`memory_recall`).
+    memory_lt: Vec<f32>,
 }
 
 impl Brain {
@@ -260,6 +262,7 @@ impl Brain {
             syn_scale,
             pending_reward: Vec::new(),
             step_count: 0,
+            memory_lt: vv.clone(),
         }
     }
 
@@ -486,6 +489,65 @@ impl Brain {
         self.runner.connectome.export_values()
     }
 
+    /// Триплеты CSR (pre, post, вес) в каноническом порядке — для синка
+    /// графа при тропической перестройке (`plasticity::sync_weights_from_brain`).
+    pub fn csr_triplets(&self) -> (Vec<usize>, Vec<usize>, Vec<f32>) {
+        (
+            self.pre_of.clone(),
+            self.post_of.clone(),
+            self.runner.connectome.values.clone(),
+        )
+    }
+
+    /// Сон-консолидация: цель гомеостаза подтягивается к текущим суммам
+    /// входов — выученное за бодрствование закрепляется как новая «норма»
+    /// и больше не вымывается мягкой нормализацией. Вызывать в фазах покоя.
+    pub fn sleep_consolidate(&mut self, alpha: f32) {
+        let mut sums = vec![0.0f32; self.n];
+        for idx in 0..self.pre_of.len() {
+            if !self.inh_syn[idx] {
+                sums[self.post_of[idx]] += self.runner.connectome.values[idx];
+            }
+        }
+        for (post, sum) in sums.iter().enumerate() {
+            if *sum > 1e-6 {
+                self.target_in_sum[post] += alpha * (*sum - self.target_in_sum[post]);
+            }
+        }
+    }
+
+    /// Снять долговременную копию весов (начало сна): текущее состояние
+    /// становится эталоном, к которому сон будет возвращать дрейф.
+    pub fn memory_snapshot(&mut self) {
+        self.memory_lt = self.runner.connectome.values.clone();
+    }
+
+    /// Восстановление во сне: веса подтягиваются к долговременной копии —
+    /// синаптический дрейф дня стирается, выученный рисунок восстанавливается.
+    pub fn memory_recall(&mut self, alpha: f32) {
+        let n = self.memory_lt.len().min(self.runner.connectome.values.len());
+        for i in 0..n {
+            let lt = self.memory_lt[i];
+            self.runner.connectome.values[i] += alpha * (lt - self.runner.connectome.values[i]);
+        }
+    }
+
+    /// Среднеквадратичное расхождение весов с долговременной копией
+    /// (диагностика дрейфа).
+    pub fn memory_drift_rms(&self) -> f32 {
+        let n = self.memory_lt.len().min(self.runner.connectome.values.len());
+        if n == 0 {
+            return 0.0;
+        }
+        let s: f32 = (0..n)
+            .map(|i| {
+                let d = self.runner.connectome.values[i] - self.memory_lt[i];
+                d * d
+            })
+            .sum();
+        (s / n as f32).sqrt()
+    }
+
     /// Перезаписать значения CSR (наследование выученных весов). Длины
     /// должны совпадать с построенным CSR — иначе движок отвергнет снапшот.
     pub fn set_csr_values(&mut self, vals: &[f32]) -> Result<(), String> {
@@ -530,4 +592,73 @@ pub fn gains_from(n_regions: usize, rules: &[(usize, usize, f32)]) -> Vec<Vec<f3
         g[a][b] = v;
     }
     g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toy_grown() -> Grown {
+        let edges = vec![
+            (0, 3, 1.5),
+            (1, 4, 1.2),
+            (2, 5, 1.8),
+            (0, 4, 0.9),
+            (1, 3, 0.7),
+        ];
+        Grown {
+            edges,
+            region_of: vec![0, 0, 0, 1, 1, 1],
+            nt: vec![1.0; 6],
+            growth_s: 0.0,
+        }
+    }
+
+    fn homeo_params() -> PlasticityParams {
+        PlasticityParams { homeo_every_ticks: 1, ..Default::default() }
+    }
+
+    #[test]
+    fn sleep_consolidation_anchors_learning() {
+        let grown = toy_grown();
+        let gains = gains_from(2, &[(0, 1, 1.0)]);
+        let mean_w = |b: &Brain| {
+            let (_, _, v) = b.csr_triplets();
+            v.iter().sum::<f32>() / v.len() as f32
+        };
+
+        // «Обучение»: удвоили все веса.
+        let mut learned = Brain::new(&grown, gains.clone(), homeo_params());
+        let m0 = mean_w(&learned);
+        let (_, _, vals) = learned.csr_triplets();
+        let doubled: Vec<f32> = vals.iter().map(|&v| v * 2.0).collect();
+        learned.set_csr_values(&doubled).unwrap();
+
+        // A: закрепил во сне — гомеостаз держит новую норму.
+        let mut sleeper = Brain::new(&grown, gains.clone(), homeo_params());
+        sleeper.set_csr_values(&doubled).unwrap();
+        sleeper.sleep_consolidate(1.0);
+        let zero = vec![0.0f32; 6];
+        for _ in 0..160 {
+            sleeper.step(&zero);
+        }
+        let ma = mean_w(&sleeper);
+
+        // B: не спал — мягкая нормализация тянет обратно к старой норме.
+        let mut awake = Brain::new(&grown, gains, homeo_params());
+        awake.set_csr_values(&doubled).unwrap();
+        for _ in 0..160 {
+            awake.step(&zero);
+        }
+        let mb = mean_w(&awake);
+
+        assert!(
+            ma > m0 * 1.6,
+            "консолидированный должен держать выученное: m0={m0} ma={ma}"
+        );
+        assert!(
+            mb < ma - m0 * 0.2,
+            "без сна выученное вымывается: ma={ma} mb={mb}"
+        );
+    }
 }

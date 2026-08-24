@@ -12,6 +12,8 @@ pub mod rng;
 
 pub mod brain;
 pub mod grow;
+pub mod plasticity;
+pub mod pythia;
 pub mod ecosystem;
 pub mod exam;
 pub mod heritage;
