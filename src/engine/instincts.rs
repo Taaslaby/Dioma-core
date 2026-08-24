@@ -9,6 +9,7 @@
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
 use crate::engine::neurons::Brain;
+use crate::rng::XorShift;
 
 /// Один инстинкт генома.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,6 +21,17 @@ pub struct Instinct {
 }
 
 impl Instinct {
+    /// Мутация инстинкта: дрейф токов и дофамина (индексы не трогаем —
+    /// топология врождённая).
+    pub fn mutate(&self, rng: &mut XorShift, sigma: f32) -> Instinct {
+        let mut g = self.clone();
+        for (_, drive) in g.inputs.iter_mut() {
+            *drive = (*drive + rng.gauss() as f32 * sigma * 20.0).max(0.5);
+        }
+        g.dopamine = (g.dopamine + rng.gauss() as f32 * sigma * 4.0).max(0.2);
+        g
+    }
+
     /// Прожечь инстинкт в мозге: стимулировать вход, наградить, закрепить
     /// сном (цель гомеостаза + долговременный снимок обновляются).
     pub fn burn_into(&self, brain: &mut Brain, tonic: f32) {

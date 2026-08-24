@@ -74,6 +74,97 @@ pub const MUTATE_CSR_SIGMA: f32 = 0.05;
 pub const MUTATE_W2_SIGMA: f32 = 0.02;
 /// Мутация генов правил наследника (абсолютная, на параметр).
 pub const MUTATE_RULE_SIGMA: f32 = 0.08;
+/// Мутация инстинктов (дрейф токов и дофамина, относительная).
+pub const MUTATE_INSTINCT_SIGMA: f32 = 0.08;
+
+/// Потомство двух родителей (половое): тело и кора — от первичного
+/// родителя A (тот же сид → та же топология, веса переливаются), политика
+/// W2 — кроссовер A/B, гены правил и инстинкты — чередование по регионам.
+/// Завершается родильным сном: инстинкты прожжены, рефлексы постоянны.
+pub fn spawn_child_crossover(
+    parent_a: &OrganSim,
+    parent_b: &OrganSim,
+    child_seed: u64,
+) -> OrganSim {
+    let mut child = OrganSim::new(false, parent_a.seed).with_mind(child_seed);
+
+    // Кора A → ребёнку (± мутация): тот же сид ⇒ та же топология.
+    let csr_a = parent_a.organs.cortex.csr_values();
+    let mut csr = child.organs.cortex.csr_values();
+    let n = csr_a.len().min(csr.len());
+    for i in 0..n {
+        csr[i] = csr_a[i] * (1.0 + MUTATE_CSR_SIGMA * gauss(child_seed, i as u64));
+    }
+    let _ = child.organs.cortex.set_csr_values(&csr);
+
+    // Политика: кроссовер W2 A/B (± мутация).
+    if let Some(mb) = &parent_b.mind {
+        if let Some(cm) = &mut child.mind {
+            let ma_w = parent_a.mind.as_ref().map(|m| m.weight_heat());
+            if let Some(wa) = ma_w {
+                let wb = mb.weight_heat();
+                let mixed: Vec<f32> = wa
+                    .iter()
+                    .zip(wb.iter())
+                    .enumerate()
+                    .map(|(j, (&x, &y))| {
+                        let pick = if j % 2 == 0 { x } else { y };
+                        pick + gauss(child_seed, 10_000 + j as u64) * MUTATE_W2_SIGMA
+                    })
+                    .collect();
+                cm.set_weights(&mixed);
+            }
+        }
+    }
+
+    // Гены правил: по регионам чередуем родителей ± мутация.
+    let nr = parent_a.rule_genes.len().max(parent_b.rule_genes.len());
+    let mut genes = Vec::with_capacity(nr);
+    for ri in 0..nr {
+        let pick = match (parent_a.rule_genes.get(ri), parent_b.rule_genes.get(ri)) {
+            (Some(a), Some(b)) => {
+                if ri % 2 == 0 {
+                    *a
+                } else {
+                    *b
+                }
+            }
+            (Some(a), None) => *a,
+            (None, Some(b)) => *b,
+            (None, None) => continue,
+        };
+        let mut rng = crate::rng::XorShift::new(child_seed ^ (0x9E37_79B9 ^ ri as u64));
+        genes.push(pick.mutate(&mut rng, MUTATE_RULE_SIGMA));
+    }
+    child.rule_genes = genes;
+
+    // Инстинкты: чередуем родителей ± мутация дрейфов.
+    let ni = parent_a.instincts.len().max(parent_b.instincts.len());
+    let mut insts = Vec::with_capacity(ni);
+    for ii in 0..ni {
+        let pick = match (parent_a.instincts.get(ii), parent_b.instincts.get(ii)) {
+            (Some(a), Some(b)) => {
+                if ii % 2 == 0 {
+                    a
+                } else {
+                    b
+                }
+            }
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => continue,
+        };
+        let mut rng =
+            crate::rng::XorShift::new(child_seed ^ (0xC41D_F00D ^ ii as u64).wrapping_mul(3));
+        insts.push(pick.mutate(&mut rng, MUTATE_INSTINCT_SIGMA));
+    }
+    child.instincts = insts;
+
+    // Родильный сон: врождённые рефлексы становятся постоянными.
+    child.birth_sleep();
+
+    child
+}
 
 /// Гены правил → колонки .taas (rg_template + rg_p0..p7).
 fn write_rule_genes(w: &mut TaasWriter, genes: &[crate::engine::rules::RuleGene]) {
@@ -283,6 +374,33 @@ mod tests {
         let r = TaasReader::from_file(&path).unwrap();
         assert!(read_rule_genes(&r).unwrap().is_none());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn crossover_child_inherits_everything() {
+        use crate::engine::instincts::Instinct;
+
+        let mut a = OrganSim::new(false, 42).with_mind(1);
+        let mut b = OrganSim::new(false, 43).with_mind(2);
+        a.rule_genes = vec![RuleGene::spiker(0.7, 0.5, 0.4, 2.0); 5];
+        b.rule_genes = vec![RuleGene::spiker(0.7, 0.5, 0.8, 2.0); 5];
+        a.instincts = vec![Instinct { inputs: vec![(0, 4.0), (58, 9.0)], dopamine: 2.0 }];
+        b.instincts = vec![Instinct { inputs: vec![(20, 4.0), (78, 9.0)], dopamine: 2.0 }];
+
+        let child = spawn_child_crossover(&a, &b, 777);
+
+        assert_eq!(child.instincts.len(), 1);
+        assert_eq!(child.rule_genes.len(), 5);
+        // Родильный сон изменил кору (инстинкт прожжён).
+        let after = child.organs.cortex.csr_values();
+        assert!(!after.is_empty());
+
+        // Повторный вызов детерминирован.
+        let child2 = spawn_child_crossover(&a, &b, 777);
+        assert_eq!(child2.rule_genes[1].p, child.rule_genes[1].p);
+
+        // Инстинкт ребёнка — мутант одного из родителей.
+        assert!(child.instincts[0].dopamine > 0.2);
     }
 
     #[test]

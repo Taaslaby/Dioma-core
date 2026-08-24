@@ -90,6 +90,8 @@ pub struct OrganSim {
     rewards_pending: usize,
     /// Гены правил Пифии по регионам (наследуются с мутацией).
     pub rule_genes: Vec<crate::engine::rules::RuleGene>,
+    /// Врождённые рефлексы (прожигаются родильным сном).
+    pub instincts: Vec<crate::engine::instincts::Instinct>,
 }
 
 impl OrganSim {
@@ -145,6 +147,7 @@ impl OrganSim {
             rewards_pending: 0,
             mind: None,
             rule_genes: Vec::new(),
+            instincts: Vec::new(),
         }
     }
 
@@ -164,6 +167,21 @@ impl OrganSim {
     pub fn with_rule_genes(mut self, genes: Vec<crate::engine::rules::RuleGene>) -> Self {
         self.rule_genes = genes;
         self
+    }
+
+    /// Задать врождённые инстинкты (наследству/лаборатории).
+    pub fn with_instincts(mut self, instincts: Vec<crate::engine::instincts::Instinct>) -> Self {
+        self.instincts = instincts;
+        self
+    }
+
+    /// Родильный сон: прожечь унаследованные инстинкты в кору.
+    /// Вызывается один раз при рождении — после этого рефлексы постоянны
+    /// (снимок памяти коры обновлён, гомеостаз принял новую норму).
+    pub fn birth_sleep(&mut self) {
+        for inst in &self.instincts.clone() {
+            inst.burn_into(&mut self.organs.cortex, 0.12);
+        }
     }
 
     /// Съедено за текущую жизнь (для сохранения существа).

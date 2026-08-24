@@ -69,3 +69,7 @@ path = "src/bin/observatory_eco.rs"
 [[bin]]
 name = "grow-viz"
 path = "src/bin/grow_viz.rs"
+
+[[bin]]
+name = "lifecycle"
+path = "src/bin/lifecycle.rs"
