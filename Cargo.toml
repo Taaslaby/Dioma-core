@@ -109,6 +109,10 @@ name = "poc-cookiecutter"
 path = "src/bin/poc_cookiecutter.rs"
 
 [[bin]]
+name = "sardana-personality"
+path = "src/bin/sardana_personality.rs"
+
+[[bin]]
 name = "brain-battle"
 path = "src/bin/brain_battle.rs"
 
