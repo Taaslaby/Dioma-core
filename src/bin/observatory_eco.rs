@@ -6,8 +6,8 @@
 //! Description: canvas с существами и едой + панель демографии.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma::ecosystem::{Ecosystem, ARENA_HALF};
-use dioma::metabolism::chem;
+use dioma::world::ecosystem::{Ecosystem, ARENA_HALF};
+use dioma::body::metabolism::chem;
 use eframe::egui;
 use egui::{Color32, Pos2, Stroke};
 
@@ -134,11 +134,11 @@ impl eframe::App for EcoObs {
             for g in [-200.0, -100.0, 0.0, 100.0, 200.0] {
                 painter.line_segment(
                     [to_screen(g, -ARENA_HALF), to_screen(g, ARENA_HALF)],
-                    Stroke::new(0.5, Color32::from_rgb(30, 30, 40)),
+                    Stroke::new(0.5_f32, Color32::from_rgb(30, 30, 40)),
                 );
                 painter.line_segment(
                     [to_screen(-ARENA_HALF, g), to_screen(ARENA_HALF, g)],
-                    Stroke::new(0.5, Color32::from_rgb(30, 30, 40)),
+                    Stroke::new(0.5_f32, Color32::from_rgb(30, 30, 40)),
                 );
             }
 
@@ -147,7 +147,7 @@ impl eframe::App for EcoObs {
                 if f.alive {
                     painter.circle_filled(to_screen(f.x, f.y), 3.0, Color32::from_rgb(80, 200, 80));
                 } else {
-                    painter.circle_stroke(to_screen(f.x, f.y), 2.0, Stroke::new(0.5, Color32::from_rgb(50, 80, 50)));
+                    painter.circle_stroke(to_screen(f.x, f.y), 2.0, Stroke::new(0.5_f32, Color32::from_rgb(50, 80, 50)));
                 }
             }
 
@@ -164,7 +164,7 @@ impl eframe::App for EcoObs {
                 let dx = c.heading.cos() * 12.0;
                 let dy = -c.heading.sin() * 12.0;
                 painter.line_segment([at, Pos2::new(at.x + dx as f32, at.y + dy as f32)],
-                    Stroke::new(1.5, col));
+                    Stroke::new(1.5_f32, col));
                 
                 // ID.
                 painter.text(at + egui::vec2(0.0, -14.0), egui::Align2::CENTER_CENTER,

@@ -1,14 +1,14 @@
 //! ЛАБИРИНТ — тест памяти и решений для разных мозгов.
-use dioma::brain::{Brain, PlasticityParams};
+use dioma::engine::neurons::{Brain, PlasticityParams};
 use dioma::heritage::sardna_to_grown;
-use dioma::arena::{grow_agent, Genome};
+use dioma::world::arena::{grow_agent, Genome};
 
 const TICKS_PER_PHASE: usize = 100;
 
 /// Простой T-выбор: маяк → тьма → поворот налево или направо?
 fn run_maze(brain: &mut Brain, n: usize, n_trials: usize) -> (usize, usize) {
     let mut correct = 0usize;
-    let mut wrong = 0usize;
+    let wrong = 0usize;
     let half = n / 2;
 
     for trial in 0..n_trials {
@@ -52,7 +52,7 @@ fn main() {
     // ── Grown Agent ──
     let genome = Genome::wildtype(42);
     let grown = grow_agent(&genome);
-    let gains = dioma::arena::arena_gains(&genome);
+    let gains = dioma::world::arena::arena_gains(&genome);
     let nn = grown.region_of.len();
     let mut b = Brain::new(&grown, gains, PlasticityParams::default());
     let (c, w) = run_maze(&mut b, nn, 20);
@@ -62,8 +62,8 @@ fn main() {
     match sardna_to_grown("D:/Проекты/asm_engines/sardaanaCM/data/generated/SarDNA_Pro_best.taas") {
         Ok(g) => {
             let gains = vec![vec![0.6f32; 4]; 4];
-            let cols = dioma::physiology::brain_columns(
-                &g.region_of, dioma::physiology::cognitive_archetype, &Default::default());
+            let cols = dioma::body::physiology::brain_columns(
+                &g.region_of, dioma::body::physiology::cognitive_archetype, &Default::default());
             let params = PlasticityParams {
                 homeo_every_ticks: 1,
                 ..Default::default()
@@ -95,7 +95,7 @@ fn main() {
 /// MAZE для HAAP-мозга.
 fn run_maze_haap(brain: &mut Brain, n_haap: usize, n_trials: usize) -> (usize, usize) {
     let mut correct = 0usize;
-    let mut wrong = 0usize;
+    let wrong = 0usize;
 
     for trial in 0..n_trials {
         let correct_side = trial % 2;

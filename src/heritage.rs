@@ -9,7 +9,7 @@
 //!              перелить веса с мутацией.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use crate::organ_life::{OrganSim, SIM_TICKS};
+use crate::body::life::{OrganSim, SIM_TICKS};
 use crate::Grown;
 use taas_format::{TaasReader, TaasWriter};
 
@@ -75,7 +75,7 @@ pub const MUTATE_W2_SIGMA: f32 = 0.02;
 pub const MUTATE_RULE_SIGMA: f32 = 0.08;
 
 /// Гены правил → колонки .taas (rg_template + rg_p0..p7).
-fn write_rule_genes(w: &mut TaasWriter, genes: &[crate::pythia::RuleGene]) {
+fn write_rule_genes(w: &mut TaasWriter, genes: &[crate::engine::rules::RuleGene]) {
     if genes.is_empty() {
         return;
     }
@@ -88,7 +88,7 @@ fn write_rule_genes(w: &mut TaasWriter, genes: &[crate::pythia::RuleGene]) {
 }
 
 /// Колонки .taas → гены правил (None если их нет в файле).
-fn read_rule_genes(r: &TaasReader) -> Result<Option<Vec<crate::pythia::RuleGene>>, String> {
+fn read_rule_genes(r: &TaasReader) -> Result<Option<Vec<crate::engine::rules::RuleGene>>, String> {
     let tmpl = match r.get_f32("rg_template") {
         Ok(t) => t,
         Err(_) => return Ok(None),
@@ -106,7 +106,7 @@ fn read_rule_genes(r: &TaasReader) -> Result<Option<Vec<crate::pythia::RuleGene>
     let genes = tmpl
         .iter()
         .zip(&cols)
-        .map(|(&t, p)| crate::pythia::RuleGene { template: t as u8, p: *p })
+        .map(|(&t, p)| crate::engine::rules::RuleGene { template: t as u8, p: *p })
         .collect();
     Ok(Some(genes))
 }
@@ -248,7 +248,7 @@ fn gauss(seed: u64, i: u64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pythia::{templates, RuleGene};
+    use crate::engine::rules::{templates, RuleGene};
 
     #[test]
     fn rule_genes_roundtrip_through_taas() {

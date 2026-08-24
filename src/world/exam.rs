@@ -7,9 +7,9 @@
 //!              T3 помехи (шум сенсорики), T4 характер (профиль действий).
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use crate::metabolism::chem;
+use crate::body::metabolism::chem;
 use crate::mind::CreatureAction;
-use crate::organ_life::{OrganSim, SIM_TICKS};
+use crate::body::life::{OrganSim, SIM_TICKS};
 
 pub const EPISODE_TICKS: usize = 600;
 
@@ -196,7 +196,7 @@ pub fn run_exam(cfg: &ExamConfig) -> ExamReport {
             Some(CreatureAction::SeekFood) | Some(CreatureAction::Approach) => seek += 1,
             _ => {}
         }
-        if obs.body_temp > crate::organ_life::FEVER_TEMP {
+        if obs.body_temp > crate::body::life::FEVER_TEMP {
             fever_ticks_report += 1;
         }
     }

@@ -11,11 +11,11 @@
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
 
-use dioma::free_life::{Sim, ARENA_HALF};
-use dioma::arena::{grow_agent, Genome};
-use dioma::grow::agent_layout;
-use dioma::metabolism::chem;
-use dioma::organ_life::OrganSim;
+use dioma::world::free_life::{Sim, ARENA_HALF};
+use dioma::world::arena::{grow_agent, Genome};
+use dioma::engine::grow::agent_layout;
+use dioma::body::metabolism::chem;
+use dioma::body::life::OrganSim;
 use dioma::ui::theme::{region_color, ARENA_REGION_NAMES, CHEM_NAMES, Theme};
 use dioma::ui::{dot, heading_arrow, label, mix, WorldTransform};
 
@@ -44,7 +44,7 @@ impl BrainKind {
 struct ObsView {
     chemicals: Vec<f32>,
     /// Спайки коры по регионам [SL, SR, I, ML, MR].
-    region_spikes: [i32; dioma::arena::N_REGIONS],
+    region_spikes: [i32; dioma::world::arena::N_REGIONS],
     /// Суммарные спайки среднего мозга (арена: 0).
     midbrain_spikes: i64,
     /// Моторные спайки спины (арена: 0).
@@ -117,14 +117,14 @@ impl LifeModel {
         }
     }
 
-    fn blood(&self) -> &dioma::metabolism::Blood {
+    fn blood(&self) -> &dioma::body::metabolism::Blood {
         match self {
             LifeModel::Arena(s) => &s.blood,
             LifeModel::Organs(s) => &s.blood,
         }
     }
 
-    fn blood_mut(&mut self) -> &mut dioma::metabolism::Blood {
+    fn blood_mut(&mut self) -> &mut dioma::body::metabolism::Blood {
         match self {
             LifeModel::Arena(s) => &mut s.blood,
             LifeModel::Organs(s) => &mut s.blood,
@@ -138,7 +138,7 @@ impl LifeModel {
         }
     }
 
-    fn world(&self) -> &dioma::free_life::WorldSim {
+    fn world(&self) -> &dioma::world::free_life::WorldSim {
         match self {
             LifeModel::Arena(s) => &s.world,
             LifeModel::Organs(s) => &s.world,
@@ -184,12 +184,12 @@ impl Observatory {
         // (кора органного мозга — та же арена-схема).
         let genome = Genome::wildtype(seed);
         let grown = grow_agent(&genome);
-        let mut sums = [0.0f32; dioma::arena::N_REGIONS * dioma::arena::N_REGIONS];
+        let mut sums = [0.0f32; dioma::world::arena::N_REGIONS * dioma::world::arena::N_REGIONS];
         let mut cnts = vec![0usize; sums.len()];
         for &(pre, post, w) in &grown.edges {
             let (a, b) = (grown.region_of[pre], grown.region_of[post]);
-            sums[a * dioma::arena::N_REGIONS + b] += w;
-            cnts[a * dioma::arena::N_REGIONS + b] += 1;
+            sums[a * dioma::world::arena::N_REGIONS + b] += w;
+            cnts[a * dioma::world::arena::N_REGIONS + b] += 1;
         }
         let region_edges = sums
             .iter()
@@ -197,7 +197,7 @@ impl Observatory {
             .enumerate()
             .filter(|(_, (_, &c))| c > 0)
             .map(|(i, (&s, &c))| {
-                (i / dioma::arena::N_REGIONS, i % dioma::arena::N_REGIONS, s / c as f32)
+                (i / dioma::world::arena::N_REGIONS, i % dioma::world::arena::N_REGIONS, s / c as f32)
             })
             .collect();
         let region_pos = agent_layout()
@@ -206,7 +206,7 @@ impl Observatory {
             .map(|r| [r.center[0], r.center[1]])
             .collect();
 
-        let n_regions = dioma::arena::N_REGIONS;
+        let n_regions = dioma::world::arena::N_REGIONS;
         Self {
             theme: Theme::default(),
             model,
@@ -233,7 +233,7 @@ impl Observatory {
         self.eaten_total += obs.ate as usize;
         self.chem_history.push_back(obs.chemicals.try_into().unwrap());
         self.motor_history
-            .push_back((obs.region_spikes[dioma::arena::REG_ML] + obs.region_spikes[dioma::arena::REG_MR]) as f32);
+            .push_back((obs.region_spikes[dioma::world::arena::REG_ML] + obs.region_spikes[dioma::world::arena::REG_MR]) as f32);
         self.organ_history
             .push_back([obs.midbrain_spikes as f64, obs.spine_m_spikes as f64]);
         self.trail.push_back([obs.x, obs.y]);
@@ -491,7 +491,7 @@ impl Observatory {
                         t.chemicals[chem::HUNGER],
                         t.chemicals[chem::FATIGUE],
                         t.damage,
-                        t.loci[dioma::metabolism::locus::SPEED],
+                        t.loci[dioma::body::metabolism::locus::SPEED],
                     ));
                 }
             });

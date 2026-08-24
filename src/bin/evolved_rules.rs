@@ -10,10 +10,10 @@
 //!              C) сон — выученное закрепляется только у тех, кто спит.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma::brain::{gains_from, Brain, PlasticityParams};
-use dioma::grow;
-use dioma::plasticity::{sync_weights_from_brain, tropic_rewire, RewireOpts, TropicField};
-use dioma::pythia::{compete, PythiaUnit, RuleGene};
+use dioma::engine::neurons::{gains_from, Brain, PlasticityParams};
+use dioma::engine::grow;
+use dioma::engine::graph::{sync_weights_from_brain, tropic_rewire, RewireOpts, TropicField};
+use dioma::engine::rules::{compete, PythiaUnit, RuleGene};
 use dioma::rng::XorShift;
 
 /// Регионы agent_layout: 0=SL 1=SR 2=I 3=ML 4=MR.

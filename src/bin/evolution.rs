@@ -7,9 +7,9 @@
 //!              Метрики: средняя еда, балл экзамена, разброс характеров.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma::exam::run_exam;
+use dioma::world::exam::run_exam;
 use dioma::heritage::spawn_child;
-use dioma::organ_life::OrganSim;
+use dioma::body::life::OrganSim;
 
 const GENERATIONS: usize = 10;
 const POP_SIZE: usize = 6;
@@ -129,7 +129,7 @@ fn run() {
 
         // Экзамен каждые 3 поколения на лучшем.
         if (gen + 1) % 3 == 0 || gen + 1 == GENERATIONS {
-            let cfg = dioma::exam::ExamConfig {
+            let cfg = dioma::world::exam::ExamConfig {
                 name: "",
                 seed: population[0].seed,
                 with_mind: true,
@@ -145,7 +145,7 @@ fn run() {
 
     // Финальный экзамен лучшего.
     println!("\n═══ ФИНАЛЬНЫЙ ЭКЗАМЕН ══");
-    let cfg = dioma::exam::ExamConfig {
+    let cfg = dioma::world::exam::ExamConfig {
         name: "лучший",
         seed: population[0].seed,
         with_mind: true,

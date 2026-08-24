@@ -47,7 +47,7 @@ fn main() {
     // ── ТЕСТ 1: Обучение танцу со вкусняшкой ──
     println!("── ФАЗА ОБУЧЕНИЯ (30 проб) ──");
     let mut dance_score = 0usize;
-    let mut prev_dir = 0i32; // 0=нет, 1=вверх, -1=вниз
+    let _prev_dir = 0i32; // 0=нет, 1=вверх, -1=вниз
     
     for trial in 1..=30 {
         // Свет включается.
@@ -55,7 +55,7 @@ fn main() {
         
         let mut up_fired = false;
         let mut down_fired = false;
-        let mut up_before_down = false;
+        let _up_before_down = false;
         
         // Проба: 100 шагов (5 мс).
         for step in 0..100 {
@@ -97,7 +97,7 @@ fn main() {
         let ext = vec![3.0f32, 3.0, 5.0, 0.0];
         let mut winner_this_trial = 0i32;
         
-        for step in 0..50 {
+        for _step in 0..50 {
             let buf = runner.run(1, &ext);
             if buf[0] != 0 { winner_this_trial = 0; break; }
             if buf[1] != 0 { winner_this_trial = 1; break; }

@@ -7,7 +7,7 @@
 //!              балл силы.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma::exam::{run_exam, ExamConfig};
+use dioma::world::exam::{run_exam, ExamConfig};
 
 fn main() {
     let configs = [

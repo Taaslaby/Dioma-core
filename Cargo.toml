@@ -1,6 +1,6 @@
 [package]
 name = "dioma"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Игра о выращиваемых спикинг-агентах поверх движка taas-checkmate"
 
@@ -16,154 +16,52 @@ eframe = "0.29"
 egui = "0.29"
 egui_plot = "0.29"
 
-[[bin]]
-name = "poc-reflex"
-path = "src/bin/reflex.rs"
+# ── Активные бины (протоколы и обсерватории); история — в archive/bins ──
 
 [[bin]]
-name = "poc-arena"
-path = "src/bin/arena.rs"
-
-[[bin]]
-name = "poc-evolve"
-path = "src/bin/evolve.rs"
-
-[[bin]]
-name = "poc-gnw"
-path = "src/bin/gnw.rs"
-
-[[bin]]
-name = "poc-chemo"
-path = "src/bin/chemo.rs"
-
-[[bin]]
-name = "observatory"
-path = "src/bin/observatory.rs"
-
-[[bin]]
-name = "poc-genome"
-path = "src/bin/genome.rs"
-
-[[bin]]
-name = "haap-debug"
-path = "src/bin/haap_debug.rs"
-
-[[bin]]
-name = "brain-lab"
-path = "src/bin/brain_lab.rs"
-
-[[bin]]
-name = "pm-tune"
-path = "src/bin/pm_tune.rs"
-
-[[bin]]
-name = "poc-organs"
-path = "src/bin/poc_organs.rs"
-
-[[bin]]
-name = "grow-probe"
-path = "src/bin/grow_probe.rs"
-
-[[bin]]
-name = "poc-organ-life"
-path = "src/bin/poc_organ_life.rs"
-
-[[bin]]
-name = "organ-diag"
-path = "src/bin/organ_diag.rs"
-
-[[bin]]
-name = "poc-mind"
-path = "src/bin/poc_mind.rs"
-
-[[bin]]
-name = "poc-delayed-haap"
-path = "src/bin/poc_delayed_haap.rs"
-
-[[bin]]
-name = "poc-sardaana-brain"
-path = "src/bin/poc_sardaana_brain.rs"
-
-[[bin]]
-name = "poc-sardana-creature"
-path = "src/bin/poc_sardana_creature.rs"
-
-[[bin]]
-name = "poc-hetero-cognitive"
-path = "src/bin/poc_hetero_cognitive.rs"
-
-[[bin]]
-name = "sardaana-control"
-path = "src/bin/sardaana_control.rs"
-
-[[bin]]
-name = "sardana-battery"
-path = "src/bin/sardana_battery.rs"
-
-[[bin]]
-name = "sardana-vs-grown"
-path = "src/bin/sardana_vs_grown.rs"
-
-[[bin]]
-name = "poc-cookiecutter"
-path = "src/bin/poc_cookiecutter.rs"
-
-[[bin]]
-name = "sardana-personality"
-path = "src/bin/sardana_personality.rs"
-
-[[bin]]
-name = "brain-battle"
-path = "src/bin/brain_battle.rs"
-
-[[bin]]
-name = "maze-test"
-path = "src/bin/maze_test.rs"
-
-[[bin]]
-name = "conditioning"
-path = "src/bin/conditioning.rs"
-
-[[bin]]
-name = "skinner-box"
-path = "src/bin/skinner_box.rs"
-
-[[bin]]
-name = "poc-sardana-10k"
-path = "src/bin/poc_sardana_10k.rs"
-
-[[bin]]
-name = "sardana-probe"
-path = "src/bin/sardana_probe.rs"
-
-[[bin]]
-name = "poc-heredity"
-path = "src/bin/poc_heredity.rs"
-
-[[bin]]
-name = "exam"
-path = "src/bin/exam.rs"
-
-[[bin]]
-name = "poc-ecosystem"
-path = "src/bin/poc_ecosystem.rs"
-
-[[bin]]
-name = "observatory-eco"
-path = "src/bin/observatory_eco.rs"
-
-[[bin]]
-name = "evolution"
-path = "src/bin/evolution.rs"
-
-[[bin]]
-name = "probe-sardaana"
-path = "src/bin/probe_sardaana.rs"
+name = "dynasty"
+path = "src/bin/dynasty.rs"
 
 [[bin]]
 name = "evolved-rules"
 path = "src/bin/evolved_rules.rs"
 
 [[bin]]
-name = "dynasty"
-path = "src/bin/dynasty.rs"
+name = "skinner-box"
+path = "src/bin/skinner_box.rs"
+
+[[bin]]
+name = "conditioning"
+path = "src/bin/conditioning.rs"
+
+[[bin]]
+name = "exam"
+path = "src/bin/exam.rs"
+
+[[bin]]
+name = "poc-heredity"
+path = "src/bin/poc_heredity.rs"
+
+[[bin]]
+name = "maze-test"
+path = "src/bin/maze_test.rs"
+
+[[bin]]
+name = "brain-battle"
+path = "src/bin/brain_battle.rs"
+
+[[bin]]
+name = "sardana-probe"
+path = "src/bin/sardana_probe.rs"
+
+[[bin]]
+name = "evolution"
+path = "src/bin/evolution.rs"
+
+[[bin]]
+name = "observatory"
+path = "src/bin/observatory.rs"
+
+[[bin]]
+name = "observatory-eco"
+path = "src/bin/observatory_eco.rs"

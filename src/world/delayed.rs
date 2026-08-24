@@ -9,8 +9,8 @@
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
 
-use crate::brain::{gains_from, Brain, PlasticityParams};
-use crate::grow::{cognitive_layout, grow, Steering};
+use crate::engine::neurons::{gains_from, Brain, PlasticityParams};
+use crate::engine::grow::{cognitive_layout, grow, Steering};
 use crate::rng::XorShift;
 use crate::Grown;
 

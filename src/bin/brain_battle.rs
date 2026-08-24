@@ -1,8 +1,7 @@
 //! БИТВА МОЗГОВ — grown vs sarDNA vs diff_snn на одинаковых условиях.
-use dioma::brain::{Brain, PlasticityParams};
+use dioma::engine::neurons::{Brain, PlasticityParams};
 use dioma::heritage::sardna_to_grown;
 use dioma::rng::XorShift;
-use pillars_connectome::{BrainConfig, ConnectomeData};
 
 const ARENA: f64 = 150.0;
 const EAT_R: f64 = 14.0;
@@ -68,14 +67,14 @@ fn run_life(brain: &mut Brain, n: usize, seed: u64) -> usize {
 
 fn main() {
     println!("БИТВА МОЗГОВ");
-    let base = "D:/Проекты/asm_engines/sardaanaCM/experiments/sardna_ultra/generated";
+    let _base = "D:/Проекты/asm_engines/sardaanaCM/experiments/sardna_ultra/generated";
     let data = "D:/Проекты/asm_engines/sardaanaCM/data/generated";
     
     // ── Grown ──
     {
-        let genome = dioma::arena::Genome::wildtype(42);
-        let grown = dioma::arena::grow_agent(&genome);
-        let gains = dioma::arena::arena_gains(&genome);
+        let genome = dioma::world::arena::Genome::wildtype(42);
+        let grown = dioma::world::arena::grow_agent(&genome);
+        let gains = dioma::world::arena::arena_gains(&genome);
         let nn = grown.region_of.len();
         let total: usize = (0..EPISODES).map(|ep| {
             let mut b = Brain::new(&grown, gains.clone(), PlasticityParams::default());

@@ -132,7 +132,7 @@ impl Brain {
         grown: &Grown,
         gains: Vec<Vec<f32>>,
         params: PlasticityParams,
-        columns: &[[f32; crate::physiology::N_COLS]],
+        columns: &[[f32; crate::body::physiology::N_COLS]],
     ) -> Self {
         Self::with_model(grown, gains, params, BrainModel::Haap, columns)
     }
@@ -142,7 +142,7 @@ impl Brain {
         gains: Vec<Vec<f32>>,
         params: PlasticityParams,
         model: BrainModel,
-        haap_columns: &[[f32; crate::physiology::N_COLS]],
+        haap_columns: &[[f32; crate::body::physiology::N_COLS]],
     ) -> Self {
         let n_regions = gains.len();
         let n_total = grown.nt.len();
@@ -191,7 +191,7 @@ impl Brain {
         };
         let mut runner = BrainRunner::new(conn, config).expect("BrainRunner init");
         if model == BrainModel::Haap {
-            crate::physiology::apply_haap_columns(&mut runner, haap_columns);
+            crate::body::physiology::apply_haap_columns(&mut runner, haap_columns);
         }
 
         let (n_neurons, n_syn, rp, cc, vv) = {

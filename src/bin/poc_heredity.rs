@@ -9,7 +9,7 @@
 // -------------------------------------------------------------------------
 use dioma::heritage::{save_creature, spawn_child, ticks_to_first_meal};
 use rayon::prelude::*;
-use dioma::organ_life::{OrganSim, SIM_TICKS};
+use dioma::body::life::{OrganSim, SIM_TICKS};
 use taas_format::TaasReader;
 
 fn main() {
@@ -66,7 +66,7 @@ fn run() {
         .into_par_iter()
         .map(|k| {
             let seed = 0x1000 + k as u64;
-            let _grown = dioma::arena::grow_agent(&dioma::arena::Genome::wildtype(seed));
+            let _grown = dioma::world::arena::grow_agent(&dioma::world::arena::Genome::wildtype(seed));
             let mut child = spawn_child(&parent, seed, true);
             let t = ticks_to_first_meal(&mut child);
             let mut eaten_k = 0usize;

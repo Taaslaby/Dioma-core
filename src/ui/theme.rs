@@ -39,7 +39,7 @@ pub struct Colors {
     pub trail: Color32,
     pub dead: Color32,
     /// Цвет линии каждого химического вещества (индекс = chem::N).
-    pub chemicals: [Color32; crate::metabolism::chem::N],
+    pub chemicals: [Color32; crate::body::metabolism::chem::N],
 }
 
 impl Default for Colors {
@@ -175,11 +175,11 @@ pub struct Theme {
 }
 
 /// Названия химий для легенды (порядок = chem::N).
-pub const CHEM_NAMES: [&str; crate::metabolism::chem::N] =
+pub const CHEM_NAMES: [&str; crate::body::metabolism::chem::N] =
     ["glucose", "food", "hunger", "pain", "reward", "fatigue"];
 
 /// Названия регионов арены для подписей узлов.
-pub const ARENA_REGION_NAMES: [&str; crate::arena::N_REGIONS] = ["S_L", "S_R", "I", "M_L", "M_R"];
+pub const ARENA_REGION_NAMES: [&str; crate::world::arena::N_REGIONS] = ["S_L", "S_R", "I", "M_L", "M_R"];
 
 /// Цвет региона по индексу (арена: сенсоры/тормозные/моторы).
 pub fn region_color(theme: &Theme, region: usize) -> Color32 {

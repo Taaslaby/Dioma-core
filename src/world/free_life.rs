@@ -7,11 +7,11 @@
 //! damage metrics; robot control = hunger pinned to 255.
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
-use crate::arena::{
+use crate::world::arena::{
     arena_brain, grow_agent, Genome, N_REGIONS, N_SL, N_SR, REG_ML, REG_MR,
 };
-use crate::brain::Brain;
-use crate::metabolism::{locus, Blood};
+use crate::engine::neurons::Brain;
+use crate::body::metabolism::{locus, Blood};
 use crate::rng::XorShift;
 
 pub const N_FOOD: usize = 16;
@@ -250,7 +250,7 @@ impl Sim {
         // Дефицит глюкозы → локус (орган «печень»): голод растёт из него.
         {
             let deficit =
-                (GLUCOSE_FED_THRESHOLD - self.blood.conc[crate::metabolism::chem::GLUCOSE]).max(0.0);
+                (GLUCOSE_FED_THRESHOLD - self.blood.conc[crate::body::metabolism::chem::GLUCOSE]).max(0.0);
             self.blood.loci[locus::GLUCOSE_DEFICIT] = deficit;
         }
 
@@ -304,7 +304,7 @@ pub fn live_life(sim: &mut Sim) -> LifeReport {
             }
             last_eat_tick = obs.tick as isize;
         }
-        use crate::metabolism::chem;
+        use crate::body::metabolism::chem;
         min_glucose = min_glucose.min(sim.blood.conc[chem::GLUCOSE]);
         hunger_sum += sim.blood.conc[chem::HUNGER];
         peak_fatigue = peak_fatigue.max(sim.blood.conc[chem::FATIGUE]);

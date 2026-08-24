@@ -112,7 +112,7 @@ fn main() {
 
     let mut wavefront: Vec<usize> = Vec::new();
     let mut prev_active: HashSet<usize> = HashSet::new();
-    for step in 0..50 {
+    for _step in 0..50 {
         let buf = cascade_runner.run(1, &stim2);
         let now_active: HashSet<usize> = buf.iter().enumerate()
             .filter(|(_, &s)| s != 0).map(|(i, _)| i).collect();
@@ -125,7 +125,7 @@ fn main() {
 
     // Волна: сколько НОВЫХ нейронов активируется на каждом шаге.
     let total_wave: usize = wavefront.iter().sum();
-    let peak_step = wavefront.iter().enumerate().max_by_key(|(_, v)| **v).map(|(i, _)| i).unwrap_or(0);
+    let _peak_step = wavefront.iter().enumerate().max_by_key(|(_, v)| **v).map(|(i, _)| i).unwrap_or(0);
     println!("  новых нейронов по шагам (первые 20): {:?}",
         wavefront.iter().take(20).collect::<Vec<_>>());
     println!("  всего вовлечено: {}/{} ({}%)", total_wave / 50, n,
@@ -138,7 +138,7 @@ fn main() {
     // ══════════════════════════════════════════════
     println!("\n── 3. ХАБЫ СЕТИ ──");
     // Стимулируем всё, меряем кто стреляет чаще всего.
-    let mut full_stim = vec![3.0f32; n];
+    let full_stim = vec![3.0f32; n];
     let mut neuron_activity = vec![0i64; n];
     for _ in 0..500 {
         let buf = brain.run(1, &full_stim);

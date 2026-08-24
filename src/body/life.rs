@@ -9,13 +9,13 @@
 //!              стену. Наблюдение — OrganTickObs для UI/протоколов.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use crate::arena::{arena_gains, grow_agent, Genome, N_REGIONS, N_SL, N_SR};
-use crate::brain::PlasticityParams;
-use crate::free_life::{WorldSim, FOOD_PORTION};
-use crate::metabolism::{chem, locus, Blood};
-use crate::organs::{standard_spine_conn, Axon, OrganBrain, OrganId};
+use crate::world::arena::{arena_gains, grow_agent, Genome, N_REGIONS, N_SL, N_SR};
+use crate::engine::neurons::PlasticityParams;
+use crate::world::free_life::{WorldSim, FOOD_PORTION};
+use crate::body::metabolism::{chem, locus, Blood};
+use crate::body::organs::{standard_spine_conn, Axon, OrganBrain, OrganId};
 
-pub use crate::free_life::{ARENA_HALF, SIM_TICKS};
+pub use crate::world::free_life::{ARENA_HALF, SIM_TICKS};
 
 /// Голод [0..255] → ток среднего мозга.
 ///
@@ -89,7 +89,7 @@ pub struct OrganSim {
     /// Накопитель наград коры между дофаминовыми доставками.
     rewards_pending: usize,
     /// Гены правил Пифии по регионам (наследуются с мутацией).
-    pub rule_genes: Vec<crate::pythia::RuleGene>,
+    pub rule_genes: Vec<crate::engine::rules::RuleGene>,
 }
 
 impl OrganSim {
@@ -161,7 +161,7 @@ impl OrganSim {
     }
 
     /// Задать гены правил Пифии (наследству/лаборатории).
-    pub fn with_rule_genes(mut self, genes: Vec<crate::pythia::RuleGene>) -> Self {
+    pub fn with_rule_genes(mut self, genes: Vec<crate::engine::rules::RuleGene>) -> Self {
         self.rule_genes = genes;
         self
     }
@@ -184,7 +184,7 @@ impl OrganSim {
         let mid_ext = vec![hunger_drive(hunger); 24];
         // Спина: лихорадка.
         let fever_drive = (self.body_temp - FEVER_TEMP).max(0.0) * FEVER_DRIVE_PER_DEG;
-        let spine_ext = vec![fever_drive; crate::organs::SPINE_N_S];
+        let spine_ext = vec![fever_drive; crate::body::organs::SPINE_N_S];
 
         // Кора: тоник + внешняя сенсорика × sensor_gain.
         let mut cortex_ext = vec![self.blood.motor_tonic(); n_cortex];
@@ -223,7 +223,7 @@ impl OrganSim {
         }
 
         // Шаг органов.
-        let world_in = crate::organs::WorldInputs {
+        let world_in = crate::body::organs::WorldInputs {
             spine: spine_ext,
             midbrain: mid_ext,
             cortex: cortex_ext,
@@ -235,7 +235,7 @@ impl OrganSim {
             self.organs.cortex.region_spikes(&spike_data.cortex, r)
         });
         let midbrain_total: i64 = spike_data.midbrain.iter().map(|&x| x as i64).sum();
-        let spine_m: i64 = spike_data.spine[crate::organs::SPINE_N_S + crate::organs::SPINE_N_I..]
+        let spine_m: i64 = spike_data.spine[crate::body::organs::SPINE_N_S + crate::body::organs::SPINE_N_I..]
             .iter().map(|&x| x as i64).sum();
 
         // Кровь.
@@ -321,7 +321,7 @@ impl OrganSim {
 
         // Спина.
         let fever = (self.body_temp - FEVER_TEMP).max(0.0) * FEVER_DRIVE_PER_DEG;
-        let spine_ext = vec![fever; crate::organs::SPINE_N_S];
+        let spine_ext = vec![fever; crate::body::organs::SPINE_N_S];
 
         // Кора: тоник.
         for cell in cortex_ext.iter_mut() {
@@ -364,7 +364,7 @@ impl OrganSim {
         }
 
         // Шаг органов.
-        let world_in = crate::organs::WorldInputs {
+        let world_in = crate::body::organs::WorldInputs {
             spine: spine_ext,
             midbrain: mid_ext,
             cortex: cortex_ext.clone(),
@@ -383,7 +383,7 @@ impl OrganSim {
         self.blood.update();
 
         let midbrain_total: i64 = _spike_data.midbrain.iter().map(|&x| x as i64).sum();
-        let spine_m: i64 = _spike_data.spine[crate::organs::SPINE_N_S + crate::organs::SPINE_N_I..]
+        let spine_m: i64 = _spike_data.spine[crate::body::organs::SPINE_N_S + crate::body::organs::SPINE_N_I..]
             .iter().map(|&x| x as i64).sum();
 
         BrainStepObs {
@@ -402,10 +402,10 @@ impl OrganSim {
 }
 
 fn dioma_metabolism_locus_rate_motor() -> usize {
-    crate::metabolism::locus::RATE_MOTOR
+    crate::body::metabolism::locus::RATE_MOTOR
 }
 fn dioma_metabolism_locus_deficit() -> usize {
-    crate::metabolism::locus::GLUCOSE_DEFICIT
+    crate::body::metabolism::locus::GLUCOSE_DEFICIT
 }
 
 /// Наблюдение за шагом мозга (без движения тела) — для экосистемы.

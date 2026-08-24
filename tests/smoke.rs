@@ -6,13 +6,13 @@
 //! 
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
-use dioma::arena::{arena_brain, arena_gains, grow_agent, run_episode, Agent, Genome, REG_ML, REG_MR, REG_SL, REG_SR};
-use dioma::brain::{gains_from, Brain, PlasticityParams};
-use dioma::delayed::{
+use dioma::world::arena::{arena_brain, arena_gains, grow_agent, run_episode, Agent, Genome, REG_ML, REG_MR, REG_SL, REG_SR};
+use dioma::engine::neurons::{gains_from, Brain, PlasticityParams};
+use dioma::world::delayed::{
     ablated_edges, grow_cognitive, run_protocol_n, REG_WSL, SEED as GNW_SEED,
 };
-use dioma::free_life::run_life;
-use dioma::grow::{grow, reflex_layout, Steering};
+use dioma::world::free_life::run_life;
+use dioma::engine::grow::{grow, reflex_layout, Steering};
 
 
 // ─── Рост ───────────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ fn arena_agent_eats_and_dopamine_moves_weights() {
     let mut eaten = 0;
     for _ in 0..10 {
         let t = run_episode(&mut brain, &mut agent, &genome, true);
-        if t < dioma::arena::EPISODE_TIMEOUT_TICKS {
+        if t < dioma::world::arena::EPISODE_TIMEOUT_TICKS {
             eaten += 1;
         }
     }
@@ -147,7 +147,7 @@ fn workspace_beats_ablation_in_delayed_response() {
     let grown = grow_cognitive(GNW_SEED);
     let full = run_protocol_n(&grown.edges, 10);
     let ablated = run_protocol_n(&ablated_edges(&grown), 10);
-    let mean = |s: &[dioma::delayed::EpisodeStats]| {
+    let mean = |s: &[dioma::world::delayed::EpisodeStats]| {
         s.iter().map(|x| x.ticks as f64).sum::<f64>() / s.len() as f64
     };
     let (m_full, m_abl) = (mean(&full), mean(&ablated));
@@ -159,10 +159,10 @@ fn workspace_beats_ablation_in_delayed_response() {
 // ─── Кровь v2 (порт биохимии Creatures) ─────────────────────────────────────
 #[test]
 fn stoichiometry_honors_limiting_reagent() {
-    use dioma::metabolism::{chem, locus, Blood};
+    use dioma::body::metabolism::{chem, locus, Blood};
     // Прямая проверка лимитирующего реагента: 2A + 1B → 1C.
     let mut b = Blood::creature(false);
-    b.reactions = vec![dioma::metabolism::Reaction {
+    b.reactions = vec![dioma::body::metabolism::Reaction {
         prop_r1: 2.0, r1: chem::GLUCOSE, prop_r2: 1.0, r2: chem::FOOD,
         rate: 1.0, // всё доступное реагирует за тик
         prop_p1: 1.0, p1: chem::HUNGER, prop_p2: 0.0, p2: usize::MAX,
@@ -183,7 +183,7 @@ fn stoichiometry_honors_limiting_reagent() {
 
 #[test]
 fn hunger_rises_on_deficit_and_falls_when_fed() {
-    use dioma::metabolism::{chem, locus, Blood};
+    use dioma::body::metabolism::{chem, locus, Blood};
     let mut b = Blood::creature(false);
     b.emitters.retain(|e| e.chem == chem::HUNGER); // только драйв-эмиттер
     // Голодание: дефицит максимален.
@@ -205,7 +205,7 @@ fn hunger_rises_on_deficit_and_falls_when_fed() {
 
 #[test]
 fn brain_activity_costs_energy_and_fatigues() {
-    use dioma::metabolism::{chem, locus, Blood};
+    use dioma::body::metabolism::{chem, locus, Blood};
     let mut b = Blood::creature(false);
     b.emitters.retain(|e| e.chem == chem::FATIGUE || e.locus == locus::EVENT_ATE);
     let g0 = b.conc[chem::GLUCOSE];
@@ -233,10 +233,10 @@ fn chemistry_agent_eats_less_than_robot_but_survives() {
     assert!(chem.peak_fatigue > 10.0, "утомление не проявилось");
     assert!(!chem.dead, "агент умер от голода");
     // Пошаговый API: пара тиков вручную.
-    let mut sim = dioma::free_life::Sim::new(false, 0x0000_AE11);
+    let mut sim = dioma::world::free_life::Sim::new(false, 0x0000_AE11);
     let obs = sim.step_tick();
-    assert_eq!(obs.chemicals.len(), dioma::metabolism::chem::N);
-    assert_eq!(obs.region_spikes.len(), dioma::arena::N_REGIONS);
+    assert_eq!(obs.chemicals.len(), dioma::body::metabolism::chem::N);
+    assert_eq!(obs.region_spikes.len(), dioma::world::arena::N_REGIONS);
     let _ = &mut sim;
 }
 
@@ -281,12 +281,12 @@ fn critical_period_thaws_frozen_pair() {
 
 #[test]
 fn blood_trace_records_events_and_state() {
-    use dioma::metabolism::{chem, Blood};
+    use dioma::body::metabolism::{chem, Blood};
     let mut b = Blood::creature(false);
     b.enable_trace(30); // ≥ числа тиков: событие первого тика не вытеснится
     b.ingest_food(50.0);
     for _ in 0..25 {
-        b.loci[dioma::metabolism::locus::GLUCOSE_DEFICIT] = 100.0;
+        b.loci[dioma::body::metabolism::locus::GLUCOSE_DEFICIT] = 100.0;
         b.update();
     }
     let trace = b.trace().expect("trace включен");
@@ -300,7 +300,7 @@ fn blood_trace_records_events_and_state() {
     }
     assert_eq!(b2.trace().unwrap().len(), 5, "буфер не ограничен");
     assert!(trace.iter().all(|t| t.chemicals.len() == chem::N));
-    assert!(trace.iter().all(|t| t.loci.len() == dioma::metabolism::locus::N));
+    assert!(trace.iter().all(|t| t.loci.len() == dioma::body::metabolism::locus::N));
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn genome_encodes_gain_matrix() {
     // Мутация гена меняет матрицу.
     let mut mutant = wild.clone();
     mutant.w_i = 0.0;
-    let gm = dioma::arena::arena_gains(&mutant);
+    let gm = dioma::world::arena::arena_gains(&mutant);
     assert_eq!(gm[2][3], 0.0);
 }
 
@@ -324,7 +324,7 @@ fn genome_encodes_gain_matrix() {
 /// которая делала мозг би-стабильным (взрыв/тишина).
 #[test]
 fn haap_dt_column_stays_at_haap_step() {
-    use dioma::brain::BrainModel;
+    use dioma::engine::neurons::BrainModel;
     let mut genome = Genome::wildtype(1);
     genome.brain_model = BrainModel::Haap;
     let grown = grow_agent(&genome);
@@ -334,7 +334,7 @@ fn haap_dt_column_stays_at_haap_step() {
     let mut b = arena_brain(&grown, &genome);
     b.step(&zero);
     let (lo, hi) = b.haap_dt_column().expect("HAAP колонка dt");
-    assert!((lo - dioma::brain::DT_MS_HAAP).abs() < 1e-6, "dt={lo}");
+    assert!((lo - dioma::engine::neurons::DT_MS_HAAP).abs() < 1e-6, "dt={lo}");
     assert!((hi - lo).abs() < 1e-6, "dt неоднороден: [{lo}; {hi}]");
 }
 
@@ -342,7 +342,7 @@ fn haap_dt_column_stays_at_haap_step() {
 /// врождённые S→S/S→I + жевание после еды). Судорога = >3000 спайков за тик.
 #[test]
 fn haap_arena_agent_eats_without_seizure() {
-    use dioma::brain::BrainModel;
+    use dioma::engine::neurons::BrainModel;
     let mut genome = Genome::wildtype(0x0000_AE11);
     genome.brain_model = BrainModel::Haap;
     let grown = grow_agent(&genome);
@@ -352,12 +352,12 @@ fn haap_arena_agent_eats_without_seizure() {
     let mut eaten = 0;
     for _ in 0..8 {
         let (ticks, worst_tick) =
-            dioma::arena::run_episode_debug(&mut brain, &mut agent, &genome, true);
+            dioma::world::arena::run_episode_debug(&mut brain, &mut agent, &genome, true);
         assert!(
             worst_tick < 3000,
             "судорога HAAP-мозга: {worst_tick} спайков за тик"
         );
-        if ticks < dioma::arena::EPISODE_TIMEOUT_TICKS {
+        if ticks < dioma::world::arena::EPISODE_TIMEOUT_TICKS {
             eaten += 1;
         }
     }
@@ -369,9 +369,9 @@ fn haap_arena_agent_eats_without_seizure() {
 
 /// Рефлекс на HAAP учится: дофамин усиливает S→M без гомеостаза каждый тик.
 #[test]
-fn haap_reflex_dopamine_strengthens_path() {    use dioma::brain::{gains_from, Brain, PlasticityParams};
-    use dioma::grow::{grow, reflex_layout, Steering};
-    use dioma::physiology;
+fn haap_reflex_dopamine_strengthens_path() {    use dioma::engine::neurons::{gains_from, Brain, PlasticityParams};
+    use dioma::engine::grow::{grow, reflex_layout, Steering};
+    use dioma::body::physiology;
 
     // nt уже в Grown от layout (grow ставит знак по inhibitory-флагу).
     let grown = grow(&reflex_layout(), &Steering::default(), 0x00C0_FFEE);
@@ -449,8 +449,8 @@ fn spine_conn_test() -> pillars_connectome::ConnectomeData {
 /// Органный PoC: HH-рефлекс быстрый, кора учится на дофамине, контроль нет.
 #[test]
 fn organs_reflex_fast_and_cortex_learns() {
-    use dioma::brain::{Brain, PlasticityParams};
-    use dioma::organs::{Axon, OrganBrain, OrganId};
+    use dioma::engine::neurons::{Brain, PlasticityParams};
+    use dioma::body::organs::{Axon, OrganBrain, OrganId};
     use pillars_connectome::{BrainConfig, BrainRunner};
 
     // A: латентность спинального рефлекса.
@@ -498,6 +498,7 @@ fn organs_reflex_fast_and_cortex_learns() {
         },
         nt: vec![1.0; 3 * NP],
         growth_s: 0.0,
+        rule_genes: Vec::new(),
     };
     let gains = {
         let mut g = vec![vec![0.0f32; 3]; 3];
@@ -532,12 +533,12 @@ fn organs_reflex_fast_and_cortex_learns() {
     let (w_b0, _) = organs.cortex.mean_path_weight(1, 2);
     for _ in 0..12 {
         for _ in 0..20 {
-            organs.tick(&dioma::organs::WorldInputs { cortex: cue_a.clone(), ..Default::default() });
+            organs.tick(&dioma::body::organs::WorldInputs { cortex: cue_a.clone(), ..Default::default() });
         }
         organs.cortex.reward_now(1.0);
         organs.cortex.clear_eligibility();
         for _ in 0..20 {
-            organs.tick(&dioma::organs::WorldInputs { cortex: cue_b.clone(), ..Default::default() });
+            organs.tick(&dioma::body::organs::WorldInputs { cortex: cue_b.clone(), ..Default::default() });
         }
         organs.cortex.clear_eligibility();
     }

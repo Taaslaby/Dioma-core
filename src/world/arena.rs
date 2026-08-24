@@ -9,8 +9,8 @@
 //! 2026.08.23
 //! -------------------------------------------------------------------------
 
-use crate::brain::{gains_from, Brain, PlasticityParams, BRAIN_STEPS_PER_TICK, DT_MS};
-use crate::grow::{agent_layout, grow, Steering};
+use crate::engine::neurons::{gains_from, Brain, PlasticityParams, BRAIN_STEPS_PER_TICK, DT_MS};
+use crate::engine::grow::{agent_layout, grow, Steering};
 use crate::rng::XorShift;
 use crate::Grown;
 
@@ -68,10 +68,10 @@ pub struct Genome {
     /// Гейн I→M (торможение моторов) — кодируется геномом.
     pub w_i: f32,
     /// Гены экспрессии каналов (HAAP-физиология). Нокауты = 0.
-    pub physio: crate::physiology::PhysioGenes,
+    pub physio: crate::body::physiology::PhysioGenes,
     /// Модель нейронов: дикий тип — LIF (доказанный баланс); HAAP —
     /// экспериментальная ветка (VNC-физиология, би-стабильность лечится).
-    pub brain_model: crate::brain::BrainModel,
+    pub brain_model: crate::engine::neurons::BrainModel,
 }
 
 impl Genome {
@@ -89,8 +89,8 @@ impl Genome {
             w_si: 0.15,
             w_ss: 0.04,
             w_i: 0.30,
-            physio: crate::physiology::PhysioGenes::default(),
-            brain_model: crate::brain::BrainModel::LifAlpha,
+            physio: crate::body::physiology::PhysioGenes::default(),
+            brain_model: crate::engine::neurons::BrainModel::LifAlpha,
         }
     }
 
@@ -107,8 +107,8 @@ impl Genome {
 pub fn grow_agent(genome: &Genome) -> Grown {
     let mut layout = agent_layout();
     // Длина сенсорных аксонов и радиус синапса — из генома.
-    let s_ax = crate::grow::axon("ML", genome.max_len_s);
-    let s_ax2 = crate::grow::axon("MR", genome.max_len_s);
+    let s_ax = crate::engine::grow::axon("ML", genome.max_len_s);
+    let s_ax2 = crate::engine::grow::axon("MR", genome.max_len_s);
     layout.regions[0].axons = vec![s_ax.clone(), s_ax];
     layout.regions[1].axons = vec![s_ax2.clone(), s_ax2];
     grow(&layout, &genome.steering(), genome.seed)
@@ -132,16 +132,16 @@ pub fn arena_brain_with(
     };
     // HAAP: без рефрактерного периода и с τ_syn=12 мс пластичные пути
     // уходят в самоподдерживающуюся судорогу — гомеостаз каждый тик.
-    if genome.brain_model == crate::brain::BrainModel::Haap {
+    if genome.brain_model == crate::engine::neurons::BrainModel::Haap {
         params.homeo_every_ticks = 1;
     }
     tweak(&mut params);
     match genome.brain_model {
-        crate::brain::BrainModel::LifAlpha => Brain::new(grown, arena_gains(genome), params),
-        crate::brain::BrainModel::Haap => {
-            let columns = crate::physiology::brain_columns(
+        crate::engine::neurons::BrainModel::LifAlpha => Brain::new(grown, arena_gains(genome), params),
+        crate::engine::neurons::BrainModel::Haap => {
+            let columns = crate::body::physiology::brain_columns(
                 &grown.region_of,
-                crate::physiology::arena_archetype,
+                crate::body::physiology::arena_archetype,
                 &genome.physio,
             );
             Brain::new_haap(grown, arena_gains(genome), params, &columns)

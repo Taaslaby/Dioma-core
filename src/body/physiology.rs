@@ -94,7 +94,7 @@ fn template(arch: Archetype) -> [f32; N_COLS] {
     // (v до −144 мВ → отдача → PING-петля). Сильный h остаётся у Memory.
     let mut c = [0.0f32; N_COLS];
     let set = |c: &mut [f32; N_COLS], idx: P, v: f32| c[idx as usize] = v;
-    set(&mut c, P::dt, crate::brain::DT_MS_HAAP);
+    set(&mut c, P::dt, crate::engine::neurons::DT_MS_HAAP);
     set(&mut c, P::inv_cm, 1.0);
     set(&mut c, P::g_l, 0.10);
     set(&mut c, P::e_l, -60.0);

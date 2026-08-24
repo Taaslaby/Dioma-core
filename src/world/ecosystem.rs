@@ -9,7 +9,7 @@
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
 use crate::heritage::MUTATE_W2_SIGMA;
-use crate::organ_life::OrganSim;
+use crate::body::life::OrganSim;
 use crate::rng::XorShift;
 use rayon::prelude::*;
 
@@ -356,11 +356,11 @@ impl Ecosystem {
 }
 
 #[allow(dead_code)]
-fn chem_hunger() -> usize { crate::metabolism::chem::HUNGER }
+fn chem_hunger() -> usize { crate::body::metabolism::chem::HUNGER }
 #[allow(dead_code)]
-fn chem_glucose() -> usize { crate::metabolism::chem::GLUCOSE }
+fn chem_glucose() -> usize { crate::body::metabolism::chem::GLUCOSE }
 #[allow(dead_code)]
-fn chem_fatigue() -> usize { crate::metabolism::chem::FATIGUE }
+fn chem_fatigue() -> usize { crate::body::metabolism::chem::FATIGUE }
 
 fn child_seed(id: usize) -> u64 {
     id as u64 | 0xC41D_0000_0000_0000
