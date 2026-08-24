@@ -105,6 +105,10 @@ name = "sardana-vs-grown"
 path = "src/bin/sardana_vs_grown.rs"
 
 [[bin]]
+name = "poc-cookiecutter"
+path = "src/bin/poc_cookiecutter.rs"
+
+[[bin]]
 name = "poc-heredity"
 path = "src/bin/poc_heredity.rs"
 
