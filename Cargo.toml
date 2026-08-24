@@ -85,6 +85,10 @@ name = "poc-sardaana-brain"
 path = "src/bin/poc_sardaana_brain.rs"
 
 [[bin]]
+name = "poc-sardana-creature"
+path = "src/bin/poc_sardana_creature.rs"
+
+[[bin]]
 name = "poc-hetero-cognitive"
 path = "src/bin/poc_hetero_cognitive.rs"
 

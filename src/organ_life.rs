@@ -151,6 +151,12 @@ impl OrganSim {
         self
     }
 
+    /// Заменить кору на внешний коннектом (например sarDNA трансформер).
+    pub fn with_external_cortex(mut self, conn: pillars_connectome::ConnectomeData) -> Self {
+        self.organs.cortex.set_csr_values(&conn.export_values());
+        self
+    }
+
     /// Съедено за текущую жизнь (для сохранения существа).
     pub fn eaten_total(&self) -> usize {
         self.rewards_pending

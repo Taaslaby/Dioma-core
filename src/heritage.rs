@@ -10,7 +10,61 @@
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
 use crate::organ_life::{OrganSim, SIM_TICKS};
+use crate::Grown;
 use taas_format::{TaasReader, TaasWriter};
+
+/// Загрузить сардаана-коннектом как Grown — готовый для Brain/OrganSim.
+///
+/// sarDNA трансформер генерирует CSR (row_ptr, col_indices, values, nt).
+/// Конвертируем в Grown: рёбра из тройков, регионы по степени (хабы=моторы).
+/// Веса масштабируются в рабочий диапазон диомы (±2).
+pub fn sardna_to_grown(
+    path: impl AsRef<std::path::Path>,
+) -> Result<Grown, String> {
+    let r = TaasReader::from_file(path)?;
+
+    let rp: Vec<i32> = r.get_i32("row_ptr")?;
+    let ci: Vec<i32> = r.get_i32("col_indices")?;
+    let raw_vals: Vec<f32> = r.get_f32("values")?;
+    let nt_raw: Vec<f32> = r.get_f32("nt_types")?;
+
+    let n = rp.len().saturating_sub(1);
+
+    // Масштабируем веса: сардана даёт ±5, диома работает на ±2.
+    let w_max = raw_vals.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
+    let scale = if w_max > 0.0 { 2.0 / w_max } else { 1.0 };
+
+    // Степени для назначения регионов.
+    let degrees: Vec<usize> = rp.windows(2).map(|w| (w[1] - w[0]) as usize).collect();
+    let mut sorted_deg = degrees.clone();
+    sorted_deg.sort_unstable_by(|a, b| b.cmp(a));
+    let motor_thresh = sorted_deg[n * 20 / 100]; // топ-20% = моторы
+
+    // Рёбра из CSR.
+    let mut edges = Vec::with_capacity(ci.len());
+    for i in 0..n {
+        for j in rp[i] as usize..rp[i + 1] as usize {
+            edges.push((
+                i,
+                ci[j] as usize,
+                raw_vals[j] * scale,
+            ));
+        }
+    }
+
+    // Регионы: хабы (высокая степень) = регион 3 (моторы), остальные = регион 0.
+    let region_of: Vec<usize> = degrees
+        .iter()
+        .map(|&d| if d >= motor_thresh { 3 } else { 0 })
+        .collect();
+
+    Ok(Grown {
+        edges,
+        region_of,
+        nt: nt_raw.iter().map(|&v| v.clamp(-1.0, 1.0)).collect(),
+        growth_s: 0.0,
+    })
+}
 
 /// Мутация CSR-весов наследника (относительная, на синапс).
 pub const MUTATE_CSR_SIGMA: f32 = 0.05;
