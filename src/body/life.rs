@@ -8,12 +8,13 @@
 //!              тонус коры, спина (HH) даёт болевой рефлекс от ударов о
 //!              стену. Наблюдение — OrganTickObs для UI/протоколов.
 //! author: Atlasov anton
-// -------------------------------------------------------------------------
-use crate::world::arena::{arena_gains, grow_agent, Genome, N_REGIONS, N_SL, N_SR};
-use crate::engine::neurons::PlasticityParams;
-use crate::world::free_life::{WorldSim, FOOD_PORTION};
+//!-------------------------------------------------------------------------
+
 use crate::body::metabolism::{chem, locus, Blood};
 use crate::body::organs::{standard_spine_conn, Axon, OrganBrain, OrganId};
+use crate::engine::neurons::PlasticityParams;
+use crate::world::arena::{arena_gains, grow_agent, Genome, N_REGIONS, N_SL, N_SR};
+use crate::world::free_life::{WorldSim, FOOD_PORTION};
 
 pub use crate::world::free_life::{ARENA_HALF, SIM_TICKS};
 
@@ -236,8 +237,12 @@ impl OrganSim {
         if rest > 0.0 {
             let (ml0, ml1) = self.organs.cortex.region_bounds(3);
             let (mr0, mr1) = self.organs.cortex.region_bounds(4);
-            for cell in cortex_ext[ml0..ml1].iter_mut() { *cell -= rest; }
-            for cell in cortex_ext[mr0..mr1].iter_mut() { *cell -= rest; }
+            for cell in cortex_ext[ml0..ml1].iter_mut() {
+                *cell -= rest;
+            }
+            for cell in cortex_ext[mr0..mr1].iter_mut() {
+                *cell -= rest;
+            }
         }
 
         // Шаг органов.
@@ -249,12 +254,14 @@ impl OrganSim {
         let spike_data = self.organs.tick(&world_in);
         self.organs.set_spine_temperature(self.body_temp);
 
-        let cortex_regions: [i32; 5] = std::array::from_fn(|r| {
-            self.organs.cortex.region_spikes(&spike_data.cortex, r)
-        });
+        let cortex_regions: [i32; 5] =
+            std::array::from_fn(|r| self.organs.cortex.region_spikes(&spike_data.cortex, r));
         let midbrain_total: i64 = spike_data.midbrain.iter().map(|&x| x as i64).sum();
-        let spine_m: i64 = spike_data.spine[crate::body::organs::SPINE_N_S + crate::body::organs::SPINE_N_I..]
-            .iter().map(|&x| x as i64).sum();
+        let spine_m: i64 = spike_data.spine
+            [crate::body::organs::SPINE_N_S + crate::body::organs::SPINE_N_I..]
+            .iter()
+            .map(|&x| x as i64)
+            .sum();
 
         // Кровь.
         let (ml, mr) = (cortex_regions[3], cortex_regions[4]);
@@ -350,7 +357,12 @@ impl OrganSim {
         for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL) {
             *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32);
         }
-        for (i, cell) in cortex_ext.iter_mut().enumerate().take(N_SL + N_SR).skip(N_SL) {
+        for (i, cell) in cortex_ext
+            .iter_mut()
+            .enumerate()
+            .take(N_SL + N_SR)
+            .skip(N_SL)
+        {
             *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32);
         }
 
@@ -377,8 +389,12 @@ impl OrganSim {
         if rest > 0.0 {
             let (ml0, ml1) = self.organs.cortex.region_bounds(3);
             let (mr0, mr1) = self.organs.cortex.region_bounds(4);
-            for cell in cortex_ext[ml0..ml1].iter_mut() { *cell -= rest; }
-            for cell in cortex_ext[mr0..mr1].iter_mut() { *cell -= rest; }
+            for cell in cortex_ext[ml0..ml1].iter_mut() {
+                *cell -= rest;
+            }
+            for cell in cortex_ext[mr0..mr1].iter_mut() {
+                *cell -= rest;
+            }
         }
 
         // Шаг органов.
@@ -391,18 +407,19 @@ impl OrganSim {
         self.organs.set_spine_temperature(self.body_temp);
 
         // Кровь.
-        let cortex_regions: [i32; 5] = std::array::from_fn(|r| {
-            self.organs.cortex.region_spikes(&_spike_data.cortex, r)
-        });
+        let cortex_regions: [i32; 5] =
+            std::array::from_fn(|r| self.organs.cortex.region_spikes(&_spike_data.cortex, r));
         let (ml, mr) = (cortex_regions[3], cortex_regions[4]);
         self.blood.loci[locus::RATE_MOTOR] = (ml + mr) as f32;
-        self.blood.loci[locus::GLUCOSE_DEFICIT] =
-            (ORGAN_FED_THRESHOLD - glucose).max(0.0);
+        self.blood.loci[locus::GLUCOSE_DEFICIT] = (ORGAN_FED_THRESHOLD - glucose).max(0.0);
         self.blood.update();
 
         let midbrain_total: i64 = _spike_data.midbrain.iter().map(|&x| x as i64).sum();
-        let spine_m: i64 = _spike_data.spine[crate::body::organs::SPINE_N_S + crate::body::organs::SPINE_N_I..]
-            .iter().map(|&x| x as i64).sum();
+        let spine_m: i64 = _spike_data.spine
+            [crate::body::organs::SPINE_N_S + crate::body::organs::SPINE_N_I..]
+            .iter()
+            .map(|&x| x as i64)
+            .sum();
 
         BrainStepObs {
             cortex_regions,

@@ -26,7 +26,7 @@ fn main() {
     println!("║  ЖИЗНЕННЫЙ ЦИКЛ · инстинкты·сон·наследственность ║");
     println!("╚═══════════════════════════════════════════════╝");
 
-    let mut eco = Ecosystem::new(6, 2026_0824, true);
+    let mut eco = Ecosystem::new(8, 2026_0824, true);
     println!("основателей: 6 · инстинктов у каждого: {} · цель: {total_ticks} тиков\n",
         eco.creatures[0].sim.instincts.len());
     println!(
@@ -77,30 +77,52 @@ fn main() {
     }
 
     // ── Итог по поколениям ──
-    println!("\n  ══ ЕДА НА ДУШУ ПО КОЛЕНИЯМ (умершие) ══");
-    let mut by_gen: Vec<(usize, Vec<usize>)> = Vec::new();
-    for &(id, gen, _) in &eco.deaths {
+    println!("\n  ══ ПРИСПОСОБЛЕННОСТЬ ПО КОЛЕНИЯМ ══");
+    println!("  (умершие: еда на тысячу тиков жизни — чистый навык кормёжки)\n");
+    let born_at = |id: usize| eco.born_ticks.iter().find(|&&(b, _)| b == id).map(|&(_, t)| t);
+    let mut by_gen: Vec<(usize, Vec<(usize, usize)>)> = Vec::new(); // (gen, [(meals, lifespan)])
+    for &(id, gen, dt) in &eco.deaths {
         let meals = eco
             .meals_log
             .iter()
             .find(|&&(mid, _)| mid == id)
             .map(|&(_, m)| m)
             .unwrap_or(0);
+        let bt = born_at(id).unwrap_or(0);
         match by_gen.iter_mut().find(|(g, _)| *g == gen) {
-            Some((_, v)) => v.push(meals),
-            None => by_gen.push((gen, vec![meals])),
+            Some((_, v)) => v.push((meals, dt.saturating_sub(bt))),
+            None => by_gen.push((gen, vec![(meals, dt.saturating_sub(bt))])),
         }
     }
     by_gen.sort_by_key(|&(g, _)| g);
-    for (gen, meals) in by_gen.iter().take(12) {
-        let mean = meals.iter().sum::<usize>() as f64 / meals.len() as f64;
+    for (gen, lives) in by_gen.iter() {
+        let n = lives.len();
+        let mean_life = lives.iter().map(|l| l.1).sum::<usize>() as f64 / n as f64;
+        // Эффективность: сумма еды / сумма прожитых тысяч тиков.
+        let total_meals: usize = lives.iter().map(|l| l.0).sum();
+        let total_kticks = (lives.iter().map(|l| l.1).sum::<usize>() as f64 / 1000.0).max(1.0);
+        let eff = total_meals as f64 / total_kticks;
         println!(
-            "    поколение {:>2}: {:>3} умерших · средняя еда {:>5.1} {}",
+            "    поколение {:>2}: {:>3} умерших · ср.жизнь {:>6.0} т · эффективность {:>5.2} еды/кт {}",
             gen,
-            meals.len(),
-            mean,
-            bar(mean as usize)
+            n,
+            mean_life,
+            eff,
+            bar(eff.round() as usize)
         );
+    }
+
+    // Живые на конец прогона.
+    if !eco.creatures.is_empty() {
+        println!("\n  живы на финише:");
+        for c in eco.creatures.iter().take(8) {
+            let age_kt = (eco.tick - c.born_tick) as f64 / 1000.0;
+            let eff = c.meals as f64 / age_kt.max(0.1);
+            println!(
+                "    id={:<3} поколение {} · еды {} · возраст {:.0} кт · {:.2} еды/кт",
+                c.id, c.generation, c.meals, age_kt, eff
+            );
+        }
     }
 }
 

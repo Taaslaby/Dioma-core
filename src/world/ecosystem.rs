@@ -25,8 +25,11 @@ pub const STARVE_LINE: f32 = 15.0;
 /// Сколько суммарных голодных тиков переживается до смерти
 /// (~75 с жизни впроголодь). Сытость гасит счётчик вдвое быстрее.
 pub const STARVE_DEATH_TICKS: usize = 6000;
+/// «В настроении»: столько тиков после еды существо готово к паре
+/// (~22 с). Сигнал сытости вместо недостижимого абсолютного порога.
+pub const BREED_AFTER_MEAL_TICKS: usize = 900;
 /// Максимум существ в экосистеме — без капа размножение экспоненциальное.
-pub const MAX_CREATURES: usize = 20;
+pub const MAX_CREATURES: usize = 12;
 pub const ARENA_HALF: f64 = 130.0;
 /// Дефицит еды: источники восстанавливаются медленно — отбор включается.
 pub const N_FOOD: usize = 10;
@@ -85,9 +88,11 @@ pub struct Creature {
     /// Тиков бодрствования подряд.
     awake_ticks: usize,
     /// Осталось тиков сна (0 = бодрствует).
-    sleeping_for: usize,
-    /// Накопленный голод (тик ниже черты +1, сытость −2).
-    hungry_ticks: usize,
+    pub sleeping_for: usize,
+    /// Накопленный голод (тик ниже черты +1, сытость −4).
+    pub hungry_ticks: usize,
+    /// Тик последней еды («в настроении» для пары).
+    pub last_meal_tick: usize,
 }
 
 impl Creature {
@@ -115,6 +120,7 @@ impl Creature {
             awake_ticks: 0,
             sleeping_for: 0,
             hungry_ticks: 0,
+            last_meal_tick: 0,
         }
     }
 
@@ -320,6 +326,7 @@ impl Ecosystem {
                             m.reward(1.0);
                         }
                         self.creatures[ci].meals += 1;
+                        self.creatures[ci].last_meal_tick = self.tick;
                         ate_flags[ci] = true;
                         break;
                     }
@@ -327,11 +334,13 @@ impl Ecosystem {
             }
         }
 
-        // Размножение: два сытых существа рядом → ребёнок.
-        // Кап популяции: без него размножение экспоненциальное → зависание.
-        if self.alive_count() < MAX_CREATURES {
-            let breed_pairs = self.find_breed_pairs();
-            for (a_idx, b_idx) in breed_pairs {
+        // Размножение: два недавно евших существа рядом → ребёнок.
+        // Слоты жёстко: не больше, чем свободно до капа, за один тик.
+        let slots = MAX_CREATURES.saturating_sub(self.alive_count());
+        if slots > 0 {
+            let mut born_this_tick = 0usize;
+            for (a_idx, b_idx) in self.find_breed_pairs() {
+                if born_this_tick >= slots { break; }
                 let child_id = self.next_id;
                 self.next_id += 1;
                 let gen = self.creatures[a_idx].generation.max(self.creatures[b_idx].generation) + 1;
@@ -366,7 +375,9 @@ impl Ecosystem {
                     awake_ticks: 0,
                     sleeping_for: SLEEP_FOR, // новорождённый досыпает
                     hungry_ticks: 0,
+                    last_meal_tick: 0,
                 });
+                born_this_tick += 1;
             }
         } // конец капа популяции
 
@@ -408,16 +419,35 @@ impl Ecosystem {
         self.creatures.iter().filter(|c| c.alive).count()
     }
 
+    /// Игрок бросил еду в точку (оживляет ближайший мёртвый слот).
+    pub fn drop_food(&mut self, x: f64, y: f64) -> bool {
+        let x = x.clamp(-ARENA_HALF, ARENA_HALF);
+        let y = y.clamp(-ARENA_HALF, ARENA_HALF);
+        if let Some(f) = self.foods.iter_mut().find(|f| !f.alive) {
+            f.x = x;
+            f.y = y;
+            f.alive = true;
+            true
+        } else {
+            false
+        }
+    }
+
     fn find_breed_pairs(&self) -> Vec<(usize, usize)> {
         let mut pairs = Vec::new();
-        let alive: Vec<usize> = (0..self.creatures.len())
+        // «В настроении»: ел недавно и не в глубоком голоде.
+        let ready: Vec<usize> = (0..self.creatures.len())
             .filter(|&i| {
-                self.creatures[i].alive && self.blood_glucose(i) > BREED_GLUCOSE_MIN
+                let c = &self.creatures[i];
+                c.alive
+                    && self.tick.saturating_sub(c.last_meal_tick) <= BREED_AFTER_MEAL_TICKS
+                    && c.hungry_ticks < STARVE_DEATH_TICKS / 2
+                    && self.creatures[i].sim.blood.conc[chem_glucose()] > STARVE_LINE
             })
             .collect();
-        for i in 0..alive.len() {
-            for j in (i + 1)..alive.len() {
-                let (ai, bi) = (alive[i], alive[j]);
+        for i in 0..ready.len() {
+            for j in (i + 1)..ready.len() {
+                let (ai, bi) = (ready[i], ready[j]);
                 let d = ((self.creatures[ai].x - self.creatures[bi].x).powi(2)
                     + (self.creatures[ai].y - self.creatures[bi].y).powi(2))
                     .sqrt();

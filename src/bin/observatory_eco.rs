@@ -82,14 +82,23 @@ impl eframe::App for EcoObs {
         });
 
         // ── Right panel: демография ──
-        egui::SidePanel::right("demo").exact_width(220.0).show(ctx, |ui| {
+        egui::SidePanel::right("demo").exact_width(230.0).show(ctx, |ui| {
             ui.heading("Существа");
             for (i, c) in self.eco.creatures.iter().enumerate() {
                 if !c.alive { continue; }
                 let col = CREATURE_COLORS[i % CREATURE_COLORS.len()];
+                let state = if c.sleeping_for > 0 {
+                    "💤"
+                } else if c.hungry_ticks > 1500 {
+                    "⚠ голоден"
+                } else if self.eco.tick.saturating_sub(c.last_meal_tick) < 900 {
+                    "🍽 поел"
+                } else {
+                    ""
+                };
                 ui.colored_label(col, format!(
-                    "#{id} g{gen} meals:{meals} x={:.0} y={:.0}",
-                    c.x, c.y,
+                    "#{id} g{gen} 🍴{meals} {}",
+                    state,
                     id = c.id, gen = c.generation, meals = c.meals,
                 ));
             }
@@ -113,8 +122,11 @@ impl eframe::App for EcoObs {
 
         // ── Central: мир ──
         egui::CentralPanel::default().show(ctx, |ui| {
-            let painter = ui.painter_at(ui.available_rect_before_wrap());
-            let rect = ui.available_rect_before_wrap();
+            let (rect, response) = ui.allocate_exact_size(
+                ui.available_rect_before_wrap().size(),
+                egui::Sense::click(),
+            );
+            let painter = ui.painter_at(rect);
             painter.rect_filled(rect, 0.0, Color32::from_rgb(15, 15, 20));
 
             // Масштаб: мир → экран.
@@ -129,9 +141,17 @@ impl eframe::App for EcoObs {
                     cy - (wy as f32) * scale,
                 )
             };
+            // Клик по полю = бросить еду.
+            if response.clicked() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let wx = ((pos.x - cx) / scale) as f64;
+                    let wy = ((cy - pos.y) / scale) as f64;
+                    self.eco.drop_food(wx, wy);
+                }
+            }
 
             // Сетка.
-            for g in [-200.0, -100.0, 0.0, 100.0, 200.0] {
+            for g in [-120.0, -60.0, 0.0, 60.0, 120.0] {
                 painter.line_segment(
                     [to_screen(g, -ARENA_HALF), to_screen(g, ARENA_HALF)],
                     Stroke::new(0.5_f32, Color32::from_rgb(30, 30, 40)),
@@ -145,7 +165,7 @@ impl eframe::App for EcoObs {
             // Еда.
             for f in &self.eco.foods {
                 if f.alive {
-                    painter.circle_filled(to_screen(f.x, f.y), 3.0, Color32::from_rgb(80, 200, 80));
+                    painter.circle_filled(to_screen(f.x, f.y), 3.5, Color32::from_rgb(80, 200, 80));
                 } else {
                     painter.circle_stroke(to_screen(f.x, f.y), 2.0, Stroke::new(0.5_f32, Color32::from_rgb(50, 80, 50)));
                 }
@@ -154,22 +174,48 @@ impl eframe::App for EcoObs {
             // Существа.
             for (i, c) in self.eco.creatures.iter().enumerate() {
                 if !c.alive { continue; }
-                let col = CREATURE_COLORS[i % CREATURE_COLORS.len()];
+                let mut col = CREATURE_COLORS[i % CREATURE_COLORS.len()];
                 let at = to_screen(c.x, c.y);
-                
-                // Тело.
-                painter.circle_filled(at, 6.0, col);
-                
-                // Направление.
-                let dx = c.heading.cos() * 12.0;
-                let dy = -c.heading.sin() * 12.0;
-                painter.line_segment([at, Pos2::new(at.x + dx as f32, at.y + dy as f32)],
-                    Stroke::new(1.5_f32, col));
-                
-                // ID.
+                let sleeping = c.sleeping_for > 0;
+
+                // Голод подкрашивает тело к серо-красному.
+                let hunger = (c.hungry_ticks as f32 / 3000.0).min(1.0) * 0.7;
+                let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * hunger) as u8;
+                col = Color32::from_rgb(
+                    mix(col.r(), 200),
+                    mix(col.g(), 60),
+                    mix(col.b(), 60),
+                );
+
+                // Тело: спящий тусклее и с «z-z».
+                let body = if sleeping {
+                    painter.text(at + egui::vec2(10.0, -12.0), egui::Align2::CENTER_CENTER,
+                        "z", egui::FontId::proportional(11.0),
+                        Color32::from_rgb(150, 170, 220));
+                    col.gamma_multiply(0.45)
+                } else {
+                    col
+                };
+                painter.circle_filled(at, 6.0, body);
+
+                // Направление (спящий не смотрит).
+                if !sleeping {
+                    let dx = c.heading.cos() * 12.0;
+                    let dy = -c.heading.sin() * 12.0;
+                    painter.line_segment([at, Pos2::new(at.x + dx as f32, at.y + dy as f32)],
+                        Stroke::new(1.5_f32, col));
+                }
+
+                // ID и поколение.
                 painter.text(at + egui::vec2(0.0, -14.0), egui::Align2::CENTER_CENTER,
-                    format!("#{}", c.id), egui::FontId::proportional(9.0), col);
+                    format!("#{}{}", c.id, if c.generation > 0 { format!("·g{}", c.generation) } else { String::new() }),
+                    egui::FontId::proportional(9.0), col);
             }
+
+            // Подсказка.
+            painter.text(rect.left_bottom() + egui::vec2(8.0, -8.0), egui::Align2::LEFT_BOTTOM,
+                "клик = бросить еду · 💤 сон закрепляет навыки",
+                egui::FontId::proportional(11.0), Color32::from_rgb(90, 95, 110));
         });
     }
 }
