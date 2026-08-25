@@ -71,6 +71,11 @@ pub struct Grave {
 pub struct SideWorld {
     pub ball: Ball,
     pub graves: Vec<Grave>,
+    /// Кто пинал последним и сколько подряд разных существ.
+    pub last_kicker: Option<usize>,
+    pub pass_streak: usize,
+    /// Сколько тиков мяч лежит на земле.
+    ball_rest: usize,
     pub rooms: Vec<Room>,
     pub portals: Vec<Portal>,
     pub creatures: Vec<SideCreature>,
@@ -119,6 +124,9 @@ impl SideWorld {
         Self {
             ball: Ball { body: Body::new(0, 200.0, 100.0) },
             graves: Vec::new(),
+            last_kicker: None,
+            pass_streak: 0,
+            ball_rest: 0,
             rooms,
             portals,
             creatures,
@@ -217,10 +225,22 @@ impl SideWorld {
                 b.x = b.x.clamp(r.x0 + 5.0, r.x1 - 5.0);
             }
             b.room = resolve_room(&self.rooms, &self.portals, b.room, &mut b.x, &mut b.y, b.vy);
+            let resting = b.vy.abs() < 1.0 && b.y >= r.y_bot - 6.0;
+            if resting {
+                self.ball_rest += 1;
+                if self.ball_rest > 60 {
+                    self.pass_streak = 0;
+                    self.last_kicker = None;
+                }
+            } else {
+                self.ball_rest = 0;
+            }
         }
 
         // ── Существа: сон → сенсоры → мозг → тело → еда. ──
         let ball_pos = (self.ball.body.x, self.ball.body.y);
+        let prev_kicker = self.last_kicker;
+        let prev_streak = self.pass_streak;
         let others: Vec<(usize, f64)> =
             self.creatures.iter().map(|o| (o.id, o.body.x)).collect();
         let mut kicks: Vec<(usize, f64)> = Vec::new();
@@ -260,6 +280,10 @@ impl SideWorld {
                 if dx.abs() < 14.0 && dy.abs() < 16.0 {
                     kicks.push((ci, c.body.facing * 120.0 + c.body.vx * 0.5));
                     c.sim.organs.cortex.schedule_reward(0.3);
+                    // Совместная игра слаще: пас от другого существа — бонус.
+                    if prev_kicker.map_or(false, |k| k != c.id) && prev_streak >= 1 {
+                        c.sim.organs.cortex.schedule_reward(0.4);
+                    }
                 }
             }
 
@@ -407,6 +431,18 @@ impl SideWorld {
                 let _ = w.save_to_file(path);
             }
             dying.clear();
+        }
+
+        // Серия пасов: разные существа подряд — серия растёт.
+        if let Some(&(ci, _)) = kicks.first() {
+            if let Some(c) = self.creatures.get(ci) {
+                if prev_kicker == Some(c.id) {
+                    self.pass_streak = 0; // сам себе пас — не считается
+                } else {
+                    self.pass_streak = prev_streak + 1;
+                }
+                self.last_kicker = Some(c.id);
+            }
         }
 
         // Пинки применяем после прохода (мяч один на всех).

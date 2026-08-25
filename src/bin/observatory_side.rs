@@ -51,8 +51,8 @@ impl eframe::App for SideObs {
                 let poison: usize = self.world.creatures.iter().map(|c| c.bitter_eaten).sum();
                 let ripe = self.world.fruits.iter().filter(|f| f.alive && f.ripen_until.is_none()).count();
                 ui.label(format!(
-                    "t={} · 🧍{} · 🍴{meals} · ☠{poison} · 🍎 на земле: {ripe}/{N_FRUITS}",
-                    self.world.tick, self.world.alive_count()
+                    "t={} · 🧍{} · 🍴{meals} · ☠{poison} · ⚽ серия: {}",
+                    self.world.tick, self.world.alive_count(), self.world.pass_streak
                 ));
             });
         });
@@ -115,13 +115,19 @@ impl eframe::App for SideObs {
                 painter.circle_filled(at, 4.0 * scale.max(0.7), col);
             }
 
-            // Мяч-игрушка.
+            // Мяч-игрушка + серия пасов над ним.
             {
                 let at = to_screen(self.world.ball.body.x, self.world.ball.body.y);
                 let r = 5.5 * scale.max(0.7);
                 painter.circle_filled(at, r, Color32::from_rgb(235, 90, 90));
                 painter.circle_filled(at + egui::vec2(-r * 0.3, -r * 0.3), r * 0.35,
                     Color32::from_rgb(255, 200, 200));
+                if self.world.pass_streak >= 2 {
+                    painter.text(at + egui::vec2(0.0, -14.0), egui::Align2::CENTER_CENTER,
+                        format!("×{}", self.world.pass_streak),
+                        egui::FontId::proportional(12.0),
+                        Color32::from_rgb(255, 220, 120));
+                }
             }
 
             // Надгробия.
