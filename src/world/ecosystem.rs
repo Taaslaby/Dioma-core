@@ -417,6 +417,7 @@ impl Ecosystem {
         // Слоты жёстко: не больше, чем свободно до капа, за один тик.
         let slots = MAX_CREATURES.saturating_sub(self.alive_count());
         if slots > 0 {
+            #[allow(clippy::needless_range_loop)]
             let mut born_this_tick = 0usize;
             for (a_idx, b_idx) in self.find_breed_pairs() {
                 if born_this_tick >= slots { break; }
@@ -537,10 +538,6 @@ impl Ecosystem {
             }
         }
         pairs
-    }
-
-    fn blood_glucose(&self, ci: usize) -> f32 {
-        self.creatures[ci].sim.blood.conc[chem_glucose()]
     }
 
     #[allow(dead_code)]

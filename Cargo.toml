@@ -73,3 +73,7 @@ path = "src/bin/grow_viz.rs"
 [[bin]]
 name = "lifecycle"
 path = "src/bin/lifecycle.rs"
+
+[[bin]]
+name = "side-smoke"
+path = "src/bin/side_smoke.rs"

@@ -10,4 +10,5 @@ pub mod arena;
 pub mod delayed;
 pub mod ecosystem;
 pub mod exam;
+pub mod side;
 pub mod free_life;
