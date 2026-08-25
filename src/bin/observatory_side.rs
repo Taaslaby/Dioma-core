@@ -146,11 +146,19 @@ impl eframe::App for SideObs {
                 // Глаз смотрит по facing.
                 let eye = at + egui::vec2(c.body.facing as f32 * r * 0.45, -r * 0.25);
                 painter.circle_filled(eye, r * 0.22, Color32::BLACK);
-                // Спит: z-z над головой.
-                if c.sleeping_ticks > 0 {
+                // Эмоции: страх > сон > скука.
+                if c.fear_ticks > 25 {
+                    painter.text(at + egui::vec2(0.0, -r - 16.0), egui::Align2::CENTER_CENTER,
+                        "!", egui::FontId::proportional(14.0),
+                        Color32::from_rgb(255, 120, 90));
+                } else if c.sleeping_ticks > 0 {
                     painter.text(at + egui::vec2(r, -r - 4.0), egui::Align2::LEFT_CENTER,
                         "z", egui::FontId::proportional(12.0),
                         Color32::from_rgb(150, 170, 220));
+                } else if c.boredom > 70.0 {
+                    painter.text(at + egui::vec2(0.0, -r - 16.0), egui::Align2::CENTER_CENTER,
+                        "...", egui::FontId::proportional(10.0),
+                        Color32::from_rgb(170, 170, 140));
                 }
                 // Метка id/еды.
                 painter.text(at + egui::vec2(0.0, -r - 10.0), egui::Align2::CENTER_CENTER,

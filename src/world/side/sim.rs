@@ -43,6 +43,16 @@ pub struct SideCreature {
     pub sleeping_ticks: usize,
     /// Одиночество 0..100: копится без соседей, лечится компанией.
     pub lonely: f32,
+    /// Темперамент: множитель драйва (смелый >1, трус <1).
+    pub tempo: f32,
+    /// Скука за погоню за той же целью.
+    pub boredom: f32,
+    /// Тики страха (замер после шлепка).
+    pub fear_ticks: usize,
+    /// Тики разворота.
+    pub turn_pause: usize,
+    /// Случайная прогулка без причины.
+    pub stroll: usize,
 }
 
 /// Игрушка-мяч: пружинит, пинается существами.
@@ -90,6 +100,11 @@ impl SideWorld {
                 awake_ticks: 0,
                 sleeping_ticks: 0,
                 lonely: 0.0,
+                tempo: if i % 2 == 0 { 1.15 } else { 0.75 },
+                boredom: 0.0,
+                fear_ticks: 0,
+                turn_pause: 0,
+                stroll: 0,
             });
         }
         let mut rng = XorShift::new(base_seed);
@@ -267,10 +282,63 @@ impl SideWorld {
             if s_l + s_r > 0.04 {
                 c.body.facing = if s_r >= s_l { 1.0 } else { -1.0 };
             }
+
+            // ── ВНИМАНИЕ И СКУКА: цель надоедает. ──
+            let chasing = s_l + s_r > 0.04;
+            if chasing {
+                c.boredom = (c.boredom + 1.0).min(120.0);
+                if c.boredom > 90.0 && self.rng.unit() < 0.01 {
+                    c.boredom = 0.0;
+                    c.stroll = 60; // «пойду посмотрю другое»
+                    c.body.facing = -c.body.facing;
+                }
+            } else {
+                c.boredom = (c.boredom - 0.5).max(0.0);
+            }
+
+            // ── ПОРЫВЫ БЕЗ ПРИЧИНЫ: жизнь без запаха не молчит. ──
+            if !chasing && c.fear_ticks == 0 {
+                if c.stroll > 0 {
+                    c.stroll -= 1;
+                } else {
+                    let r = self.rng.unit();
+                    if r < 0.004 {
+                        c.stroll = 30 + (self.rng.unit() * 50.0) as usize; // прогуляться
+                        c.body.facing = if self.rng.unit() < 0.5 { 1.0 } else { -1.0 };
+                    } else if r < 0.005 && c.body.on_ground {
+                        c.body.vy = -300.0; // подпрыгнул просто так
+                    }
+                }
+            }
+
+            // Страх: замер (апатия движения), потом отпускает.
+            if c.fear_ticks > 0 {
+                c.fear_ticks -= 1;
+            }
+            let afraid = c.fear_ticks > 25;
+
             // Моторы → скорость; синхронный залп ног = прыжок.
-            let drive = ((ml + mr) / 24.0).clamp(0.0, 1.0);
+            let mut drive = ((ml + mr) / 24.0).clamp(0.0, 1.0);
             let jump = ((ml.min(mr)) / 16.0).clamp(0.0, 1.0);
-            c.body.step(&self.rooms, &self.portals, drive, jump, DT);
+
+            // Характер и состояние красят движение:
+            // прогулка без запаха, апатия одиночества, страх, темперамент.
+            if !chasing && c.stroll > 0 {
+                drive = drive.max(0.45); // идёт смотреть мир
+            }
+            drive *= c.tempo as f64 * (1.0 - c.lonely as f64 / 250.0);
+            if afraid {
+                drive *= 0.15;
+            }
+            if c.turn_pause > 0 {
+                c.turn_pause -= 1;
+                drive *= 0.2; // разворот на месте
+            }
+            let prev_facing = c.body.facing;
+            c.body.step(&self.rooms, &self.portals, drive.min(1.0), jump, DT);
+            if (c.body.facing - prev_facing).abs() > 0.5 && c.turn_pause == 0 {
+                c.turn_pause = 6; // развернулся — секунду соображает
+            }
 
             // Еда при контакте.
             for f in &mut self.fruits {
@@ -283,6 +351,10 @@ impl SideWorld {
                 {
                     f.alive = false;
                     c.meals += 1;
+                    if f.taste == Taste::Sweet && c.body.on_ground {
+                        c.body.vy = -140.0; // радостный подскок
+                        c.boredom = 0.0;
+                    }
                     match f.taste {
                         Taste::Sweet => {
                             c.sim.blood.ingest_food(90.0);
