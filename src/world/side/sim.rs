@@ -172,6 +172,21 @@ impl SideWorld {
     }
 
     /// Шлёпнуть: прямое наказание игрока (−).
+    /// Дамп всех мозгов в нативный .taas для ConnScope.
+    pub fn dump_brains(&self) -> std::io::Result<Vec<std::path::PathBuf>> {
+        let dir = std::path::Path::new("brains");
+        std::fs::create_dir_all(dir)?;
+        let mut out = Vec::new();
+        for c in &self.creatures {
+            let path = dir.join(format!("brain_{:03}_t{:06}.taas", c.id, self.tick));
+            let f = std::fs::File::create(&path)?;
+            let mut w = std::io::BufWriter::new(f);
+            c.sim.organs.cortex.save_baked(&mut w)?;
+            out.push(path);
+        }
+        Ok(out)
+    }
+
     pub fn smack(&mut self, id: usize) {
         if let Some(c) = self.creatures.iter_mut().find(|c| c.id == id) {
             c.sim.organs.cortex.reward_now(-1.0);
@@ -421,14 +436,10 @@ impl SideWorld {
                 let (_, meals, x, y) =
                     dying.iter().find(|(id, ..)| *id == c.id).copied().unwrap();
                 self.graves.push(Grave { x, y: y - 6.0, id: c.id, meals });
-                let path = dir.join(format!("creature_{:04}_t{:06}.taas", c.id, self.tick));
-                let mut w = taas_format::TaasWriter::new();
-                w.add_metadata("kind", "dioma-side-creature");
-                w.add_f32("cortex_csr", "f32", &c.sim.organs.cortex.csr_values());
-                if let Some(m) = &c.sim.mind {
-                    w.add_f32("w2", "f32", &m.weight_heat());
-                }
-                let _ = w.save_to_file(path);
+                let path = dir.join(format!("creature_{:04}_t{:06}.bin.taas", c.id, self.tick));
+                let f = std::fs::File::create(&path).expect("grave create");
+                let mut w = std::io::BufWriter::new(f);
+                let _ = c.sim.organs.cortex.save_baked(&mut w);
             }
             dying.clear();
         }

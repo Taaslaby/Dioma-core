@@ -489,6 +489,11 @@ impl Brain {
         self.runner.connectome.export_values()
     }
 
+    /// Нативный бинарный дамп (TAAS) — открывается ConnScope.
+    pub fn save_baked<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
+        self.runner.connectome.save_baked(w)
+    }
+
     /// Триплеты CSR (pre, post, вес) в каноническом порядке — для синка
     /// графа при тропической перестройке (`plasticity::sync_weights_from_brain`).
     pub fn csr_triplets(&self) -> (Vec<usize>, Vec<usize>, Vec<f32>) {

@@ -15,6 +15,7 @@ struct SideObs {
     world: SideWorld,
     playing: bool,
     speed: usize,
+    msg: Option<String>,
 }
 
 const SPEEDS: [usize; 5] = [1, 4, 16, 64, 256];
@@ -23,7 +24,7 @@ const GROUND: Color32 = Color32::from_rgb(52, 44, 36);
 
 impl Default for SideObs {
     fn default() -> Self {
-        Self { world: SideWorld::new(3, 2026_0826), playing: true, speed: 1 }
+        Self { world: SideWorld::new(3, 2026_0826), playing: true, speed: 1, msg: None }
     }
 }
 
@@ -36,6 +37,15 @@ impl eframe::App for SideObs {
             ctx.request_repaint();
         }
 
+        // B — дамп мозгов в нативный .taas для ConnScope.
+        if ctx.input(|i| i.key_pressed(egui::Key::B)) {
+            match self.world.dump_brains() {
+                Ok(paths) => {
+                    self.msg = Some(format!("дамп мозгов: {} шт → brains/", paths.len()))
+                }
+                Err(e) => self.msg = Some(format!("дамп не удался: {e}")),
+            }
+        }
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let txt = if self.playing { "⏸" } else { "▶" };
