@@ -3,19 +3,20 @@
 //! Class:       SemantikaEngine
 //! Purpose:     шаг бокового мира: сенсоры → мозг → тело → события
 //! Description: SideWorld связывает комнаты/физику с органными мозгами.
-//!              Плоды зреют на балконе-кроне и ПАДАЮТ вниз через портал:
-//!              гравитация сама создаёт задачу «ждать под кроной или идти».
+//!              Плоды зреют на балконе-кроне и ПАДАЮТ вниз через проём;
+//!              мяч-игрушка пинается; одиночество давит; смерть оставляет
+//!              надгробие и геном в graveyard/.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use super::{scene, Body, Portal, Room, EAT_DIST};
+use super::{resolve_room, scene, Body, Portal, Room, EAT_DIST, GRAVITY};
 use crate::body::life::OrganSim;
 use crate::engine::instincts::Instinct;
-use crate::world::ecosystem::Taste;
 use crate::rng::XorShift;
+use crate::world::ecosystem::Taste;
 
-/// Тик мира (мс): как в экосистеме, 25 мс.
+/// Тик мира (с): 25 мс.
 const DT: f64 = 0.025;
-/// Плодов зреет одновременно.
+/// Плодов в мире одновременно.
 pub const N_FRUITS: usize = 6;
 /// Тиков созревания плода на ветке до отрыва.
 pub const RIPEN_TICKS: usize = 240;
@@ -25,7 +26,7 @@ pub const RIPEN_TICKS: usize = 240;
 pub struct Fruit {
     pub body: Body,
     pub taste: Taste,
-    /// None = лежит/летит; Some(t) = тик созревания на ветке.
+    /// None = лежит/летит; Some(t) = тик отрыва.
     pub ripen_until: Option<usize>,
     pub alive: bool,
 }
@@ -38,21 +39,33 @@ pub struct SideCreature {
     pub meals: usize,
     pub bitter_eaten: usize,
     pub born_tick: usize,
-    /// Тиков бодрствования подряд.
     pub awake_ticks: usize,
-    /// Осталось тиков сна (>0 = спит).
     pub sleeping_ticks: usize,
+    /// Одиночество 0..100: копится без соседей, лечится компанией.
+    pub lonely: f32,
 }
 
-/// Боковой мир.
+/// Игрушка-мяч: пружинит, пинается существами.
+pub struct Ball {
+    pub body: Body,
+}
+
+/// Надгробие: память о жизни.
+pub struct Grave {
+    pub x: f64,
+    pub y: f64,
+    pub id: usize,
+    pub meals: usize,
+}
+
 pub struct SideWorld {
+    pub ball: Ball,
+    pub graves: Vec<Grave>,
     pub rooms: Vec<Room>,
     pub portals: Vec<Portal>,
     pub creatures: Vec<SideCreature>,
     pub fruits: Vec<Fruit>,
     pub tick: usize,
-    #[allow(dead_code)]
-    next_id: usize,
     rng: XorShift,
 }
 
@@ -66,7 +79,6 @@ impl SideWorld {
             let mut sim = OrganSim::new(false, seed).with_mind(seed ^ 0x5EED);
             sim.instincts = innate_instincts();
             sim.birth_sleep();
-            // Основатели стоят по земле в ряд.
             let x = 260.0 + i as f64 * 40.0;
             creatures.push(SideCreature {
                 id: i,
@@ -77,6 +89,7 @@ impl SideWorld {
                 born_tick: 0,
                 awake_ticks: 0,
                 sleeping_ticks: 0,
+                lonely: 0.0,
             });
         }
         let mut rng = XorShift::new(base_seed);
@@ -89,14 +102,19 @@ impl SideWorld {
             })
             .collect();
         Self {
+            ball: Ball { body: Body::new(0, 200.0, 100.0) },
+            graves: Vec::new(),
             rooms,
             portals,
             creatures,
             fruits,
             tick: 0,
-            next_id: n,
             rng,
         }
+    }
+
+    pub fn alive_count(&self) -> usize {
+        self.creatures.len()
     }
 
     /// Игрок бросил плод (сразу спелый).
@@ -119,12 +137,22 @@ impl SideWorld {
                 ripen_until: None,
                 alive: true,
             };
-            f.body.vy = -60.0; // лёгкий подброс от «руки»
+            f.body.vy = -60.0;
         }
     }
 
-    pub fn alive_count(&self) -> usize {
-        self.creatures.len()
+    /// Погладить: прямое подкрепление игрока (+).
+    pub fn pet(&mut self, id: usize) {
+        if let Some(c) = self.creatures.iter_mut().find(|c| c.id == id) {
+            c.sim.organs.cortex.reward_now(1.0);
+        }
+    }
+
+    /// Шлёпнуть: прямое наказание игрока (−).
+    pub fn smack(&mut self, id: usize) {
+        if let Some(c) = self.creatures.iter_mut().find(|c| c.id == id) {
+            c.sim.organs.cortex.reward_now(-1.0);
+        }
     }
 
     /// Один тик мира.
@@ -137,21 +165,16 @@ impl SideWorld {
                 continue;
             }
             match f.ripen_until {
-                Some(t) if self.tick >= t => f.ripen_until = None, // отрыв
+                Some(t) if self.tick >= t => f.ripen_until = None,
                 Some(_) => {}
                 None => f.body.step_fall(&self.rooms, &self.portals, DT),
             }
         }
-        // Пересев съеденного: раз в N тиков новый плод на ветке.
+        // Пересев: раз в 300 тиков новый плод на ветке.
         if self.tick % 300 == 0 {
-            let slot = self.fruits.iter_mut().find(|f| !f.alive);
-            if let Some(f) = slot {
+            if let Some(f) = self.fruits.iter_mut().find(|f| !f.alive) {
                 *f = Fruit {
-                    body: Body::new(
-                        1,
-                        392.0 + self.rng.unit() * 80.0,
-                        40.0,
-                    ),
+                    body: Body::new(1, 392.0 + self.rng.unit() * 80.0, 40.0),
                     taste: if self.rng.unit() < 0.25 { Taste::Bitter } else { Taste::Sweet },
                     ripen_until: Some(self.tick + RIPEN_TICKS),
                     alive: true,
@@ -159,8 +182,39 @@ impl SideWorld {
             }
         }
 
+        // ── Мяч: гравитация помягче + упругие отскоки. ──
+        {
+            let b = &mut self.ball.body;
+            b.vy += GRAVITY * 0.6 * DT;
+            b.x += b.vx * DT;
+            b.y += b.vy * DT;
+            let r = &self.rooms[b.room];
+            if b.y > r.y_bot - 5.0 {
+                b.y = r.y_bot - 5.0;
+                b.vy = -b.vy * 0.75;
+            }
+            if b.y < r.y_top + 5.0 {
+                b.y = r.y_top + 5.0;
+                b.vy = -b.vy * 0.75;
+            }
+            if b.x < r.x0 + 5.0 || b.x > r.x1 - 5.0 {
+                b.vx = -b.vx * 0.8;
+                b.x = b.x.clamp(r.x0 + 5.0, r.x1 - 5.0);
+            }
+            b.room = resolve_room(&self.rooms, &self.portals, b.room, &mut b.x, &mut b.y, b.vy);
+        }
+
         // ── Существа: сон → сенсоры → мозг → тело → еда. ──
-        for c in &mut self.creatures {
+        let ball_pos = (self.ball.body.x, self.ball.body.y);
+        let others: Vec<(usize, f64)> =
+            self.creatures.iter().map(|o| (o.id, o.body.x)).collect();
+        let mut kicks: Vec<(usize, f64)> = Vec::new();
+        let mut dying: Vec<(usize, usize, f64, f64)> = Vec::new(); // id, meals, x, y
+
+        for ci in 0..self.creatures.len() {
+            let c = &mut self.creatures[ci];
+
+            // Сон: мозг работает, веса возвращаются к снимку.
             if c.sleeping_ticks > 0 {
                 c.sleeping_ticks -= 1;
                 let _ = c.sim.brain_step();
@@ -176,27 +230,49 @@ impl SideWorld {
                 c.sim.organs.cortex.memory_snapshot();
             }
 
-            // Обоняние: ближайший сладкий/горький в комнате тела.
-            let (sl, sr) = smell(&c.body, &self.fruits, c.body.room, Taste::Sweet);
-            let (bl, br) = smell(&c.body, &self.fruits, c.body.room, Taste::Bitter);
+            // Нос: сладкий и горький следы.
+            let (sl, sr) = smell(&c.body, &self.fruits, Taste::Sweet);
+            let (bl, br) = smell(&c.body, &self.fruits, Taste::Bitter);
 
             let obs = c.sim.brain_step_sensed_dual(sl, sr, bl, br);
             let ml = obs.cortex_regions[3] as f64;
             let mr = obs.cortex_regions[4] as f64;
 
-            // Ориентирный рефлекс: ноздря с более сильным запахом задаёт
-            // направление (горький привлекает слабее — интерес без жадности).
+            // Пинок мяча: подошёл — толкнул, это весело (+награда).
+            {
+                let dx = ball_pos.0 - c.body.x;
+                let dy = ball_pos.1 - c.body.y;
+                if dx.abs() < 14.0 && dy.abs() < 16.0 {
+                    kicks.push((ci, c.body.facing * 120.0 + c.body.vx * 0.5));
+                    c.sim.organs.cortex.schedule_reward(0.3);
+                }
+            }
+
+            // Одиночество: компания лечит, пустота давит.
+            let crowd = others
+                .iter()
+                .any(|&(oid, ox)| oid != c.id && (ox - c.body.x).abs() < 70.0);
+            if crowd {
+                c.lonely = (c.lonely - 2.0).max(0.0);
+            } else {
+                c.lonely = (c.lonely + 1.0).min(100.0);
+            }
+            if c.lonely > 80.0 && self.tick % 50 == 0 {
+                c.sim.organs.cortex.schedule_reward(-0.2);
+            }
+
+            // Ориентирный рефлекс: сильнейшая ноздря поворачивает.
             let s_l = sl + bl * 0.25;
             let s_r = sr + br * 0.25;
             if s_l + s_r > 0.04 {
                 c.body.facing = if s_r >= s_l { 1.0 } else { -1.0 };
             }
-            // Моторы → скорость; синхронный залп обеих ног = прыжок.
+            // Моторы → скорость; синхронный залп ног = прыжок.
             let drive = ((ml + mr) / 24.0).clamp(0.0, 1.0);
             let jump = ((ml.min(mr)) / 16.0).clamp(0.0, 1.0);
             c.body.step(&self.rooms, &self.portals, drive, jump, DT);
 
-            // Еда при контакте (только упавшие/лежащие).
+            // Еда при контакте.
             for f in &mut self.fruits {
                 if !f.alive || f.ripen_until.is_some() {
                     continue;
@@ -216,10 +292,8 @@ impl SideWorld {
                             }
                         }
                         Taste::Bitter => {
-                            let bl2 = &mut c.sim.blood;
-                            bl2.conc[crate::body::metabolism::chem::GLUCOSE] =
-                                (bl2.conc[crate::body::metabolism::chem::GLUCOSE] - 25.0)
-                                    .max(-20.0);
+                            let g = &mut c.sim.blood.conc[crate::body::metabolism::chem::GLUCOSE];
+                            *g = (*g - 25.0).max(-20.0);
                             c.sim.organs.cortex.schedule_reward(-3.0);
                             if let Some(m) = &mut c.sim.mind {
                                 m.reward(-2.0);
@@ -229,13 +303,54 @@ impl SideWorld {
                     }
                 }
             }
+
+            // Смерть от истощения: тело уходит, геном остаётся.
+            let g = c.sim.blood.conc[crate::body::metabolism::chem::GLUCOSE];
+            let dmg = c.sim.blood.organ.damage;
+            if g <= -20.0 || dmg >= 1.0 {
+                dying.push((c.id, c.meals, c.body.x, c.body.y));
+            }
+        }
+
+        // Мёртвые: надгробие в мире + геном в graveyard/.
+        if !dying.is_empty() {
+            let dir = std::path::Path::new("graveyard");
+            let _ = std::fs::create_dir_all(dir);
+            let (kept, gone): (Vec<SideCreature>, Vec<SideCreature>) = self
+                .creatures
+                .drain(..)
+                .partition(|c| !dying.iter().any(|(id, ..)| *id == c.id));
+            self.creatures = kept;
+            for c in gone {
+                let (_, meals, x, y) =
+                    dying.iter().find(|(id, ..)| *id == c.id).copied().unwrap();
+                self.graves.push(Grave { x, y: y - 6.0, id: c.id, meals });
+                let path = dir.join(format!("creature_{:04}_t{:06}.taas", c.id, self.tick));
+                let mut w = taas_format::TaasWriter::new();
+                w.add_metadata("kind", "dioma-side-creature");
+                w.add_f32("cortex_csr", "f32", &c.sim.organs.cortex.csr_values());
+                if let Some(m) = &c.sim.mind {
+                    w.add_f32("w2", "f32", &m.weight_heat());
+                }
+                let _ = w.save_to_file(path);
+            }
+            dying.clear();
+        }
+
+        // Пинки применяем после прохода (мяч один на всех).
+        for &(ci, kick) in &kicks {
+            if self.creatures.get(ci).is_some() {
+                let b = &mut self.ball.body;
+                b.vx = kick;
+                b.vy = -140.0;
+            }
         }
     }
 }
 
-/// Запах направления к ближайшему плоду нужного вкуса (в той же комнате).
-fn smell(body: &Body, fruits: &[Fruit], _room: usize, want: Taste) -> (f64, f64) {
-    let mut best: Option<(f64, f64, f64)> = None; // (dist², x, y)
+/// Запах направления к ближайшему плоду нужного вкуса (сквозь комнаты).
+fn smell(body: &Body, fruits: &[Fruit], want: Taste) -> (f64, f64) {
+    let mut best: Option<(f64, f64, f64)> = None;
     for f in fruits {
         if !f.alive || f.taste != want || f.ripen_until.is_some() {
             continue;
@@ -252,7 +367,6 @@ fn smell(body: &Body, fruits: &[Fruit], _room: usize, want: Taste) -> (f64, f64)
     let dy = fy - body.y;
     let dist = (dx * dx + dy * dy).sqrt().max(1e-3);
     let prox = 60.0 / (60.0 + dist);
-    // В боковом мире запах направленный по горизонтали + вертикальная нота.
     let h = dx / dist; // −1 слева … +1 справа
     // (левая ноздря, правая ноздря)
     ((-h.min(0.0)).max(0.0) * prox, h.max(0.0) * prox)

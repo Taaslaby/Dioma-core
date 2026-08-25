@@ -115,6 +115,28 @@ impl eframe::App for SideObs {
                 painter.circle_filled(at, 4.0 * scale.max(0.7), col);
             }
 
+            // Мяч-игрушка.
+            {
+                let at = to_screen(self.world.ball.body.x, self.world.ball.body.y);
+                let r = 5.5 * scale.max(0.7);
+                painter.circle_filled(at, r, Color32::from_rgb(235, 90, 90));
+                painter.circle_filled(at + egui::vec2(-r * 0.3, -r * 0.3), r * 0.35,
+                    Color32::from_rgb(255, 200, 200));
+            }
+
+            // Надгробия.
+            for g in &self.world.graves {
+                let at = to_screen(g.x, g.y);
+                let stone = egui::Rect::from_min_size(
+                    at + egui::vec2(-4.0 * scale, -10.0 * scale),
+                    egui::vec2(8.0 * scale, 10.0 * scale),
+                );
+                painter.rect_filled(stone, 2.0, Color32::from_rgb(110, 110, 125));
+                painter.text(at + egui::vec2(0.0, -6.0 * scale), egui::Align2::CENTER_CENTER,
+                    "✝", egui::FontId::proportional(9.0 * scale.max(0.8)),
+                    Color32::from_rgb(160, 160, 175));
+            }
+
             // Существа: капля с глазом, нос по направлению.
             for c in &self.world.creatures {
                 let at = to_screen(c.body.x, c.body.y);
@@ -132,7 +154,7 @@ impl eframe::App for SideObs {
                 }
                 // Метка id/еды.
                 painter.text(at + egui::vec2(0.0, -r - 10.0), egui::Align2::CENTER_CENTER,
-                    format!("#{}·{}", c.id, c.meals),
+                    format!("#{}·{}{}", c.id, c.meals, if c.lonely > 60.0 { " 💔" } else { "" }),
                     egui::FontId::proportional(9.0),
                     Color32::from_rgb(170, 170, 190));
             }
@@ -140,16 +162,26 @@ impl eframe::App for SideObs {
             // Подсказка.
             painter.text(rect.left_bottom() + egui::vec2(8.0, -8.0),
                 egui::Align2::LEFT_BOTTOM,
-                "клик = спелый сладкий плод · Shift+клик = горький · плоды зреют на балконе сами",
+                "клик по существу = погладить · Shift+клик = шлёпнуть · клик по полю = плод (Shift = горький)",
                 egui::FontId::proportional(11.0), Color32::from_rgb(95, 100, 115));
 
-            // Взаимодействие.
+            // Взаимодействие: по существу — погладить/шлёпнуть, иначе плод.
             if response.clicked() {
                 if let Some(pos) = response.interact_pointer_pos() {
-                    let wx = ((pos.x - rect.left() - off.x) / scale) as f64;
-                    let wy = ((pos.y - rect.top() - off.y) / scale) as f64;
-                    let bitter = ctx.input(|i| i.modifiers.shift);
-                    self.world.drop_fruit(wx, wy, bitter);
+                    let shift = ctx.input(|i| i.modifiers.shift);
+                    let hit = self.world.creatures.iter().enumerate().find(|(_, c)| {
+                        let p = to_screen(c.body.x, c.body.y);
+                        (p - pos).length() < 14.0
+                    });
+                    match hit {
+                        Some((_, c)) if shift => self.world.smack(c.id),
+                        Some((_, c)) => self.world.pet(c.id),
+                        None => {
+                            let wx = ((pos.x - rect.left() - off.x) / scale) as f64;
+                            let wy = ((pos.y - rect.top() - off.y) / scale) as f64;
+                            self.world.drop_fruit(wx, wy, shift);
+                        }
+                    }
                 }
             }
         });
