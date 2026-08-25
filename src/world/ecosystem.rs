@@ -57,6 +57,11 @@ pub fn innate_instincts() -> Vec<Instinct> {
             inputs: vec![(20, 5.0), (21, 5.0), (22, 5.0), (78, 10.0), (80, 10.0), (82, 10.0)],
             dopamine: 2.0,
         },
+        // Отвращение: горький запах → тормозная зона I (гасит моторы).
+        Instinct {
+            inputs: vec![(12, 6.0), (15, 6.0), (32, 6.0), (35, 6.0), (44, 8.0), (48, 8.0)],
+            dopamine: 1.5,
+        },
     ]
 }
 /// Моторных спайков за тик для полной скорости.
@@ -64,11 +69,28 @@ pub fn innate_instincts() -> Vec<Instinct> {
 const MOTOR_GATE_FULL: f32 = 24.0;
 
 // ─── Еда ────────────────────────────────────────────────────────────────────
+/// Вкус: сладкая лечит, горькая жжёт (отрицательный дофамин учит избегать).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Taste {
+    Sweet,
+    Bitter,
+}
+
 pub struct Food {
     pub x: f64,
     pub y: f64,
     pub alive: bool,
     regrow_at: usize,
+    pub taste: Taste,
+}
+
+/// Препятствие: AABB-блок. Удар = урон + штраф дофамина.
+#[derive(Clone, Copy, Debug)]
+pub struct Wall {
+    pub x: f64,
+    pub y: f64,
+    pub half_w: f64,
+    pub half_h: f64,
 }
 
 // ─── Существо ───────────────────────────────────────────────────────────────
@@ -93,6 +115,8 @@ pub struct Creature {
     pub hungry_ticks: usize,
     /// Тик последней еды («в настроении» для пары).
     pub last_meal_tick: usize,
+    /// Съедено горькой (видимая метрика обучения избеганию).
+    pub bitter_eaten: usize,
 }
 
 impl Creature {
@@ -121,6 +145,7 @@ impl Creature {
             sleeping_for: 0,
             hungry_ticks: 0,
             last_meal_tick: 0,
+            bitter_eaten: 0,
         }
     }
 
@@ -150,6 +175,8 @@ pub struct Ecosystem {
     pub meals_log: Vec<(usize, usize)>,
     /// Всего проведённых снов всеми существами.
     pub sleeps_done: usize,
+    /// Неподвижные препятствия (удар = урон и штраф).
+    pub walls: Vec<Wall>,
 }
 
 impl Ecosystem {
@@ -157,12 +184,13 @@ impl Ecosystem {
         let mut rng = XorShift::new(base_seed);
         let mut creatures = Vec::with_capacity(n_start);
         let mut foods = Vec::new();
-        for _ in 0..N_FOOD {
+        for fi in 0..N_FOOD {
             foods.push(Food {
                 x: (rng.unit() * 2.0 - 1.0) * ARENA_HALF,
                 y: (rng.unit() * 2.0 - 1.0) * ARENA_HALF,
                 alive: true,
                 regrow_at: 0,
+                taste: if fi % 4 == 3 { Taste::Bitter } else { Taste::Sweet },
             });
         }
         for i in 0..n_start {
@@ -184,6 +212,11 @@ impl Ecosystem {
             born_ticks: Vec::new(),
             meals_log: Vec::new(),
             sleeps_done: 0,
+            walls: vec![
+                Wall { x: -45.0, y: 40.0, half_w: 12.0, half_h: 55.0 },
+                Wall { x: 45.0, y: -40.0, half_w: 12.0, half_h: 55.0 },
+                Wall { x: 0.0, y: 0.0, half_w: 26.0, half_h: 10.0 },
+            ],
         }
     }
 
@@ -197,16 +230,18 @@ impl Ecosystem {
                 f.alive = true;
                 f.x = (self.rng.unit() * 2.0 - 1.0) * ARENA_HALF;
                 f.y = (self.rng.unit() * 2.0 - 1.0) * ARENA_HALF;
+                f.taste = if self.rng.unit() < 0.25 { Taste::Bitter } else { Taste::Sweet };
             }
         }
 
-        // Собираем позиции еды для сенсорики (иммутабельно).
-        let food_snapshot: Vec<(f64, f64)> = self
+        // Снимки мира для параллельной фазы (иммутабельные).
+        let food_snapshot: Vec<(f64, f64, Taste)> = self
             .foods
             .iter()
             .filter(|f| f.alive)
-            .map(|f| (f.x, f.y))
+            .map(|f| (f.x, f.y, f.taste))
             .collect();
+        let walls_snapshot: Vec<Wall> = self.walls.clone();
 
         // ─── Фаза 1: Параллельный шаг мозга каждого существа ───
         // Каждое существо независимо — rayon раскидывает по ядрам.
@@ -242,30 +277,35 @@ impl Ecosystem {
 
                 let (x, y) = (c.x, c.y);
 
-                // Ближайшая еда из снимка.
-                let (fx, fy) = food_snapshot
-                    .iter()
-                    .map(|&(fx, fy)| {
-                        let d = (fx - x).powi(2) + (fy - y).powi(2);
-                        (d, fx, fy)
-                    })
-                    .min_by(|a, b| a.0.total_cmp(&b.0))
-                    .map(|(_, fx, fy)| (fx, fy))
-                    .unwrap_or((0.0, 0.0));
+                // Ближайняя СЛАДКАЯ и ближайшая ГОРЬКАЯ — два канала носа.
+                let nearest = |want: Taste| -> (f64, f64) {
+                    food_snapshot
+                        .iter()
+                        .filter(|f| f.2 == want)
+                        .map(|&(fx, fy, _)| ((fx - x).powi(2) + (fy - y).powi(2), fx, fy))
+                        .min_by(|a, b| a.0.total_cmp(&b.0))
+                        .map(|(_, fx, fy)| (fx, fy))
+                        .unwrap_or((0.0, 0.0))
+                };
+                let (sweet, bitter) = (
+                    nearest(Taste::Sweet),
+                    nearest(Taste::Bitter),
+                );
+                let smell_of = |p: (f64, f64)| -> (f64, f64) {
+                    let dx = p.0 - x;
+                    let dy = p.1 - y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    let prox = 60.0 / (60.0 + dist);
+                    let mut rel = dy.atan2(dx) - c.heading;
+                    while rel > std::f64::consts::PI { rel -= 2.0 * std::f64::consts::PI; }
+                    while rel < -std::f64::consts::PI { rel += 2.0 * std::f64::consts::PI; }
+                    (rel.sin().max(0.0) * prox, (-rel.sin()).max(0.0) * prox)
+                };
+                let (sl, sr) = smell_of(sweet);
+                let (bl, br) = smell_of(bitter);
 
-                // Сенсорика.
-                let dx = fx - x;
-                let dy = fy - y;
-                let dist = (dx * dx + dy * dy).sqrt();
-                let prox = 60.0 / (60.0 + dist);
-                let mut rel = dy.atan2(dx) - c.heading;
-                while rel > std::f64::consts::PI { rel -= 2.0 * std::f64::consts::PI; }
-                while rel < -std::f64::consts::PI { rel += 2.0 * std::f64::consts::PI; }
-                let smell_l = rel.sin().max(0.0) * prox;
-                let smell_r = (-rel.sin()).max(0.0) * prox;
-
-                // Шаг мозга.
-                let step_obs = c.sim.brain_step_sensed(smell_l, smell_r);
+                // Шаг мозга: два вкуса в двух половинках сенсорных пулов.
+                let step_obs = c.sim.brain_step_sensed_dual(sl, sr, bl, br);
                 let ml = step_obs.cortex_regions[3] as f64;
                 let mr = step_obs.cortex_regions[4] as f64;
 
@@ -275,6 +315,29 @@ impl Ecosystem {
                 c.heading += 0.06 * (ml - mr);
                 c.x += speed * c.heading.cos();
                 c.y += speed * c.heading.sin();
+
+                // ── Стены: вытолкнуть и развернуть, удар чувствителен. ──
+                for w in &walls_snapshot {
+                    if c.x > w.x - w.half_w - 6.0
+                        && c.x < w.x + w.half_w + 6.0
+                        && c.y > w.y - w.half_h - 6.0
+                        && c.y < w.y + w.half_h + 6.0
+                    {
+                        // Выталкивание по меньшей оси проникновения.
+                        let push_x = if c.x > w.x { w.x + w.half_w + 6.0 } else { w.x - w.half_w - 6.0 };
+                        let push_y = if c.y > w.y { w.y + w.half_h + 6.0 } else { w.y - w.half_h - 6.0 };
+                        if (c.x - push_x).abs() < (c.y - push_y).abs() {
+                            c.x = push_x;
+                            c.heading = std::f64::consts::PI - c.heading;
+                        } else {
+                            c.y = push_y;
+                            c.heading = -c.heading;
+                        }
+                        c.sim.blood.bump_wall();
+                        c.sim.organs.cortex.schedule_reward(-0.5);
+                    }
+                }
+
                 if c.x.abs() > ARENA_HALF {
                     c.x = c.x.clamp(-ARENA_HALF, ARENA_HALF);
                     c.heading = std::f64::consts::PI - c.heading;
@@ -320,10 +383,26 @@ impl Ecosystem {
                     if d < EAT_RADIUS {
                         f.alive = false;
                         f.regrow_at = self.tick + FOOD_REGROW;
-                        self.creatures[ci].sim.blood.ingest_food(90.0);
-                        self.creatures[ci].sim.organs.cortex.schedule_reward(1.0);
-                        if let Some(m) = &mut self.creatures[ci].sim.mind {
-                            m.reward(1.0);
+                        match f.taste {
+                            Taste::Sweet => {
+                                self.creatures[ci].sim.blood.ingest_food(90.0);
+                                self.creatures[ci].sim.organs.cortex.schedule_reward(1.0);
+                                if let Some(m) = &mut self.creatures[ci].sim.mind {
+                                    m.reward(1.0);
+                                }
+                            }
+                            Taste::Bitter => {
+                                // Горько: энергия минус, лёгкий урон, ОТРИЦАТЕЛЬНЫЙ
+                                // дофамин — R-STDP ослабляет путь к этой ошибке.
+                                let bl = &mut self.creatures[ci].sim.blood;
+                                bl.conc[chem_glucose()] = (bl.conc[chem_glucose()] - 25.0).max(-20.0);
+                                bl.organ.damage = (bl.organ.damage + 0.01).min(1.0);
+                                self.creatures[ci].sim.organs.cortex.schedule_reward(-3.0);
+                                if let Some(m) = &mut self.creatures[ci].sim.mind {
+                                    m.reward(-2.0);
+                                }
+                                self.creatures[ci].bitter_eaten += 1;
+                            }
                         }
                         self.creatures[ci].meals += 1;
                         self.creatures[ci].last_meal_tick = self.tick;
@@ -376,6 +455,7 @@ impl Ecosystem {
                     sleeping_for: SLEEP_FOR, // новорождённый досыпает
                     hungry_ticks: 0,
                     last_meal_tick: 0,
+                    bitter_eaten: 0,
                 });
                 born_this_tick += 1;
             }

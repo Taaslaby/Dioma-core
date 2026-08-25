@@ -193,6 +193,19 @@ impl OrganSim {
     /// Шаг мозга с внешней сенсорикой — для экосистемы где запах приходит
     /// из общего мира. `sensory_noise` игнорируется (шум на стороне мира).
     pub fn brain_step_sensed(&mut self, left: f64, right: f64) -> BrainStepObs {
+        self.brain_step_sensed_dual(left, right, 0.0, 0.0)
+    }
+
+    /// Раздельное обоняние: сладкая еда → первые 10 клеток каждого
+    /// сенсорного пула, горькая → вторые 10. Существо различает вкусы
+    /// с рождения (проводка), учится ОТНОШЕНИЮ к ним (пластичность).
+    pub fn brain_step_sensed_dual(
+        &mut self,
+        sweet_l: f64,
+        sweet_r: f64,
+        bitter_l: f64,
+        bitter_r: f64,
+    ) -> BrainStepObs {
         let n_cortex = self.organs.cortex.n;
         let hunger = self.blood.conc[chem::HUNGER];
         let glucose = self.blood.conc[chem::GLUCOSE];
@@ -206,13 +219,22 @@ impl OrganSim {
         let spine_ext = vec![fever_drive; crate::body::organs::SPINE_N_S];
 
         // Кора: тоник + внешняя сенсорика × sensor_gain.
+        // Сладкое — перед сенсорных пулов, горькое — зад; форма
+        // рецепторов детерминированная (хэш), канал свой у каждого вкуса.
         let mut cortex_ext = vec![self.blood.motor_tonic(); n_cortex];
         let sg = self.blood.sensor_gain();
-        for (i, cell) in cortex_ext.iter_mut().enumerate().take(20) {
-            *cell += sg * left as f32 * (0.5 + 0.5 * crate::rng::hash01(i) as f32);
+        let shape = |seed: usize| 0.5 + 0.5 * crate::rng::hash01(seed) as f32;
+        for (i, cell) in cortex_ext.iter_mut().enumerate().take(10) {
+            *cell += sg * sweet_l as f32 * shape(i);
         }
-        for (i, cell) in cortex_ext.iter_mut().enumerate().take(40).skip(20) {
-            *cell += sg * right as f32 * (0.5 + 0.5 * crate::rng::hash01(i + 999) as f32);
+        for (i, cell) in cortex_ext.iter_mut().enumerate().take(20).skip(10) {
+            *cell += sg * bitter_l as f32 * shape(i + 500);
+        }
+        for (i, cell) in cortex_ext.iter_mut().enumerate().take(30).skip(20) {
+            *cell += sg * sweet_r as f32 * shape(i + 999);
+        }
+        for (i, cell) in cortex_ext.iter_mut().enumerate().take(40).skip(30) {
+            *cell += sg * bitter_r as f32 * shape(i + 1499);
         }
 
         // Тормоз покоя + разум.
@@ -222,8 +244,8 @@ impl OrganSim {
             let channels = crate::mind::CreatureMind::channels(
                 hunger / 255.0,
                 fatigue / 255.0,
-                left as f32,
-                right as f32,
+                sweet_l as f32,
+                sweet_r as f32,
                 self.pain_recent,
                 sated01,
                 ((self.body_temp - FEVER_TEMP).max(0.0) / 5.0).clamp(0.0, 1.0),

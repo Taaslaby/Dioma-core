@@ -96,8 +96,13 @@ impl eframe::App for EcoObs {
                 } else {
                     ""
                 };
+                let poison = if c.bitter_eaten > 0 {
+                    format!(" ☠{}", c.bitter_eaten)
+                } else {
+                    String::new()
+                };
                 ui.colored_label(col, format!(
-                    "#{id} g{gen} 🍴{meals} {}",
+                    "#{id} g{gen} 🍴{meals}{poison} {}",
                     state,
                     id = c.id, gen = c.generation, meals = c.meals,
                 ));
@@ -162,13 +167,42 @@ impl eframe::App for EcoObs {
                 );
             }
 
-            // Еда.
+            // Еда: сладкая — зелёный кружок, горькая — оранжевый ромб.
             for f in &self.eco.foods {
+                let at = to_screen(f.x, f.y);
                 if f.alive {
-                    painter.circle_filled(to_screen(f.x, f.y), 3.5, Color32::from_rgb(80, 200, 80));
+                    match f.taste {
+                        dioma::world::ecosystem::Taste::Sweet => {
+                            painter.circle_filled(at, 3.5, Color32::from_rgb(80, 200, 80));
+                        }
+                        dioma::world::ecosystem::Taste::Bitter => {
+                            let r = 4.0;
+                            painter.add(egui::Shape::convex_polygon(
+                                vec![
+                                    at + egui::vec2(0.0, -r),
+                                    at + egui::vec2(r, 0.0),
+                                    at + egui::vec2(0.0, r),
+                                    at + egui::vec2(-r, 0.0),
+                                ],
+                                Color32::from_rgb(230, 140, 40),
+                                Stroke::NONE,
+                            ));
+                        }
+                    }
                 } else {
                     painter.circle_stroke(to_screen(f.x, f.y), 2.0, Stroke::new(0.5_f32, Color32::from_rgb(50, 80, 50)));
                 }
+            }
+
+            // Стены.
+            for w in &self.eco.walls {
+                let a = to_screen(w.x - w.half_w, w.y + w.half_h);
+                let b = to_screen(w.x + w.half_w, w.y - w.half_h);
+                painter.rect_filled(
+                    egui::Rect::from_two_pos(a, b),
+                    3.0,
+                    Color32::from_rgb(55, 55, 70),
+                );
             }
 
             // Существа.
