@@ -156,3 +156,46 @@ LIF-зоны учатся онлайн STDP+дофамин: локально, д
 - стадия B (транш 3): регионы VL/VR/ASSOC_E/ASSOC_I уже в схеме
   `grow::stage_b_layout` (единый источник правды для `viz`), зрение
   помечено `planned` — переключение популяции отдельным траншем.
+
+## Шептун: прототип (этап 0 пайплайна)
+
+Первый РЕАЛЬНЫЙ прогон baked-пайплайна на данных движка: GRU учится
+ПРЕДСКАЗЫВАТЬ действия спайкового мозга существ по их сенсорам
+(мировая модель мозга; владелец: «обучить шептуна LSTM на нескольких
+особях, чтобы LSTM понял как работать с их мозгами»).
+
+- **Данные**: `tools/whisperer_data.json` — 8 особей × 2000 тиков, сэмпл =
+  12 входов (обоняние/зрение/стены/еда у рта/хочу есть/голод/глюкоза/
+  усталость/курс) + реконструированное действие (steer/drive/eat).
+  Рекордер `crates/dioma-engine/examples/whisperer_data.rs`; сенсоры —
+  через новый наблюдательный мост `Arena::last_sense` (аддитивное поле,
+  поведение движка не тронуто). 6 особей train (сиды 1000..1005),
+  2 hold-out (1006, 1007).
+- **Модель**: `tools/train_whisperer.py` — GRU 12→32→3 (steer=tanh,
+  drive=σ, eat=σ), ручной numpy BPTT (T=16), Adam, 30 эпох, сид 123.
+- **Метрики** (python и rust совпадают до 4 знака; отчёт
+  `tools/whisperer_report.txt`):
+  - train: r(steer)=+0.66, r(drive)=+0.85, eat_acc=0.991;
+  - hold-out: r(steer)=+0.008 (c1007: +0.87 — обобщил, c1006: −0.85 —
+    зеркально инвертировал), r(drive)=+0.89, eat_acc=0.996.
+  - Вывод: GRU поймал ДРАЙВ (кровь/мотивация предсказуемы) и руль ЗНАКОМЫХ
+    мозгов; руль незнакомых мозгов обобщается частично (хаотичный спайковый
+    steering). Что поможет: спайк-входы вместо сенсоров, больше особей,
+    per-brain readout.
+- **Паритет**: `crates/dioma-engine/examples/whisperer_check.rs` —
+  python(f64)↔rust(f32) на 5 золотых окнах: max|Δ|=2.7e-7 ≤ 1e-4.
+- **Артефакты**: `tools/whisperer.dbw` (~18 КБ, 11 тензоров: gru.* +
+  layer0.*), `tools/whisperer_golden.json`.
+
+Как перезапустить (dioma-engine — отдельный пакет, не член воркспейса:
+команды cargo — из `crates/dioma-engine`, пути к tools — `../../tools/…`):
+
+```text
+# 1) запись датасета
+cd crates/dioma-engine
+cargo run --release --example whisperer_data -- --creatures 8 --ticks 2000 --out ../../tools/whisperer_data.json --seed0 1000
+# 2) обучение + запекание весов (numpy; сид 123 — детерминированно)
+python ../../tools/train_whisperer.py --data ../../tools/whisperer_data.json --epochs 30
+# 3) паритет python↔rust + качество на hold-out
+cargo run --release --example whisperer_check -- --data ../../tools/whisperer_data.json --dbw ../../tools/whisperer.dbw --golden ../../tools/whisperer_golden.json
+```

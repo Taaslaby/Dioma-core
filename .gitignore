@@ -13,3 +13,5 @@ Cargo.lock.bak
 *.pyd
 __pycache__/
 .DS_Store
+
+tools/whisperer_data.json
