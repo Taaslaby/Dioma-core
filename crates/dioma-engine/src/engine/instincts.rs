@@ -32,8 +32,7 @@ impl Instinct {
         for (_, drive) in g.inputs.iter_mut() {
             *drive = (*drive + rng.gauss() as f32 * sigma * 20.0).max(0.5);
         }
-        g.dopamine = (g.dopamine + rng.gauss() as f32 * sigma * 4.0)
-            .clamp(0.2, DOPAMINE_MAX);
+        g.dopamine = (g.dopamine + rng.gauss() as f32 * sigma * 4.0).clamp(0.2, DOPAMINE_MAX);
         g
     }
 

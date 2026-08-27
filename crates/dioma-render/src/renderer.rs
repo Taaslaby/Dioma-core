@@ -1,5 +1,6 @@
 //! Рендерер: пайплайны спрайтов (базовый + fx), мешей, света и частиц
-//! + uniform камеры + профилировщик и debug-оверлей.
+//! + uniform камеры + параллакс-слои фона (см. [`Renderer::render_parallax`])
+//! + профилировщик и debug-оверлей.
 
 use crate::atlas::{atlas_bind_group_layout, SpriteAtlas};
 use crate::batch::SpriteBatch;
@@ -40,6 +41,30 @@ const MESH_ADDITIVE_BLENDING: wgpu::BlendState = wgpu::BlendState {
     },
 };
 
+/// Размер кольца униформ-буферов камеры для параллакс-проходов.
+///
+/// `queue.write_buffer` применяется ко ВСЕМ pass'ам одного submit ДО их
+/// исполнения (последняя запись в буфер побеждает), поэтому у каждого
+/// прохода со СВОЕЙ камерой должен быть СВОЙ буфер. Кольцо из 4 слотов
+/// покрывает типичные 2-3 параллакс-слоя; больше 4 проходов
+/// [`Renderer::render_parallax`] с разными камерами за один кадр —
+/// не поддерживается (слоты начнут перекрываться).
+const PARALLAX_RING: usize = 4;
+
+/// Какую пару (униформ-буфер камеры, bind group) использует спрайтовый проход.
+///
+/// У каждого прохода со СВОЕЙ камерой — свой буфер: `queue.write_buffer`
+/// применяется ко всем pass'ам одного submit ДО их исполнения (последняя
+/// запись в буфер побеждает). `Main` — мировой проход (render/meshes/light/
+/// particles делят один буфер, камера у них одна), `Parallax(i)` — i-й слот
+/// параллакс-кольца. У debug-оверлея (mesh-проход) тоже свой буфер — см.
+/// `overlay_uniform_buffer`.
+#[derive(Clone, Copy)]
+enum CameraSlot {
+    Main,
+    Parallax(usize),
+}
+
 /// Рендерер инстансированных спрайтов, 2D-мешей, радиальных источников света
 /// и частиц.
 ///
@@ -64,6 +89,17 @@ pub struct Renderer {
     particle_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    /// Кольцо отдельных униформ-буферов + bind group'ов для параллакс-проходов
+    /// (см. [`PARALLAX_RING`] — почему не один буфер).
+    parallax_uniforms: Vec<wgpu::Buffer>,
+    parallax_bind_groups: Vec<wgpu::BindGroup>,
+    /// Индекс следующего свободного слота кольца (растёт без сброса — >4
+    /// параллакс-проходов за кадр перекрываются).
+    parallax_ring_index: usize,
+    /// Свой униформ-буфер камеры у debug-оверлея: он рисует identity-камерой,
+    /// и его запись не должна перетирать мировую камеру основного прохода.
+    overlay_uniform_buffer: wgpu::Buffer,
+    overlay_camera_bind_group: wgpu::BindGroup,
     clear_color: wgpu::Color,
     time: f32,
     /// Debug-тогглы проходов и оверлея (публичное поле — меняйте напрямую).
@@ -246,6 +282,35 @@ impl Renderer {
             }],
         });
 
+        // Параллакс-кольцо и отдельный буфер оверлея: каждый проход со своей
+        // камерой — свой буфер (см. PARALLAX_RING).
+        let make_camera_pair = |label: &str| {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: 32,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &camera_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            (buffer, bind_group)
+        };
+        let (overlay_uniform_buffer, overlay_camera_bind_group) =
+            make_camera_pair("dioma-render overlay camera uniform");
+        let mut parallax_uniforms = Vec::with_capacity(PARALLAX_RING);
+        let mut parallax_bind_groups = Vec::with_capacity(PARALLAX_RING);
+        for i in 0..PARALLAX_RING {
+            let (buffer, bg) = make_camera_pair(&format!("dioma-render parallax {i} camera uniform"));
+            parallax_uniforms.push(buffer);
+            parallax_bind_groups.push(bg);
+        }
+
         let debug_mesh_batch = MeshBatch::new(device, 8192, 16384);
 
         Renderer {
@@ -259,6 +324,11 @@ impl Renderer {
             particle_pipeline,
             uniform_buffer,
             camera_bind_group,
+            parallax_uniforms,
+            parallax_bind_groups,
+            parallax_ring_index: 0,
+            overlay_uniform_buffer,
+            overlay_camera_bind_group,
             clear_color: wgpu::Color::BLACK,
             time: 0.0,
             debug: RenderDebug::default(),
@@ -324,6 +394,12 @@ impl Renderer {
     /// `sprites`/`fx_sprites`/`draw_calls` накапливаются в [`RenderStats`];
     /// debug-тогглы [`RenderDebug::draw_sprites`]/[`RenderDebug::draw_fx`]
     /// отключают соответствующие группы.
+    ///
+    /// Это ЕДИНСТВЕННЫЙ проход, который очищает цель (`LoadOp::Clear`).
+    /// Поверх уже нарисованного рисуйте [`Self::render_meshes`],
+    /// [`Self::render_lights`], [`Self::render_particles`],
+    /// [`Self::render_debug_overlay`] и параллакс-слои [`Self::render_parallax`]
+    /// (они открывают pass с `Load`).
     pub fn render(
         &mut self,
         queue: &wgpu::Queue,
@@ -333,51 +409,66 @@ impl Renderer {
         batch: &SpriteBatch,
         camera: &Camera,
     ) {
-        self.write_camera_uniform(queue, camera);
+        self.draw_sprite_pass(queue, encoder, view, atlas, batch, camera, CameraSlot::Main, true, true);
+    }
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("dioma-render sprite pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(self.clear_color),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(1, atlas.bind_group(), &[]);
-        pass.set_vertex_buffer(0, batch.vertex_buffer().slice(..));
-        pass.set_vertex_buffer(1, batch.instance_buffer().slice(..));
-        pass.set_index_buffer(batch.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
-        for (fx_id, range) in batch.iter_fx_groups() {
-            // Debug-тогглы: пропускаем группы выключенных пайплайнов.
-            let skip = match fx_id {
-                0 => !self.debug.draw_sprites,
-                _ => !self.debug.draw_fx,
-            };
-            if skip {
-                continue;
-            }
-            let pipeline = match fx_id {
-                0 => &self.pipeline,
-                id @ 1..=4 => &self.fx_pipelines[(id - 1) as usize],
-                _ => unreachable!("SpriteFx::id возвращает только 0..=4"),
-            };
-            pass.set_pipeline(pipeline);
-            pass.draw_indexed(0..6, 0, range.start as u32..range.end as u32);
-            self.stats.draw_calls += 1;
-            let count = (range.end - range.start) as u32;
-            match fx_id {
-                0 => self.stats.sprites += count,
-                _ => self.stats.fx_sprites += count,
-            }
+    /// Рисует батч спрайтов со сдвинутой камерой — параллакс-слой фона.
+    ///
+    /// Камера слоя: центр = `camera.center · factor`, зум и вьюпорт — без
+    /// изменений. `factor` — глубина слоя относительно мира:
+    ///
+    /// * `0.0` — фиксированный слой (HUD/фон, приколоченный к экрану);
+    /// * `0.3..0.7` — дальний фон (двигается медленнее камеры);
+    /// * `1.0` — обычный мир (центр не сдвигается).
+    ///
+    /// Значение вне `0.0..=1.0` (включая `NaN`) — ошибка с русским
+    /// сообщением; ничего не рисуется.
+    ///
+    /// Pass открывается с `LoadOp::Load` и НЕ очищает цель, поэтому слои
+    /// рисуются поверх уже очищенного кадра (в демо — ПОСЛЕ [`Self::render`],
+    /// в свободной от сцены области; painter's algorithm без depth buffer).
+    /// Используется только базовый спрайтовый пайплайн: спрайты с
+    /// [`SpriteFx`] в `batch` пропускаются. Debug-тоггл
+    /// [`RenderDebug::draw_sprites`] уважается. Draw calls и инстансы
+    /// накапливаются в [`RenderStats`] как обычные спрайты (`sprites`,
+    /// `draw_calls`) — тот же внутренний проход, что у [`Self::render`].
+    ///
+    /// Каждый вызов берёт свой слот кольца униформ-буферов (см.
+    /// [`PARALLAX_RING`]) — не более 4 параллакс-проходов с разными камерами
+    /// за один кадр.
+    pub fn render_parallax(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        atlas: &SpriteAtlas,
+        batch: &SpriteBatch,
+        camera: &Camera,
+        factor: f32,
+    ) -> Result<(), String> {
+        if !(0.0..=1.0).contains(&factor) {
+            return Err(format!(
+                "render_parallax: factor {factor} вне диапазона 0.0..=1.0 (клампить намеренно не стали — ошибка приходит сразу)"
+            ));
         }
-        // pass падает здесь, encoder готов к finish()/дальнейшим командам.
+        let shifted = Camera {
+            center: [camera.center[0] * factor, camera.center[1] * factor],
+            ..*camera
+        };
+        let slot = self.parallax_ring_index % PARALLAX_RING;
+        self.parallax_ring_index += 1;
+        self.draw_sprite_pass(
+            queue,
+            encoder,
+            view,
+            atlas,
+            batch,
+            &shifted,
+            CameraSlot::Parallax(slot),
+            false,
+            false,
+        );
+        Ok(())
     }
 
     /// Рисует батч 2D-мешей поверх уже нарисованной сцены (свои вершинный и
@@ -403,7 +494,7 @@ impl Renderer {
         if batch.is_empty() || !self.debug.draw_meshes {
             return;
         }
-        self.write_camera_uniform(queue, camera);
+        self.write_camera_uniform(queue, &self.uniform_buffer, camera);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("dioma-render mesh pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -456,7 +547,7 @@ impl Renderer {
         if lights.is_empty() || !self.debug.draw_lights {
             return;
         }
-        self.write_camera_uniform(queue, camera);
+        self.write_camera_uniform(queue, &self.uniform_buffer, camera);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("dioma-render light pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -496,7 +587,7 @@ impl Renderer {
         if particles.is_empty() || !self.debug.draw_particles {
             return;
         }
-        self.write_camera_uniform(queue, camera);
+        self.write_camera_uniform(queue, &self.uniform_buffer, camera);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("dioma-render particle pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -526,7 +617,9 @@ impl Renderer {
     /// Строки печатаются с отступом 8 px от верхнего левого угла, высота
     /// строки 10 px, масштаб глифов 1.0 (ячейка 8×8 px), цвет белый.
     /// Передавайте «identity» камеру: [`Camera::new(viewport)`] (центр 0,
-    /// зум 1) — текст позиционируется в экранных пикселях.
+    /// зум 1) — текст позиционируется в экранных пикселях. Оверлей пишет
+    /// камеру в СВОЙ униформ-буфер (см. [`PARALLAX_RING`]), поэтому его
+    /// identity-камера не перетирает камеру мировых проходов.
     ///
     /// Строки собираются в ОДИН меш и рисуются обычным (альфа) меш-пайплайном
     /// через внутренний батч рендерера (вместимость 8192 вершин / 16384
@@ -564,7 +657,7 @@ impl Renderer {
         self.debug_mesh_batch.push(&mesh);
         self.debug_mesh_batch.upload(queue);
 
-        self.write_camera_uniform(queue, camera);
+        self.write_camera_uniform(queue, &self.overlay_uniform_buffer, camera);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("dioma-render debug overlay pass"),
@@ -581,7 +674,7 @@ impl Renderer {
                 occlusion_query_set: None,
             });
             pass.set_pipeline(&self.mesh_pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(0, &self.overlay_camera_bind_group, &[]);
             pass.set_bind_group(1, font.atlas.bind_group(), &[]);
             pass.set_vertex_buffer(0, self.debug_mesh_batch.vertex_buffer().slice(..));
             pass.set_index_buffer(
@@ -594,11 +687,107 @@ impl Renderer {
         self.debug_mesh_batch.clear();
     }
 
+    /// Пара (униформ-буфер камеры, bind group) для слота [`CameraSlot`].
+    fn camera_pair(&self, slot: CameraSlot) -> (&wgpu::Buffer, &wgpu::BindGroup) {
+        match slot {
+            CameraSlot::Main => (&self.uniform_buffer, &self.camera_bind_group),
+            CameraSlot::Parallax(i) => {
+                (&self.parallax_uniforms[i], &self.parallax_bind_groups[i])
+            }
+        }
+    }
+
     /// Uniform камеры: `[cx, cy, zoom, time] + [vx, vy, 0, 0]` (32 байта).
-    fn write_camera_uniform(&self, queue: &wgpu::Queue, camera: &Camera) {
+    ///
+    /// Пишет в `buffer` — буфер камеры ИМЕННО этого прохода (см.
+    /// [`PARALLAX_RING`]: write_buffer применяется до исполнения всех pass'ов
+    /// submit'а, последняя запись в буфер побеждает).
+    fn write_camera_uniform(
+        &self,
+        queue: &wgpu::Queue,
+        buffer: &wgpu::Buffer,
+        camera: &Camera,
+    ) {
         let u = camera.uniform_data();
         let packed: [f32; 8] = [u[0], u[1], u[2], self.time, u[3], u[4], 0.0, 0.0];
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&packed));
+        queue.write_buffer(buffer, 0, bytemuck::cast_slice(&packed));
+    }
+
+    /// Внутренний спрайтовый проход — общий для [`Self::render`] и
+    /// [`Self::render_parallax`], чтобы статистика считалась одинаково.
+    ///
+    /// `camera_slot` — чью пару (униформ-буфер, bind group) использовать:
+    /// у каждого прохода со своей камерой свой буфер (см. [`CameraSlot`] и
+    /// [`PARALLAX_RING`]). `clear` — очищать ли цель (`true` — первый проход
+    /// кадра, `false` — поверх уже нарисованного, `LoadOp::Load`).
+    /// `allow_fx` — включать ли fx-пайплайны (`false` для параллакса: только
+    /// базовый шейдер, fx-группы пропускаются).
+    fn draw_sprite_pass(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        atlas: &SpriteAtlas,
+        batch: &SpriteBatch,
+        camera: &Camera,
+        camera_slot: CameraSlot,
+        clear: bool,
+        allow_fx: bool,
+    ) {
+        let (uniform_buffer, camera_bind_group) = self.camera_pair(camera_slot);
+        self.write_camera_uniform(queue, uniform_buffer, camera);
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("dioma-render sprite pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: if clear {
+                        wgpu::LoadOp::Clear(self.clear_color)
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_bind_group(0, camera_bind_group, &[]);
+        pass.set_bind_group(1, atlas.bind_group(), &[]);
+        pass.set_vertex_buffer(0, batch.vertex_buffer().slice(..));
+        pass.set_vertex_buffer(1, batch.instance_buffer().slice(..));
+        pass.set_index_buffer(batch.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
+        for (fx_id, range) in batch.iter_fx_groups() {
+            // Debug-тогглы: пропускаем группы выключенных пайплайнов.
+            let skip = match fx_id {
+                0 => !self.debug.draw_sprites,
+                _ => !self.debug.draw_fx,
+            };
+            if skip {
+                continue;
+            }
+            // Параллакс: только базовый пайплайн, fx-группы пропускаем.
+            if !allow_fx && fx_id != 0 {
+                continue;
+            }
+            let pipeline = match fx_id {
+                0 => &self.pipeline,
+                id @ 1..=4 => &self.fx_pipelines[(id - 1) as usize],
+                _ => unreachable!("SpriteFx::id возвращает только 0..=4"),
+            };
+            pass.set_pipeline(pipeline);
+            pass.draw_indexed(0..6, 0, range.start as u32..range.end as u32);
+            self.stats.draw_calls += 1;
+            let count = (range.end - range.start) as u32;
+            match fx_id {
+                0 => self.stats.sprites += count,
+                _ => self.stats.fx_sprites += count,
+            }
+        }
+        // pass падает здесь, encoder готов к finish()/дальнейшим командам.
     }
 }
 

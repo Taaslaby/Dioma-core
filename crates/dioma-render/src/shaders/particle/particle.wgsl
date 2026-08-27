@@ -35,9 +35,10 @@ fn vs_main(in: VsIn) -> VsOut {
     let center = cam.camera.xy;
     let zoom = cam.camera.z;
     let vp = cam.viewport.xy;
+    // Мир → NDC: Y вверх = верх экрана (соглашение сайд-вью).
     let ndc = vec2<f32>(
         (world.x - center.x) / (vp.x * 0.5 / zoom),
-        -(world.y - center.y) / (vp.y * 0.5 / zoom),
+        (world.y - center.y) / (vp.y * 0.5 / zoom),
     );
 
     var out: VsOut;

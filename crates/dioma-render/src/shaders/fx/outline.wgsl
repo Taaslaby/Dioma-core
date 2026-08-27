@@ -1,6 +1,7 @@
 // dioma-render: шейдер контура/подсветки выделенного существа.
 //
 // вершинная часть синхронизирована с shaders/sprite.wgsl
+// NDC: Y вверх = верх экрана (соглашение сайд-вью); мировая Y растёт вверх.
 // (атрибуты 0–10 те же; параметры эффекта: fx_a = (width, 0, 0, 0), fx_b = цвет контура).
 //
 // Фрагмент рисует спрайт как обычно, а вокруг края его альфы добавляет
@@ -62,7 +63,7 @@ fn vs_main(in: VsIn) -> VsOut {
     let vp = cam.viewport.xy;
     let ndc = vec2<f32>(
         (world.x - center.x) / (vp.x * 0.5 / zoom),
-        -(world.y - center.y) / (vp.y * 0.5 / zoom),
+        (world.y - center.y) / (vp.y * 0.5 / zoom),
     );
 
     var out: VsOut;

@@ -1,13 +1,17 @@
-//! -------------------------------------------------------------------------
-//! Filename:    src/brain.rs
-//! Class:       neuworks
-//! Purpose:     agent spiking brain + 3-factor plasticity
-//! Description: BrainRunner (LIF-alpha) over CSR with region-gain matrix;
+//! # Creature brain
 //!
-//! delayed & immediate dopamine, soft homeostasis, frozen region pairs
-//! (innate reflexes never unlearn), hyperpolarization (memory reset).
-//! author: Atlasov anton
-//! -------------------------------------------------------------------------
+//! Мост между игровым существом и SiMuse. `Brain` хранит CSR-коннектом,
+//! запускает CPU/GPU-динамику и применяет трёхфакторную пластичность:
+//! спайки + eligibility + дофамин.
+//!
+//! Важная граница состояния:
+//!
+//! - `Grown` — генетическая проводка при рождении;
+//! - текущие CSR-веса — опыт жизни;
+//! - `memory_lt`/snapshot — долговременная память для сна и Болдуина.
+//!
+//! Все методы, связанные с backend, должны сохранять одинаковую игровую
+//! семантику на CPU и GPU.
 
 use crate::engine::gpu::{GpuDynamics, LearnGpu};
 use crate::Grown;
@@ -16,16 +20,19 @@ use pillars::math::fast_exp::fast_exp;
 use pillars::zoo::HAAPModelParamIdx as P;
 use pillars_connectome::{BrainRunner, ConnectomeData, NeuronConfig};
 
-
 pub const DT_MS: f32 = 0.5;
-pub const BRAIN_STEPS_PER_TICK: usize = 50; // 25 мс на тик мира (LIF)
+/// Число LIF-подшагов в одном игровом тике (100 × 0.5 мс = 50 мс).
+/// (×2: тик 50 мс — мировой тик удвоен, 25 → 50 мс, как в C3
+/// `App::GetWorldTickInterval() == 50`; нейронного времени за тик стало
+/// вдвое больше, а за секунду — столько же.)
+pub const BRAIN_STEPS_PER_TICK: usize = 100;
 /// HAAP: канонический dt VNC — тоньше шаг, шире запас устойчивости
 /// (интегрирование при 0.5 делало реле би-стабильным: взрыв/тишина).
 pub const DT_MS_HAAP: f32 = 0.05;
-pub const BRAIN_STEPS_PER_TICK_HAAP: usize = 500; // тот же тик 25 мс
+pub const BRAIN_STEPS_PER_TICK_HAAP: usize = 1000; // 1000 × 0.05 мс = 50 мс (×2: тик 50 мс)
 /// Постсинаптическая кинетика HAAP (мс).
 const HAAP_TAU_SYN: f32 = 12.0;
-/// Перевод мировых токов (масштаб LIF, мВ/шаг) в токи HAAP: при g_l=0.1
+/// Перевод мировых токов (масштаб LIF, мВ/шаг) в токи HAAP: при `g_l = 0.1`
 /// нужно ~7× чтобы сенсорный сигнал достигал порога, а фон оставался тих.
 const HAAP_INPUT_SCALE: f32 = 8.0;
 /// Смещение преобразователя LIF→HAAP: вычитает тонический эквивалент, чтобы
@@ -48,13 +55,16 @@ pub enum BrainModel {
 }
 
 #[derive(Clone, Debug)]
+/// Настройки обучения мозга и ограничения изменения синапсов.
 pub struct PlasticityParams {
     pub lr: f32,
     pub w_max: f32,
     pub a_ltp: f32,
     pub a_ltd: f32,
     pub homeo_rate: f32,
-    /// Задержка дофамина в тиках мира (50 мс при стандартном тике).
+    /// Задержка дофамина в тиках мира (50 мс при тике 50 мс).
+    /// (÷2: тик 50 мс — подшагов на тик стало вдвое больше, поэтому 1 тик
+    /// даёт ту же задержку в подшагах/реальном времени, что 2 тика при 25 мс.)
     pub reward_delay_ticks: usize,
     /// Пары регионов, синапсы которых не пластичны (врождённые пути).
     pub frozen_pairs: Vec<(usize, usize)>,
@@ -87,7 +97,7 @@ impl Default for PlasticityParams {
             a_ltp: 0.1,
             a_ltd: 0.005,
             homeo_rate: 0.25,
-            reward_delay_ticks: 2,
+            reward_delay_ticks: 1,
             frozen_pairs: Vec::new(),
             critical_pairs: Vec::new(),
             homeo_every_ticks: 0,
@@ -318,8 +328,7 @@ impl Brain {
                 Ok(g) => Dynamics::Gpu(g),
                 Err(e) => {
                     eprintln!("[dioma] GPU-динамика недоступна ({e}), фолбэк на CPU");
-                    let mut runner =
-                        BrainRunner::new(conn, config).expect("BrainRunner init");
+                    let mut runner = BrainRunner::new(conn, config).expect("BrainRunner init");
                     if model == BrainModel::Haap {
                         crate::body::physiology::apply_haap_columns(&mut runner, haap_columns);
                     }
@@ -1324,10 +1333,7 @@ mod tests {
         );
         for i in 1..lt.len() {
             let d = (out[i] - lt[i]).abs();
-            assert!(
-                d < 0.02,
-                "слабый шум отсекается во сне: синапс {i} d={d}"
-            );
+            assert!(d < 0.02, "слабый шум отсекается во сне: синапс {i} d={d}");
         }
         // Эталон Болдуина не сдвинут: выученное продолжает накапливаться.
         assert_eq!(b.memory_lt, lt);

@@ -303,8 +303,7 @@ mod tests {
         let mut m = Machine::new();
         m.start();
         assert_eq!(
-            m.run(&prog, &cs, &mut gv, &mut ctx_with(&mut svc))
-                .unwrap(),
+            m.run(&prog, &cs, &mut gv, &mut ctx_with(&mut svc)).unwrap(),
             Flow::Blocked
         );
         assert_eq!(svc.0.into_inner(), vec!["a".to_string()]);
@@ -316,8 +315,7 @@ mod tests {
         assert!(m.tick_cooldown());
         let mut svc = LogHost(RefCell::new(vec![]));
         assert_eq!(
-            m.run(&prog, &cs, &mut gv, &mut ctx_with(&mut svc))
-                .unwrap(),
+            m.run(&prog, &cs, &mut gv, &mut ctx_with(&mut svc)).unwrap(),
             Flow::Halted
         );
         assert_eq!(svc.0.into_inner(), vec!["b".to_string()]);
@@ -328,16 +326,9 @@ mod tests {
         let cs = CommandSet::builder().with_builtins().finish();
         let mut gv = GVars::default();
         let mut svc = ();
-        Machine::run_source("setv vg42 77", &cs, &mut gv, &mut ctx_with(&mut svc))
-            .unwrap();
+        Machine::run_source("setv vg42 77", &cs, &mut gv, &mut ctx_with(&mut svc)).unwrap();
         let mut svc = LogHost(RefCell::new(vec![]));
-        Machine::run_source(
-            "out vg42",
-            &cs,
-            &mut gv,
-            &mut ctx_with(&mut svc),
-        )
-        .unwrap();
+        Machine::run_source("out vg42", &cs, &mut gv, &mut ctx_with(&mut svc)).unwrap();
         assert_eq!(svc.0.into_inner(), vec!["77".to_string()]);
     }
 

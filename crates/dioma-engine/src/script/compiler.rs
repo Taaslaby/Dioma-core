@@ -1,8 +1,12 @@
-//! Компилятор (порт a1-script): токены → байткод. Как в CAOS всё префиксно:
-//! у каждой команды фиксированная арность, поэтому разбор линейный, без
-//! приоритетов операций.
+//! # Script compiler
 //!
-//! Управление: `doif … [else …] endi`, `repn <n> … repe`, `wait <тики>`,
+//! Компилятор игрового скриптового языка: исходный текст превращается в
+//! компактный байткод [`Program`]. Синтаксис префиксный, поэтому у команды
+//! фиксированное число аргументов и парсеру не нужен отдельный precedence
+//! parser.
+//!
+//! Управление: `doif … [else …] endi`, `repn <n> … repe`,
+//! `wait <тики>`,
 //! `stop`. Переменные: локальные `va0..va99`, глобальные мира `vg0..vg99`.
 
 use crate::script::lexer::{lex, Tok};
@@ -30,7 +34,9 @@ pub enum Op {
     /// Снять число повторов; ноль → прыжок за `repe`.
     LoopBegin(usize),
     /// Декрементировать счётчик кадра; не исчерпан → назад к телу цикла.
-    LoopEnd { back: usize },
+    LoopEnd {
+        back: usize,
+    },
     /// Блокировка: снять тики и приостановить скрипт.
     Wait,
     Stop,
@@ -137,18 +143,17 @@ impl<'a> Compiler<'a> {
                 _ if name == "setv" => {
                     let (scope, n) = self.var_ref()?;
                     self.args(&name)?;
-                    self.prog
-                        .ops
-                        .push(match scope {
-                            Scope::Local => Op::Store(Scope::Local, n),
-                            Scope::Global => Op::Store(Scope::Global, n),
-                        });
+                    self.prog.ops.push(match scope {
+                        Scope::Local => Op::Store(Scope::Local, n),
+                        Scope::Global => Op::Store(Scope::Global, n),
+                    });
                 }
                 _ => {
                     self.args(&name)?;
-                    let idx = self.cmds.index_of(&name).ok_or_else(|| {
-                        format!("неизвестная команда {name:?}")
-                    })?;
+                    let idx = self
+                        .cmds
+                        .index_of(&name)
+                        .ok_or_else(|| format!("неизвестная команда {name:?}"))?;
                     self.prog.ops.push(Op::Cmd(idx));
                 }
             }
@@ -172,9 +177,10 @@ impl<'a> Compiler<'a> {
     }
 
     fn expr(&mut self, caller: &str) -> Result<(), String> {
-        let t = self.toks.get(self.pos).ok_or_else(|| {
-            format!("{caller}: неожиданный конец в выражении")
-        })?;
+        let t = self
+            .toks
+            .get(self.pos)
+            .ok_or_else(|| format!("{caller}: неожиданный конец в выражении"))?;
         match t {
             Tok::Int(i) => {
                 self.prog.ops.push(Op::Const(Value::Int(*i)));
@@ -198,9 +204,10 @@ impl<'a> Compiler<'a> {
                 if name == "setv" {
                     return Err("setv нельзя использовать как значение".into());
                 }
-                let arity = self.cmds.arity_of(&name).ok_or_else(|| {
-                    format!("неизвестная команда {name:?}")
-                })?;
+                let arity = self
+                    .cmds
+                    .arity_of(&name)
+                    .ok_or_else(|| format!("неизвестная команда {name:?}"))?;
                 for _ in 0..arity {
                     self.expr(&name)?;
                 }
@@ -219,8 +226,9 @@ impl<'a> Compiler<'a> {
             .ok_or("setv: нет имени переменной")?;
         self.pos += 1;
         match t {
-            Tok::Ident(n) => parse_var(n)
-                .ok_or_else(|| format!("setv: {n:?} не переменная (va0..99 / vg0..99)")),
+            Tok::Ident(n) => {
+                parse_var(n).ok_or_else(|| format!("setv: {n:?} не переменная (va0..99 / vg0..99)"))
+            }
             other => Err(format!("setv: {other:?} не переменная")),
         }
     }

@@ -3,7 +3,7 @@
 //! печатаем состояние обеих динамик по первым расходящимся нейронам.
 use dioma::creature::{Creature, Sense};
 
-fn region_of(n: usize, bounds: &[(usize, usize)], i: usize) -> usize {
+fn region_of(bounds: &[(usize, usize)], i: usize) -> usize {
     for (r, &(a, b)) in bounds.iter().enumerate() {
         if (a..b).contains(&i) {
             return r;
@@ -57,7 +57,7 @@ fn main() {
             first_mismatch = Some(step);
             println!("=== ПЕРВОЕ РАСХОЖДЕНИЕ на подшаге {step}: {0} нейронов", mism.len());
             for &i in mism.iter().take(10) {
-                let r = region_of(n, &bounds, i);
+                let r = region_of(&bounds, i);
                 println!(
                     "  нейрон {i} (регион {r}): cpu_spike={} gpu_spike={}",
                     sc[i], sg[i]
@@ -100,6 +100,9 @@ fn main() {
             wall_r: 0.0,
             food_near: t == 11 || t <= 2,
             wall: t % 13 == 0,
+            place: 0,
+            heading: 0.0,
+            see_eat: false,
         };
         let ac = cpu.tick(&sense);
         let ag = gpu.tick(&sense);

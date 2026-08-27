@@ -1,6 +1,7 @@
 // dioma-render: шейдер волнистости/болезненной дрожи (больные существа, вода).
 //
 // вершинная часть синхронизирована с shaders/sprite.wgsl
+// NDC: Y вверх = верх экрана (соглашение сайд-вью); мировая Y растёт вверх.
 // (атрибуты 0–10 те же; параметры эффекта: fx_a = (amplitude, frequency, speed, 0)).
 //
 // Вершинное смещение по X до поворота:
@@ -65,7 +66,7 @@ fn vs_main(in: VsIn) -> VsOut {
     let vp = cam.viewport.xy;
     let ndc = vec2<f32>(
         (world.x - center.x) / (vp.x * 0.5 / zoom),
-        -(world.y - center.y) / (vp.y * 0.5 / zoom),
+        (world.y - center.y) / (vp.y * 0.5 / zoom),
     );
 
     var out: VsOut;

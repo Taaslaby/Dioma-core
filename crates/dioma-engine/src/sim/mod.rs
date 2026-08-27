@@ -12,7 +12,7 @@
 use crate::creature::{Action, Creature, Sense};
 use crate::env::map::WorldMap;
 use crate::env::math::Vec2;
-use crate::env::{AgentId, Substance};
+use crate::env::{AgentId, Season, Substance, TimeOfDay, WorldClock};
 use crate::world::{Cls, World, SLOT_EAT};
 use std::f32::consts::TAU;
 
@@ -23,8 +23,12 @@ pub use evolution::{Evolution, EvolutionParams, GenerationStats};
 pub const EAT_RADIUS: f32 = 2.0;
 /// Радиус, в котором существо «видит» соседа за едой (социальное обучение).
 const SOCIAL_RADIUS: f32 = 10.0;
-/// Максимальный поворот за тик (радианы).
-pub const MAX_TURN: f32 = 0.3;
+/// Максимальный поворот за тик (радианы). (×2: тик 50 мс — за секунду
+/// поворот тот же, что при 25 мс.)
+pub const MAX_TURN: f32 = 0.6;
+/// Масштаб шага движения за тик. (×2: тик 50 мс — скорость тела задана
+/// «за тик»; удвоением шага за секунду проходится та же дистанция.)
+const MOVE_STEP_PER_TICK: f32 = 2.0;
 /// Затухание запаха с дистанцией: 60/(60+d).
 const SMELL_FALLOFF: f32 = 60.0;
 /// Размер клетки памяти места (грубая привязка «где была еда»).
@@ -34,6 +38,33 @@ const CLIMATE_CELL: f32 = 4.0;
 /// Дальность ощущения стены (юнитов) и шаг пробы.
 const WALL_LOOKAHEAD: f32 = 8.0;
 const WALL_PROBE_STEP: f32 = 1.0;
+/// Порог «стена прямо по курсу»: обе диагональные пробы (±45°) должны
+/// упереться в одну и ту же стену ВПЕРЕДИ (боковая стена попадает только
+/// в одну пробу и не считается «прямо по курсу»).
+const WALL_AHEAD_THRESHOLD: f32 = 0.5;
+
+// ─── Сон ────────────────────────────────────────────────────────────────
+/// Порог усталости, с которого существо засыпает. FATIGUE-химия крови
+/// живёт в 0..255 (потолок концентраций) с распадом 0.990025/тик и накоплением
+/// от моторной активности; рецептор SPEED к этому моменту уже заметно
+/// замедлил тело (~40% от максимальной скорости) — «отработал смену».
+/// Выше порога (ближе к 255) охотник выматывается слишком часто — замерено
+/// на эволюционном прогоне: при 70 существа спали 85% времени и голодали.
+///
+/// НЕ менялся на тике 50 мс: накопление утомления за тик удваивается, но
+/// по той же причине удваивается RATE_MOTOR (спайки моторов за тик — 100
+/// подшагов мозга вместо 50), а распад пересчитан в квадрат (0.990025 =
+/// 0.995²). Равновесие P/(1−d) и кривая F(t) в реальном времени остаются
+/// теми же — порог 200 по-прежнему даёт замеренные ~40% цикла сна.
+const SLEEP_AT_FATIGUE: f32 = 200.0;
+/// Длительность сна в тиках (12 × 50 мс ≈ 0.6 с): пауза, в которую хост
+/// держит существо неподвижным. Сама консолидация дня происходит ОДНИМ
+/// вызовом `Creature::sleep()` на входе — длительность лишь задаёт «тишину»
+/// после него. 12 — верхняя граница, найденная замером: при 30 тиках
+/// выученные охотники (высокий моторный выход → частый сон) не успевали
+/// объехать L-стену за 800 тиков и эволюция голодала.
+/// (÷2: тик 50 мс — 12 × 50 мс ≈ 25 × 25 мс ≈ 0.6 с.)
+const SLEEP_TICKS: u32 = 12;
 
 // ─── Ягода: класс (1, 2) — «съедобное» ────────────────────────────────────
 pub const BERRY_FAMILY: u8 = 1;
@@ -44,17 +75,40 @@ pub const BERRY_EATEN: &str = "out \"хрум\"";
 /// не пахнет и не съедобна, пока счётчик не дойдёт до нуля. Без этого
 /// сильные охотники истребляют урожай до размножения ягод и голодают —
 /// а food_eaten перестаёт быть мерой навыка.
-const BERRY_REGROW_TICKS: f32 = 150.0;
+/// (÷2: тик 50 мс — 75 × 50 мс ≈ 150 × 25 мс ≈ 3.75 с.)
+const BERRY_REGROW_TICKS: f32 = 75.0;
 /// Рост за тик: vars[0] += плодородность × GROW_RATE.
-const GROW_RATE: f32 = 1.0;
+/// (×2: тик 50 мс — за секунду ягода растёт с той же скоростью.)
+const GROW_RATE: f32 = 2.0;
 /// Накопленный рост, при котором ягода даёт потомство.
 const SPAWN_AT: f32 = 12.0;
 /// Питательные вещества комнаты, съедаемые за тик роста (рост не бесплатен).
-const NUTRIENT_COST: f32 = 0.02;
+/// (×2: тик 50 мс)
+const NUTRIENT_COST: f32 = 0.04;
 /// Разброс потомства вокруг родителя.
 const SPAWN_SPREAD: f32 = 3.0;
 /// Потолок популяции ягод (защита от экспоненты).
 const MAX_BERRIES: usize = 24;
+
+/// Читаемое состояние ягоды для хоста и моста рендера.
+///
+/// Обёртка над внутренними переменными скриптовой ягоды (`vars[0]`/`vars[1]`,
+/// которые по-прежнему читают/пишут скрипты): growth — накопленный рост
+/// (vars[0]); regrow — таймер отрастания (vars[1]); edible — regrow <= 0
+/// и ягода жива.
+#[derive(Clone, Copy, Debug)]
+pub struct Berry {
+    pub id: AgentId,
+    pub pos: Vec2,
+    /// Накопленный рост (vars[0]): плодородность × GROW_RATE за тик;
+    /// при SPAWN_AT ягода даёт потомство и обнуляется.
+    pub growth: f32,
+    /// Таймер отрастания съеденной ягоды (vars[1]): тикает вниз к нулю;
+    /// > 0 = ягода пустая (не пахнет, не съедобна).
+    pub regrow: f32,
+    /// Съедобна ли: regrow <= 0 и жива.
+    pub edible: bool,
+}
 
 /// Существо в арене: позиция, курс и сам контроллер.
 pub struct Critter {
@@ -68,6 +122,11 @@ pub struct Critter {
     /// Видел ли соседа за едой на прошлом такте (социальное обучение:
     /// заполняет sense.see_eat на следующий тик и сбрасывается).
     pub see_eat: bool,
+    /// Спит ли: во сне нет сенсоров/мозга/движения/еды, метаболизм стоит —
+    /// только единичный `creature.sleep()` на входе (см. фазу сна в `step`).
+    pub sleeping: bool,
+    /// Оставшиеся тики сна (тикает вниз в `Arena::step`; 0 = бодрствует).
+    pub sleep_ticks: u32,
 }
 
 /// Арена: мир объектов (ягоды, карта) + существа. Детерминирована по сиду.
@@ -112,6 +171,8 @@ impl Arena {
             creature,
             wall_hits: 0,
             see_eat: false,
+            sleeping: false,
+            sleep_ticks: 0,
         });
         id
     }
@@ -145,25 +206,103 @@ impl Arena {
             .collect()
     }
 
-    /// Один такт: мир (сообщения/скрипты/физика) → существа → еда → рост.
+    /// Состояние живой ягоды по id (None — не ягода или не жива).
+    ///
+    /// Именованный доступ для хоста и моста рендера; внутренние переменные
+    /// скрипта (`vars[0]`/`vars[1]`) скрыты за полями — см. [`Berry`].
+    pub fn berry_info(&self, id: AgentId) -> Option<Berry> {
+        let ag = self.world.agent(id)?;
+        if !Self::berry_any(ag) {
+            return None;
+        }
+        Some(Berry {
+            id,
+            pos: ag.pos,
+            growth: ag.vars[0],
+            regrow: ag.vars[1],
+            edible: ag.vars[1] <= 0.0,
+        })
+    }
+
+    /// Ближайшая цель под точкой: существо (круг радиуса r_critter) или ягода
+    /// (радиус r_berry). Сначала существа, потом ягоды; None — мимо всех.
+    ///
+    /// Существа приоритетнее ягод даже если ягода ближе; существо берётся
+    /// любое (живое или мёртвое — оба видимы и выбираемы). Ягода — живая
+    /// (включая отрастающие: пустой куст тоже можно выделить).
+    pub fn pick(&self, world: Vec2, r_critter: f32, r_berry: f32) -> Option<AgentId> {
+        let mut best_c: Option<(AgentId, f32)> = None;
+        for c in &self.critters {
+            let d = c.pos.dist(world);
+            if d <= r_critter && best_c.map_or(true, |(_, bd)| d < bd) {
+                best_c = Some((c.id, d));
+            }
+        }
+        if let Some((id, _)) = best_c {
+            return Some(id);
+        }
+        let mut best_b: Option<(AgentId, f32)> = None;
+        for &id in &self.berries() {
+            let Some(ag) = self.world.agent(id) else { continue };
+            let d = ag.pos.dist(world);
+            if d <= r_berry && best_b.map_or(true, |(_, bd)| d < bd) {
+                best_b = Some((id, d));
+            }
+        }
+        best_b.map(|(id, _)| id)
+    }
+
+    /// Один такт: мир (сообщения/скрипты/физика) → сон → существа → еда → рост.
     pub fn step(&mut self) {
         self.tick += 1;
         // 0. Мир: доставка сообщений (в т.ч. вчерашний EAT → «хрум» → die),
         //    таймеры, скрипты и физика комнат.
         self.world.step();
 
+        // 0.5. Сон: уставшие (fatigue ≥ SLEEP_AT_FATIGUE) засыпают и спят
+        //    SLEEP_TICKS тиков; спящий не получает сенсоры/мозг/движение/еду
+        //    и не участвует в зеркале — метаболизм во сне стоит (только
+        //    единичный `creature.sleep()` на входе: восстановление тела +
+        //    консолидация выученного дня). Будит только таймер — раннего
+        //    пробуждения при критической глюкозе нет (простота; см. tranche 1).
+        //    Проснулся — действует с этого тика.
+        for c in &mut self.critters {
+            if c.sleeping {
+                if c.sleep_ticks == 0 {
+                    c.sleeping = false;
+                } else {
+                    c.sleep_ticks -= 1;
+                    continue;
+                }
+            }
+            if c.creature.fatigue() >= SLEEP_AT_FATIGUE {
+                c.sleeping = true;
+                c.sleep_ticks = SLEEP_TICKS;
+                c.creature.sleep();
+            }
+        }
+
         // 1. Сенсоры (по живым ягодам мира + память о соседе за едой) → решения.
-        let senses: Vec<Sense> = self
+        //    Только бодрствующие: спящие не чувствуют и не действуют.
+        let senses: Vec<Option<Sense>> = self
             .critters
             .iter()
-            .map(|c| self.sense(c.pos, c.heading, c.see_eat))
+            .map(|c| {
+                if c.sleeping {
+                    None
+                } else {
+                    Some(self.sense(c.pos, c.heading, c.see_eat))
+                }
+            })
             .collect();
         for c in &mut self.critters {
             c.see_eat = false; // окно наблюдения закрылось
         }
         let mut actions: Vec<(usize, Action)> = Vec::with_capacity(self.critters.len());
         for (i, c) in self.critters.iter_mut().enumerate() {
-            actions.push((i, c.creature.tick(&senses[i])));
+            if let Some(sense) = &senses[i] {
+                actions.push((i, c.creature.tick(sense)));
+            }
         }
 
         // 2. Движение по комнатам (стены/переходы — физика мира).
@@ -173,7 +312,8 @@ impl Arena {
             let c = &mut self.critters[i];
             c.heading = (c.heading + action.steer * MAX_TURN).rem_euclid(TAU);
             let dir = Vec2::new(c.heading.cos(), c.heading.sin());
-            let step = dir * (action.drive * c.creature.speed());
+            // (×2: тик 50 мс) — шаг за тик удвоен: за секунду та же дистанция.
+            let step = dir * (action.drive * c.creature.speed() * MOVE_STEP_PER_TICK);
             let cand = c.pos + step;
             if self.world.map.room_at(cand).is_some() {
                 c.pos = cand;
@@ -212,23 +352,32 @@ impl Arena {
                 eaters.push(pos);
             }
         }
-        // Социальное обучение: соседи в радиусе видят едущего и получают
-        // зеркальный сигнал на следующий такт (see_eat → sense.see_eat).
+        // Социальное обучение: бодрствующие соседи В ТОЙ ЖЕ КОМНАТЕ в радиусе
+        // видят едущего и получают зеркальный сигнал на следующий такт
+        // (see_eat → sense.see_eat). Стены гасят зеркало: еда за стеной
+        // «не видна»; двери — пока нет (транш 2).
         if !eaters.is_empty() {
             for c in &mut self.critters {
-                if c.see_eat {
+                if c.sleeping || c.see_eat {
                     continue;
                 }
-                if eaters.iter().any(|e| e.dist(c.pos) <= SOCIAL_RADIUS) {
+                let my_room = self.world.map.room_at(c.pos);
+                if eaters.iter().any(|&e| {
+                    self.world.map.room_at(e) == my_room && e.dist(c.pos) <= SOCIAL_RADIUS
+                }) {
                     c.see_eat = true;
                 }
             }
         }
 
         // 3.5. Климат: комнаты кормят поле, диффузия разносит тепло/свет/
-        //    питание по миру — ягоды растут там, где стало тепло.
+        //    питание по миру — ягоды растут там, где стало тепло. Свет
+        //    гасится по фазе суток (день/ночь, как в C3): ночью мир темнеет
+        //    и плодородность (тепло × свет × питание) падает — рост ягод
+        //    следует за сутками.
         self.climate.seed_from_rooms(&self.world.map);
         self.climate.step();
+        self.climate.dim_light(crate::env::WorldClock::light_multiplier(self.tick));
 
         // 4. Рост ягод от плодородности климата (тепло × свет × питание).
         //    Съеденные ягоды отрастают: vars[1] тикает вниз к нулю.
@@ -287,6 +436,10 @@ impl Arena {
     /// Сенсоры существа: запах ягод (живые), стены, еда у рта, память места
     /// и зеркальный сигнал `see_eat` (видел соседа за едой на прошлом такте).
     fn sense(&self, pos: Vec2, heading: f32, see_eat: bool) -> Sense {
+        // Комната существа: запах не проходит сквозь стены — ягода пахнет
+        // только из той же комнаты; двери — пока нет (транш 2). На невалидной
+        // карте (точка вне комнат) фильтр не включается — старое поведение.
+        let my_room = self.world.map.room_at(pos);
         let mut l = 0.0f32;
         let mut r = 0.0f32;
         let mut near = false;
@@ -296,6 +449,13 @@ impl Arena {
             // залипало бы у пустой ягоды.
             if !Self::berry_edible(ag) {
                 continue;
+            }
+            // Ягода за стеной (в другой комнате) не пахнет — проверка комнаты
+            // дешевле дистанции/atan2 и отсекает сквозные запахи сразу.
+            if let Some(room) = my_room {
+                if self.world.map.room_at(ag.pos) != Some(room) {
+                    continue;
+                }
             }
             let d = ag.pos - pos;
             let dist = d.len();
@@ -338,7 +498,9 @@ impl Arena {
             wall_l,
             wall_r,
             food_near: near,
-            wall: false,
+            // Стена прямо по курсу: обе диагональные пробы высоки (см.
+            // WALL_AHEAD_THRESHOLD). Боковая стена даёт только одну — не «прямо».
+            wall: wall_l > WALL_AHEAD_THRESHOLD && wall_r > WALL_AHEAD_THRESHOLD,
             place,
             heading,
             see_eat,
@@ -359,12 +521,34 @@ impl Arena {
         0.0
     }
 
-    /// Плодородность точки: питательные вещества × свет комнаты (0..1).
-    /// Плодородность точки из климата: тепло × свет × питание (диффузия
+    /// Плодородность точки: тепло × свет × питание (диффузия
     /// уже разнесла их по миру — растения растут и вдали от источника,
     /// пока к ним дошло тепло).
     fn fertility(&self, pos: Vec2) -> f32 {
         self.climate.fertility(pos.x, pos.y)
+    }
+
+    // ─── Мировые часы (день/ночь и сезоны, как в C3) ──────────────────────
+
+    /// Фаза суток из тика арены: Рассвет/Утро/День/Вечер/Ночь.
+    /// Формулы — `env::world_clock` (C3 `World::GetTimeOfDay`).
+    pub fn time_of_day(&self) -> TimeOfDay {
+        WorldClock::time_of_day(self.tick)
+    }
+
+    /// День внутри сезона (0..=2), из тика арены.
+    pub fn day_in_season(&self) -> u32 {
+        WorldClock::day_in_season(self.tick)
+    }
+
+    /// Сезон (Весна/Лето/Осень/Зима), из тика арены.
+    pub fn season(&self) -> Season {
+        WorldClock::season(self.tick)
+    }
+
+    /// Прогресс внутри фазы суток 0..1 (для плавных сумерек в рендере).
+    pub fn day_phase_fraction(&self) -> f32 {
+        WorldClock::day_phase_fraction(self.tick)
     }
 }
 
@@ -434,6 +618,17 @@ mod tests {
     /// L-препятствие и доедает в обоих триалах (мозг живёт между триалами,
     /// кровь сбрасывается). Раньше (без сенсора) тот же удар выжигал гоминг,
     /// и второй триал голодал у стены.
+    ///
+    /// Между триалами старые ягоды убиваются: ягода первого триала на той же
+    /// позиции (55,15) успевала отрасти (75 тиков = 3.75 с при тике 50 мс) и
+    /// перехватывала еду второго триала — существо ело СТАРУЮ ягоду, а новая
+    /// оставалась нетронутой, и тест считал триал проваленным.
+    ///
+    /// Голод на старте — 255 (потолок): при 200 существо доезжает до ягоды
+    /// с голодом ровно у порога wants_food (40) — замер: 41 при тике 25 мс,
+    /// 39 при 50 мс. Оба исхода — на грани, тест мерил не навигацию, а
+    /// везение с таймингом. Потолок даёт запас ~10 пунктов и стабильно
+    /// проверяет именно объезд L-стены.
     #[test]
     fn detour_hunt_survives_trials_with_wall_sense() {
         let mut map = WorldMap::default();
@@ -444,7 +639,11 @@ mod tests {
         a.spawn(Vec2::new(5.0, 5.0), 0.0, 1);
         for _ in 0..2 {
             a.critters[0].creature.blood = crate::body::metabolism::Blood::creature(false);
-            a.critters[0].creature.blood.conc[chem::HUNGER] = 200.0;
+            a.critters[0].creature.blood.conc[chem::HUNGER] = 255.0;
+            // Свежая ягода триала: прошлые убрать (см. док теста).
+            for id in a.berries() {
+                a.world.kill(id);
+            }
             let berry = a.add_berry(Vec2::new(55.0, 15.0));
             let h0 = a.critters[0].wall_hits;
             let mut ate = false;
@@ -563,5 +762,325 @@ mod tests {
                 .collect()
         };
         assert_eq!(run(), run(), "один сид — одна траектория");
+    }
+
+    // ─── Arena::pick (мост сим ↔ рендер: клик-выбор) ─────────────────────
+
+    /// Пикинг выбирает БЛИЖАЙШЕЕ существо в радиусе (не любое в радиусе).
+    #[test]
+    fn pick_nearest_creature() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        let mut a = Arena::new(1, map);
+        let c1 = a.spawn(Vec2::new(5.0, 5.0), 0.0, 1);
+        let c2 = a.spawn(Vec2::new(8.0, 5.0), 0.0, 2);
+        // Курсор у c1: оба в радиусе 2.0, но c1 ближе.
+        assert_eq!(a.pick(Vec2::new(6.0, 5.0), 2.0, 1.0), Some(c1));
+        // Курсор у c2: c1 уже вне радиуса (dist 4.0 > 2.0).
+        assert_eq!(a.pick(Vec2::new(9.0, 5.0), 2.0, 1.0), Some(c2));
+        // Курсор между ними, но дальше 2.0 от обоих — мимо.
+        assert_eq!(a.pick(Vec2::new(6.5, 9.0), 2.0, 1.0), None);
+    }
+
+    /// Без существ пикинг находит ягоду (живую, в радиусе).
+    #[test]
+    fn pick_berry_when_no_creature() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        let mut a = Arena::new(1, map);
+        let b1 = a.add_berry(Vec2::new(20.0, 10.0));
+        assert_eq!(a.pick(Vec2::new(20.3, 10.2), 1.0, 1.0), Some(b1));
+        // Вне радиуса ягоды — мимо.
+        assert_eq!(a.pick(Vec2::new(23.0, 10.0), 1.0, 1.0), None);
+    }
+
+    /// Пустая точка (нет ни существ, ни ягод в радиусах) — None.
+    #[test]
+    fn pick_none_in_empty_space() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        let a = Arena::new(1, map);
+        assert_eq!(a.pick(Vec2::new(10.0, 10.0), 1.0, 1.0), None);
+    }
+
+    /// Существо приоритетнее ягоды: выбираем существо, даже если ягода ближе.
+    #[test]
+    fn pick_prefers_creature_over_berry_when_both_near() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        let mut a = Arena::new(1, map);
+        let c = a.spawn(Vec2::new(5.0, 5.0), 0.0, 1);
+        a.add_berry(Vec2::new(5.4, 5.0)); // ягода ближе к курсору (5.2, 5)
+        assert_eq!(a.pick(Vec2::new(5.2, 5.0), 2.0, 2.0), Some(c));
+    }
+
+    // ─── Сон (фаза сна в Arena::step) ────────────────────────────────────
+
+    /// Сон в арене: уставшее существо (fatigue ≥ SLEEP_AT_FATIGUE) засыпает,
+    /// спит SLEEP_TICKS тиков неподвижно (нет мозга/движения/еды), просыпается
+    /// с усталостью заметно ниже порога. Метаболизм во сне стоит — дневная
+    /// усталость сбрасывается единичным `creature.sleep()` на входе.
+    ///
+    /// Усталость копит моторная активность (RATE_MOTOR): две ягоды по бокам
+    /// курса дают устойчивый симметричный запах — существо бежит вперёд
+    /// (позиция меняется наяву) и выматывается, как в `creature::tests::
+    /// activity_accumulates_fatigue` (сильный драйв без руления).
+    #[test]
+    fn tired_creature_falls_asleep_and_recovers() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 60.0, 20.0);
+        let mut arena = Arena::new(9, map);
+        arena.spawn(Vec2::new(10.0, 10.0), 0.0, 9);
+        arena.critters[0].creature.blood.conc[chem::HUNGER] = 200.0;
+        // Ягоды симметрично по бокам курса: запах слева ≈ справа, моторы гонят.
+        arena.add_berry(Vec2::new(30.0, 9.0));
+        arena.add_berry(Vec2::new(30.0, 11.0));
+
+        // Доводим до усталости: ждём, когда существо заснёт само.
+        let mut entry = None;
+        for t in 0..3000u32 {
+            arena.step();
+            if arena.critters[0].sleeping {
+                entry = Some(t);
+                break;
+            }
+        }
+        let entry = entry.expect("существо должно устать и заснуть за 3000 тиков");
+        assert!(entry > 0, "сон не наступает с первого тика (нет усталости)");
+        assert!(
+            arena.critters[0].sleep_ticks == SLEEP_TICKS,
+            "сон начинается с полного окна: {}",
+            arena.critters[0].sleep_ticks
+        );
+
+        // Сон: позиция не меняется (нет движения/еды) — наяву существо бежало,
+        // значит заморозка именно от сна. Усталость фиксируем в момент
+        // пробуждения — пока спит, метаболизм стоит, и после сна она намного
+        // ниже порога.
+        let mut woke_fatigue = None;
+        for _ in 0..SLEEP_TICKS + 3 {
+            let before = arena.critters[0].pos;
+            arena.step();
+            if arena.critters[0].sleeping {
+                assert_eq!(
+                    arena.critters[0].pos,
+                    before,
+                    "спящее существо не должно двигаться"
+                );
+            } else if woke_fatigue.is_none() {
+                woke_fatigue = Some(arena.critters[0].creature.fatigue());
+            }
+        }
+        let woke_fatigue = woke_fatigue
+            .expect("после SLEEP_TICKS+ тиков существо должно проснуться");
+        assert!(
+            woke_fatigue < SLEEP_AT_FATIGUE * 0.5,
+            "сон должен сбить усталость намного ниже порога: {woke_fatigue} (порог {SLEEP_AT_FATIGUE})"
+        );
+    }
+
+    // ─── Стены (запах/зеркало по комнатам, Sense::wall) ───────────────────
+
+    /// Запах не проходит сквозь стены: ягода в соседней комнате у общей стены
+    /// не пахнет существу в своей комнате (ягода смещена по y — без фильтра
+    /// запах был бы ~0.5); зайдя в ту же комнату, существо чувствует её.
+    /// Двери запах пока не проводят (транш 2).
+    #[test]
+    fn smell_does_not_pass_through_walls() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        map.add_room(40.0, 0.0, 80.0, 20.0);
+        let mut arena = Arena::new(3, map);
+        // Ягода в комнате B у общей стены, смещена по y (боковой запах).
+        arena.add_berry(Vec2::new(40.5, 9.0));
+
+        // Существо в комнате A у общей стены: дистанция ~1.4, но комната другая.
+        let in_a = arena.sense(Vec2::new(39.4, 10.0), 0.0, false);
+        assert_eq!(
+            in_a.smell_l + in_a.smell_r,
+            0.0,
+            "запах не должен проходить сквозь стену: {in_a:?}"
+        );
+        assert!(!in_a.food_near, "еда за стеной не «у рта»");
+
+        // Переходим в комнату B — та же ягода пахнет и «у рта».
+        let in_b = arena.sense(Vec2::new(41.0, 10.0), 0.0, false);
+        assert!(
+            in_b.smell_l + in_b.smell_r > 0.0,
+            "в той же комнате запах должен быть: {in_b:?}"
+        );
+        assert!(in_b.food_near, "в той же комнате ягода «у рта»");
+    }
+
+    /// Социальное зеркало тоже заперто стенами: сосед в той же комнате видит
+    /// едущего (see_eat), сосед за стеной — нет, даже если дистанция до едока
+    /// меньше SOCIAL_RADIUS.
+    /// (Едок на 38.0, не у самой стены: при тике 50 мс шаг движения ×2, и
+    /// со старта в 39.0 едок перелетал границу комнат за тик — ел уже в
+    /// комнате B, и зеркало для соседа в A законно не срабатывало.)
+    #[test]
+    fn see_eat_mirror_is_room_gated() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        map.add_room(40.0, 0.0, 80.0, 20.0);
+        let mut arena = Arena::new(4, map);
+        // Едок в комнате A у стены, ягода у него во рту.
+        let eater = arena.spawn(Vec2::new(38.0, 10.0), 0.0, 1);
+        arena
+            .critters
+            .iter_mut()
+            .find(|c| c.id == eater)
+            .unwrap()
+            .creature
+            .blood
+            .conc[chem::HUNGER] = 200.0;
+        arena.add_berry(Vec2::new(39.4, 10.0));
+        // Наблюдатель в той же комнате (2 юнита от едока).
+        let same = arena.spawn(Vec2::new(37.0, 10.0), 0.0, 2);
+        // Наблюдатель за стеной (2 юнита от едока, но другая комната).
+        let across = arena.spawn(Vec2::new(41.0, 10.0), 0.0, 3);
+
+        arena.step(); // едок съел → зеркало раздаёт see_eat
+
+        let idx = |id: AgentId| arena.critters.iter().position(|c| c.id == id).unwrap();
+        assert!(
+            arena.critters[idx(same)].see_eat,
+            "сосед в той же комнате должен видеть едущего"
+        );
+        assert!(
+            !arena.critters[idx(across)].see_eat,
+            "сосед за стеной не должен видеть едущего"
+        );
+    }
+
+    /// Sense::wall заполняется ареной: стена прямо по курсу (обе диагональные
+    /// пробы высоки) — true; боковая стена и открытое поле — false.
+    #[test]
+    fn wall_sense_detects_wall_ahead() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 20.0, 20.0);
+        let arena = Arena::new(5, map);
+        // Стена прямо: (18,10) курсом на +x, стена на x = 20 в ~2 юнитах.
+        let facing = arena.sense(Vec2::new(18.0, 10.0), 0.0, false);
+        assert!(facing.wall, "стена впереди должна заполнять wall: {facing:?}");
+        // Открытое поле: стены нет нигде рядом.
+        let open = arena.sense(Vec2::new(10.0, 10.0), 0.0, false);
+        assert!(!open.wall, "в открытом поле wall=false: {open:?}");
+        // Боковая стена (курс вдоль неё): только одна проба — не «прямо».
+        let lateral = arena.sense(Vec2::new(1.5, 10.0), std::f32::consts::FRAC_PI_2, false);
+        assert!(!lateral.wall, "боковая стена — не стена по курсу: {lateral:?}");
+    }
+
+    // ─── Berry-API (Arena::berry_info) ────────────────────────────────────
+
+    /// Berry-API: berry_info читает внутренние vars[] через именованные поля
+    /// (рост/отрастание/съедобность) — хост и мост рендера не трогают vars.
+    #[test]
+    fn berry_info_reports_growth_and_edibility() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        let mut arena = Arena::new(6, map);
+        let bid = arena.add_berry(Vec2::new(20.0, 10.0));
+
+        // Свежая ягода: съедобна, рост 0, отрастание 0.
+        let b = arena.berry_info(bid).expect("свежая ягода видна");
+        assert!(b.edible, "свежая ягода съедобна");
+        assert_eq!(b.growth, 0.0);
+        assert_eq!(b.regrow, 0.0);
+        assert_eq!(b.pos, Vec2::new(20.0, 10.0));
+
+        // Рост: vars[0] копит плодородие → growth виден через berry_info.
+        arena.world.agent_mut(bid).unwrap().vars[0] = 3.0;
+        let b = arena.berry_info(bid).unwrap();
+        assert_eq!(b.growth, 3.0, "growth отражает vars[0]");
+
+        // Съедена (отрастает): vars[1] > 0 → edible false, regrow виден.
+        arena.world.agent_mut(bid).unwrap().vars[1] = 40.0;
+        let b = arena.berry_info(bid).unwrap();
+        assert!(!b.edible, "отрастающая ягода не съедобна");
+        assert_eq!(b.regrow, 40.0, "regrow отражает vars[1]");
+
+        // Живой агент мира, но не ягода → None.
+        let rock = arena.world.spawn(Cls::new(2, 2, 1), Vec2::new(5.0, 5.0), "rock");
+        assert!(arena.berry_info(rock).is_none(), "не-ягода — None");
+    }
+
+    // ─── Мировые часы: день/ночь и сезоны (как в C3) ──────────────────────
+
+    /// Часы арены: сутки реальных тиков обходят фазы рассвет→…→ночь,
+    /// день в сезоне увеличивается, а год (4 сезона × 3 дня) зацикливается.
+    /// Математика фаз покрыта в `env::world_clock::tests`; здесь — связка
+    /// «тик арены → accessors Arena::{time_of_day, day_in_season, season}».
+    #[test]
+    fn world_clock_phases_and_seasons() {
+        use crate::env::TICKS_PER_DAY;
+
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 14.0);
+        let mut arena = Arena::new(1, map);
+        assert_eq!(arena.time_of_day(), TimeOfDay::Dawn, "тик 0 — рассвет");
+        assert_eq!(arena.day_in_season(), 0);
+        assert_eq!(arena.season(), Season::Spring);
+
+        // Полные сутки: фазы обошли круг, день в сезоне сдвинулся.
+        for _ in 0..TICKS_PER_DAY {
+            arena.step();
+        }
+        assert_eq!(arena.tick, TICKS_PER_DAY);
+        assert_eq!(
+            arena.time_of_day(),
+            TimeOfDay::Dawn,
+            "после суток — снова рассвет"
+        );
+        assert_eq!(arena.day_in_season(), 1, "день в сезоне увеличился");
+        assert_eq!(arena.season(), Season::Spring, "сезон ещё весенний");
+
+        // Сезон: 3 дня = 3 × TICKS_PER_DAY тиков.
+        for _ in 0..2 * TICKS_PER_DAY {
+            arena.step();
+        }
+        assert_eq!(arena.day_in_season(), 0, "сезон из 3 дней завершился");
+        assert_eq!(arena.season(), Season::Summer, "наступило лето");
+        // Доля фазы в [0, 1).
+        let f = arena.day_phase_fraction();
+        assert!((0.0..1.0).contains(&f), "фаза должна быть в [0,1): {f}");
+    }
+
+    /// Ночь гасит свет климата: в фазе Дня плодородность комнаты высокая,
+    /// в Ночь та же комната темнеет (поле света стремится к 0.15 дневного
+    /// уровня) и ягоды растут медленнее — свет движет ростом, как в C3.
+    #[test]
+    fn night_reduces_light_field() {
+        use crate::env::TICKS_PER_DAY;
+
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 14.0);
+        // Почти без распада комнат: сравниваем чисто эффект фазы суток.
+        map.rates.decay = [0.0005; 4];
+        let mut arena = Arena::new(1, map);
+        let ca = &mut arena.world.map.rooms[0].ca;
+        ca[Substance::Light.idx()] = 200.0;
+        ca[Substance::Temperature.idx()] = 200.0;
+        ca[Substance::Nutrients.idx()] = 200.0;
+
+        let phase = TICKS_PER_DAY / 5;
+        // День: часы на фазу Afternoon, даём свету устояться.
+        arena.tick = TimeOfDay::Afternoon as u64 * phase;
+        for _ in 0..100 {
+            arena.step();
+        }
+        let day_fert = arena.climate.fertility(20.0, 7.0);
+        assert!(day_fert > 0.4, "днём плодородие высокое: {day_fert}");
+
+        // Ночь: та же комната, свет почти гаснет.
+        arena.tick = TimeOfDay::Night as u64 * phase;
+        for _ in 0..100 {
+            arena.step();
+        }
+        let night_fert = arena.climate.fertility(20.0, 7.0);
+        assert!(
+            night_fert < day_fert * 0.7,
+            "ночь должна заметно снизить плодородие: {day_fert} → {night_fert}"
+        );
     }
 }

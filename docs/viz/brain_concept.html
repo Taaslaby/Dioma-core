@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мозг агента · dioma</title>
+<style>
+:root{
+  --bg0:#04060c; --bg1:#0b1322; --panel:rgba(14,21,38,.86);
+  --border:rgba(96,128,190,.22); --text:#dbe6f5; --dim:#8fa3c0; --dim2:#5f7394;
+  --accent:#41d7ff; --orange:#ffa940; --violet:#b388ff; --crimson:#ff5d8a;
+  --green:#2bd97a; --red:#ff3b5c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg0);color:var(--text);
+  font:14px/1.45 "Segoe UI",system-ui,-apple-system,sans-serif}
+#app{display:flex;flex-direction:column;height:100%}
+header{display:flex;align-items:center;gap:18px;padding:10px 18px;flex:0 0 auto;
+  background:linear-gradient(180deg,rgba(22,32,56,.96),rgba(11,17,32,.92));
+  border-bottom:1px solid var(--border)}
+.brand{font-weight:700;letter-spacing:.4px;color:var(--accent);font-size:15px;white-space:nowrap}
+.brand span{color:var(--dim);font-weight:500}
+#title{font-size:14px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tabs{margin-left:auto;display:flex;gap:6px}
+.tab{padding:6px 14px;border-radius:999px;border:1px solid var(--border);
+  background:transparent;color:var(--dim);cursor:pointer;font-size:13px;transition:.15s}
+.tab:hover{color:var(--text)}
+.tab.active{background:rgba(65,215,255,.13);color:var(--accent);border-color:rgba(65,215,255,.45)}
+main{display:flex;flex:1;min-height:0}
+#stage{position:relative;flex:1;min-width:0;background:
+  radial-gradient(1200px 800px at 50% 35%, #0d1830 0%, #070c18 55%, #04060c 100%)}
+#stage::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(0,0,0,.34) 100%)}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab}
+canvas.dragging{cursor:grabbing}
+#hint{position:absolute;left:12px;bottom:10px;font-size:11px;color:var(--dim2);
+  background:rgba(6,10,18,.55);padding:4px 10px;border-radius:8px;pointer-events:none;z-index:2}
+#side{width:272px;flex:0 0 auto;background:var(--panel);border-left:1px solid var(--border);
+  padding:14px 16px;overflow-y:auto;display:flex;flex-direction:column;gap:15px;z-index:3}
+#side section h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.8px;
+  color:var(--dim2);font-weight:600}
+.row{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:13px;color:var(--text);cursor:pointer}
+.row input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+.row input:disabled{opacity:.35;cursor:default}
+#reglist{display:flex;flex-direction:column;gap:3px;max-height:218px;overflow-y:auto;padding-right:4px}
+.reg{display:flex;align-items:center;gap:8px;font-size:12.5px;cursor:pointer;padding:2px 4px;border-radius:6px}
+.reg:hover{background:rgba(255,255,255,.05)}
+.reg input{accent-color:var(--accent);cursor:pointer}
+.reg .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+.reg .cnt{margin-left:auto;color:var(--dim);font-size:11px;font-family:ui-monospace,Consolas,monospace}
+.btnrow{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.mini{padding:4px 10px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,.03);
+  color:var(--dim);cursor:pointer;font-size:12px;transition:.15s}
+.mini:hover{color:var(--text);border-color:var(--dim)}
+input[type=range]{width:100%;accent-color:var(--accent);margin:2px 0}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--dim)}
+.note{font-size:12px;color:#ffd9a0;background:rgba(255,170,60,.08);border:1px solid rgba(255,170,60,.25);
+  padding:8px 10px;border-radius:10px;line-height:1.45}
+#legend{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--dim)}
+#legend .lrow{display:flex;align-items:center;gap:8px}
+.sw{width:18px;height:9px;border-radius:4px;flex:0 0 auto}
+.sw.dot{width:9px;height:9px;border-radius:50%}
+.sw.dash{background:repeating-linear-gradient(90deg,var(--red) 0 4px,transparent 4px 8px)}
+#metabox{font-size:11px;color:var(--dim2);border-top:1px solid var(--border);padding-top:10px;
+  word-break:break-word;white-space:pre-line;line-height:1.6}
+/* Режим презентации: тёмный фон #0a0e14, крупные подписи, авто-контраст */
+body.present{--bg0:#0a0e14;--bg1:#101624}
+body.present header{background:linear-gradient(180deg,#101826,#0a0e14)}
+body.present .tab{font-size:14px;padding:8px 18px}
+body.present #title{font-size:17px;font-weight:600}
+body.present .reg,body.present .row{font-size:14px}
+body.present #side{background:rgba(13,18,30,.9)}
+body.present #stage{background:
+  radial-gradient(1200px 800px at 50% 35%, #0f1a30 0%, #0b101c 55%, #0a0e14 100%)}
+@media (max-width:900px){#side{width:228px}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <div class="brand">dioma<span> · мозг</span></div>
+    <div id="title"></div>
+    <nav class="tabs">
+      <button class="tab" data-tab="current">Текущий мозг</button>
+      <button class="tab" data-tab="future">Концепт транш-3</button>
+    </nav>
+  </header>
+  <main>
+    <div id="stage">
+      <canvas id="cv"></canvas>
+      <div id="hint">ЛКМ — вращение · колесо — зум · 2 клика — сброс · Пробел — пауза</div>
+    </div>
+    <aside id="side">
+      <div id="note" class="note" hidden></div>
+      <section>
+        <h3>Регионы</h3>
+        <div id="reglist"></div>
+        <div class="btnrow">
+          <button id="b-sensor" class="mini">Только сенсоры</button>
+          <button id="b-motor" class="mini">Только моторы</button>
+          <button id="b-all" class="mini">Всё</button>
+        </div>
+      </section>
+      <section>
+        <h3>Фильтры</h3>
+        <label class="row"><input type="checkbox" id="f-ghost" checked> <span>Показать будущие регионы</span></label>
+        <label class="row"><input type="checkbox" id="f-labels" checked> <span>Подписи</span></label>
+        <label class="row"><input type="checkbox" id="f-links" checked> <span>Связи</span></label>
+      </section>
+      <section>
+        <h3>Оформление</h3>
+        <label class="row">Порог веса связей <span id="wt-val" class="mono"></span>
+          <input type="range" id="s-wt" min="0" max="100" value="2"></label>
+        <label class="row">Размер точек <span id="ps-val" class="mono"></span>
+          <input type="range" id="s-ps" min="50" max="300" value="100"></label>
+        <label class="row"><input type="checkbox" id="f-present"> <span>Режим презентации</span></label>
+      </section>
+      <section>
+        <h3>Легенда</h3>
+        <div id="legend"></div>
+      </section>
+      <section id="metabox"></section>
+    </aside>
+  </main>
+</div>
+
+<script>
+"use strict";
+// Данные: формат dioma_brain_viz_v1 (генерирует engine::viz::BrainViz::to_json)
+const BRAIN_CURRENT = {"version":"dioma_brain_viz_v1","meta":{"seed":42,"ticks_measured":600,"n_synapses":957,"title":"Мозг агента · сид 42 · 120 нейронов · 957 синапсов","note":""},"regions":[{"label":"SL","kind":"sensor","ghost":0,"inhibitory":0,"center":[-60,-60,0],"radius":15},{"label":"SR","kind":"sensor","ghost":0,"inhibitory":0,"center":[60,-60,0],"radius":15},{"label":"WL","kind":"sensor","ghost":0,"inhibitory":0,"center":[-30,-75,0],"radius":12},{"label":"WR","kind":"sensor","ghost":0,"inhibitory":0,"center":[30,-75,0],"radius":12},{"label":"I","kind":"inter","ghost":0,"inhibitory":1,"center":[0,-30,0],"radius":12},{"label":"ML","kind":"motor","ghost":0,"inhibitory":0,"center":[-60,60,0],"radius":15},{"label":"MR","kind":"motor","ghost":0,"inhibitory":0,"center":[60,60,0],"radius":15}],"neurons":[{"id":0,"region":0,"inh":0,"act":0.139,"pos":[-61.3238,-58.9077,15.8741]},{"id":1,"region":0,"inh":0,"act":0.139,"pos":[-60.559,-59.4345,11.0497]},{"id":2,"region":0,"inh":0,"act":0.139,"pos":[-66.6467,-61.3479,11.5627]},{"id":3,"region":0,"inh":0,"act":0.139,"pos":[-55.9381,-56.3711,10.8793]},{"id":4,"region":0,"inh":0,"act":0.139,"pos":[-64.982,-53.5354,11.2213]},{"id":5,"region":0,"inh":0,"act":0.139,"pos":[-60.8367,-56.5958,8.7724]},{"id":6,"region":0,"inh":0,"act":0.139,"pos":[-67.4099,-59.849,6.956]},{"id":7,"region":0,"inh":0,"act":0.139,"pos":[-58.3267,-63.9834,10.4511]},{"id":8,"region":0,"inh":0,"act":0.139,"pos":[-62.8469,-59.297,8.0384]},{"id":9,"region":0,"inh":0,"act":0.139,"pos":[-60.6892,-57.2866,3.4702]},{"id":10,"region":0,"inh":0,"act":0.139,"pos":[-64.2544,-65.1916,11.9016]},{"id":11,"region":0,"inh":0,"act":0.139,"pos":[-63.5799,-62.5369,4.3896]},{"id":12,"region":0,"inh":0,"act":0.139,"pos":[-65.6512,-55.1421,6.6275]},{"id":13,"region":0,"inh":0,"act":0.139,"pos":[-66.0669,-57.7559,14.1754]},{"id":14,"region":0,"inh":0,"act":0.139,"pos":[-60.8418,-64.41,7.0707]},{"id":15,"region":0,"inh":0,"act":0.139,"pos":[-59.8501,-54.0629,13.2881]},{"id":16,"region":0,"inh":0,"act":0.139,"pos":[-56.8927,-60.4179,4.0662]},{"id":17,"region":0,"inh":0,"act":0.139,"pos":[-55.1086,-59.8604,8.5915]},{"id":18,"region":0,"inh":0,"act":0.139,"pos":[-59.2431,-61.9311,14.5109]},{"id":19,"region":0,"inh":0,"act":0.139,"pos":[-58.7516,-53.06,6.57]},{"id":20,"region":1,"inh":0,"act":0.139,"pos":[60.9376,-53.4035,10.921]},{"id":21,"region":1,"inh":0,"act":0.139,"pos":[64.9004,-58.1353,12.0734]},{"id":22,"region":1,"inh":0,"act":0.139,"pos":[56.7291,-62.7657,14.9599]},{"id":23,"region":1,"inh":0,"act":0.139,"pos":[52.3837,-59.6333,9.0166]},{"id":24,"region":1,"inh":0,"act":0.139,"pos":[62.8901,-62.6737,5.8065]},{"id":25,"region":1,"inh":0,"act":0.139,"pos":[54.4386,-55.2327,6.61]},{"id":26,"region":1,"inh":0,"act":0.139,"pos":[62.0868,-54.7149,5.7913]},{"id":27,"region":1,"inh":0,"act":0.139,"pos":[57.3105,-65.63,10.6994]},{"id":28,"region":1,"inh":0,"act":0.139,"pos":[54.6641,-57.4324,13.8472]},{"id":29,"region":1,"inh":0,"act":0.139,"pos":[59.5245,-57.9639,11.2274]},{"id":30,"region":1,"inh":0,"act":0.139,"pos":[60.1392,-59.6197,8.4466]},{"id":31,"region":1,"inh":0,"act":0.139,"pos":[65.1776,-58.7425,7.0665]},{"id":32,"region":1,"inh":0,"act":0.139,"pos":[55.0329,-63.1648,7.142]},{"id":33,"region":1,"inh":0,"act":0.139,"pos":[58.3179,-61.5021,3.9904]},{"id":34,"region":1,"inh":0,"act":0.139,"pos":[56.3782,-53.1062,11.1315]},{"id":35,"region":1,"inh":0,"act":0.139,"pos":[58.0145,-56.6167,4.1994]},{"id":36,"region":1,"inh":0,"act":0.139,"pos":[62.2594,-65.3173,9.7893]},{"id":37,"region":1,"inh":0,"act":0.139,"pos":[60.6514,-57.5546,16.163]},{"id":38,"region":1,"inh":0,"act":0.139,"pos":[63.5434,-62.7351,13.7838]},{"id":39,"region":1,"inh":0,"act":0.139,"pos":[57.3308,-60.5417,11.097]},{"id":40,"region":2,"inh":0,"act":0.0833,"pos":[-30.0439,-76.1761,4.9855]},{"id":41,"region":2,"inh":0,"act":0.0833,"pos":[-31.7546,-68.0834,10.0073]},{"id":42,"region":2,"inh":0,"act":0.0833,"pos":[-36.3745,-71.3036,4.6626]},{"id":43,"region":2,"inh":0,"act":0.0833,"pos":[-34.5026,-76.9879,3.7033]},{"id":44,"region":2,"inh":0,"act":0.0833,"pos":[-32.8481,-72.6617,9.6421]},{"id":45,"region":2,"inh":0,"act":0.0833,"pos":[-29.5238,-70.7307,3.7405]},{"id":46,"region":2,"inh":0,"act":0.0833,"pos":[-31.1698,-74.3773,14.7011]},{"id":47,"region":2,"inh":0,"act":0.0833,"pos":[-37.159,-78.659,7.6545]},{"id":48,"region":2,"inh":0,"act":0.0833,"pos":[-33.968,-78.4827,11.5576]},{"id":49,"region":2,"inh":0,"act":0.0833,"pos":[-38.1681,-72.6765,11.2509]},{"id":50,"region":2,"inh":0,"act":0.0833,"pos":[-29.3826,-79.8138,9.1536]},{"id":51,"region":2,"inh":0,"act":0.0833,"pos":[-26.3639,-73.5982,9.8868]},{"id":52,"region":3,"inh":0,"act":0.0833,"pos":[32.8115,-81.1049,4.6828]},{"id":53,"region":3,"inh":0,"act":0.0833,"pos":[36.6216,-76.5729,8.6998]},{"id":54,"region":3,"inh":0,"act":0.0833,"pos":[29.5485,-74.3416,5.7065]},{"id":55,"region":3,"inh":0,"act":0.0833,"pos":[28.4492,-69.5042,11.076]},{"id":56,"region":3,"inh":0,"act":0.0833,"pos":[26.963,-77.5403,2.5023]},{"id":57,"region":3,"inh":0,"act":0.0833,"pos":[24.1872,-74.4326,9.0265]},{"id":58,"region":3,"inh":0,"act":0.0833,"pos":[30.7226,-74.9054,13.6022]},{"id":59,"region":3,"inh":0,"act":0.0833,"pos":[31.4381,-76.624,9.0571]},{"id":60,"region":3,"inh":0,"act":0.0833,"pos":[27.4769,-80.6321,9.6892]},{"id":61,"region":3,"inh":0,"act":0.0833,"pos":[34.761,-70.1872,8.5814]},{"id":62,"region":3,"inh":0,"act":0.0833,"pos":[28.7323,-69.9585,4.2102]},{"id":63,"region":3,"inh":0,"act":0.0833,"pos":[34.2798,-74.3361,1.9872]},{"id":64,"region":4,"inh":1,"act":0.0603,"pos":[-4.5421,-27.8909,1.2442]},{"id":65,"region":4,"inh":1,"act":0.07,"pos":[-4.4363,-23.5537,5.0769]},{"id":66,"region":4,"inh":1,"act":0.0563,"pos":[1.2471,-20.4741,6.2495]},{"id":67,"region":4,"inh":1,"act":0.0563,"pos":[-4.0704,-23.3844,11.3611]},{"id":68,"region":4,"inh":1,"act":0.0563,"pos":[7.3291,-25.0792,6.5049]},{"id":69,"region":4,"inh":1,"act":0.0603,"pos":[2.6021,-25.1433,1.6362]},{"id":70,"region":4,"inh":1,"act":0.07,"pos":[5.5587,-31.8525,4.8314]},{"id":71,"region":4,"inh":1,"act":0.0563,"pos":[5.7184,-30.1621,11.6619]},{"id":72,"region":4,"inh":1,"act":0.0606,"pos":[0.2169,-27.8293,6.3255]},{"id":73,"region":4,"inh":1,"act":0.0606,"pos":[0.3394,-34.713,9.7828]},{"id":74,"region":4,"inh":1,"act":0.07,"pos":[1.6354,-31.0902,-0.1595]},{"id":75,"region":4,"inh":1,"act":0.0563,"pos":[1.0037,-27.8102,9.0088]},{"id":76,"region":4,"inh":1,"act":0.07,"pos":[-6.1125,-30.144,8.6132]},{"id":77,"region":4,"inh":1,"act":0.0563,"pos":[-1.5196,-29.3692,14.0004]},{"id":78,"region":4,"inh":1,"act":0.0563,"pos":[3.0409,-23.2714,12.2699]},{"id":79,"region":4,"inh":1,"act":0.0606,"pos":[-2.2325,-33.5402,4.4654]},{"id":80,"region":5,"inh":0,"act":0,"pos":[-59.8321,59.9559,2.6215]},{"id":81,"region":5,"inh":0,"act":0,"pos":[-62.7668,65.796,2.7056]},{"id":82,"region":5,"inh":0,"act":0,"pos":[-57.9971,61.7858,5.9093]},{"id":83,"region":5,"inh":0,"act":0,"pos":[-64.1644,65.7568,7.5094]},{"id":84,"region":5,"inh":0,"act":0,"pos":[-56.6022,65.9412,4.8828]},{"id":85,"region":5,"inh":0,"act":0.06,"pos":[-62.2478,55.7215,8.9648]},{"id":86,"region":5,"inh":0,"act":0,"pos":[-60.3019,63.4366,9.5813]},{"id":87,"region":5,"inh":0,"act":0,"pos":[-62.2732,59.6859,12.3532]},{"id":88,"region":5,"inh":0,"act":0,"pos":[-66.5714,59.8343,12.2975]},{"id":89,"region":5,"inh":0,"act":0.0606,"pos":[-58.9934,58.6171,14.5531]},{"id":90,"region":5,"inh":0,"act":0,"pos":[-55.2158,59.5207,9.1449]},{"id":91,"region":5,"inh":0,"act":0,"pos":[-60.1029,68.9743,8.6685]},{"id":92,"region":5,"inh":0,"act":0.015,"pos":[-64.1406,58.2236,4.8586]},{"id":93,"region":5,"inh":0,"act":0,"pos":[-61.9228,64.585,15.1039]},{"id":94,"region":5,"inh":0,"act":0,"pos":[-65.9096,66.3999,11.6234]},{"id":95,"region":5,"inh":0,"act":0,"pos":[-57.9687,66.2158,12.562]},{"id":96,"region":5,"inh":0,"act":0,"pos":[-55.1946,63.1407,11.0756]},{"id":97,"region":5,"inh":0,"act":0.074,"pos":[-57.4072,56.2395,7.6711]},{"id":98,"region":5,"inh":0,"act":0,"pos":[-62.3577,61.3399,8.0083]},{"id":99,"region":5,"inh":0,"act":0,"pos":[-66.859,61.6001,6.0933]},{"id":100,"region":6,"inh":0,"act":0.013,"pos":[58.7975,58.7971,16.548]},{"id":101,"region":6,"inh":0,"act":0,"pos":[55.9017,65.3273,7.4035]},{"id":102,"region":6,"inh":0,"act":0,"pos":[55.7146,61.9118,13.2424]},{"id":103,"region":6,"inh":0,"act":0.0697,"pos":[57.7915,54.2888,7.3528]},{"id":104,"region":6,"inh":0,"act":0,"pos":[59.9048,60.7399,3.108]},{"id":105,"region":6,"inh":0,"act":0.042,"pos":[60.8202,55.4404,4.5072]},{"id":106,"region":6,"inh":0,"act":0,"pos":[59.8529,58.9536,7.4707]},{"id":107,"region":6,"inh":0,"act":0,"pos":[58.1525,65.2434,12.1171]},{"id":108,"region":6,"inh":0,"act":0.06,"pos":[64.2056,56.5205,11.6132]},{"id":109,"region":6,"inh":0,"act":0,"pos":[63.5299,60.6546,14.369]},{"id":110,"region":6,"inh":0,"act":0,"pos":[65.1038,57.5977,7.1913]},{"id":111,"region":6,"inh":0,"act":0,"pos":[52.9286,59.2305,11.3407]},{"id":112,"region":6,"inh":0,"act":0.0767,"pos":[61.5079,53.2445,12.1322]},{"id":113,"region":6,"inh":0,"act":0.0397,"pos":[57.781,58.1456,10.3794]},{"id":114,"region":6,"inh":0,"act":0,"pos":[53.5207,57.7141,6.7844]},{"id":115,"region":6,"inh":0,"act":0,"pos":[63.4114,62.6968,6.6408]},{"id":116,"region":6,"inh":0,"act":0.06,"pos":[56.6511,54.368,13.1747]},{"id":117,"region":6,"inh":0,"act":0,"pos":[56.0049,61.7849,5.2473]},{"id":118,"region":6,"inh":0,"act":0,"pos":[60.7809,60.6414,11.0618]},{"id":119,"region":6,"inh":0,"act":0,"pos":[62.3149,64.6825,9.638]}],"links":[{"pre":0,"post":64,"w":1.3078,"inh":0},{"pre":0,"post":65,"w":2.7302,"inh":0},{"pre":0,"post":66,"w":0.8259,"inh":0},{"pre":0,"post":67,"w":18.4045,"inh":0},{"pre":0,"post":68,"w":0.313,"inh":0},{"pre":0,"post":69,"w":0.3395,"inh":0},{"pre":0,"post":70,"w":4.253,"inh":0},{"pre":0,"post":71,"w":0.8585,"inh":0},{"pre":0,"post":72,"w":3.9047,"inh":0},{"pre":0,"post":73,"w":2.2542,"inh":0},{"pre":0,"post":74,"w":6.0786,"inh":0},{"pre":0,"post":75,"w":4.8795,"inh":0},{"pre":0,"post":76,"w":230.5808,"inh":0},{"pre":0,"post":77,"w":1.9456,"inh":0},{"pre":0,"post":78,"w":0.3114,"inh":0},{"pre":0,"post":79,"w":4.2664,"inh":0},{"pre":0,"post":85,"w":1.7673,"inh":0},{"pre":0,"post":92,"w":0.366,"inh":0},{"pre":0,"post":97,"w":137.2189,"inh":0},{"pre":1,"post":64,"w":2.0983,"inh":0},{"pre":1,"post":65,"w":1.083,"inh":0},{"pre":1,"post":66,"w":2.1527,"inh":0},{"pre":1,"post":67,"w":2.7972,"inh":0},{"pre":1,"post":68,"w":4.0848,"inh":0},{"pre":1,"post":69,"w":0.6914,"inh":0},{"pre":1,"post":70,"w":0.3074,"inh":0},{"pre":1,"post":71,"w":1.9197,"inh":0},{"pre":1,"post":72,"w":0.1,"inh":0},{"pre":1,"post":73,"w":0.3617,"inh":0},{"pre":1,"post":74,"w":49.1025,"inh":0},{"pre":1,"post":75,"w":1.6484,"inh":0},{"pre":1,"post":76,"w":0.3677,"inh":0},{"pre":1,"post":77,"w":2.9523,"inh":0},{"pre":1,"post":78,"w":1.2015,"inh":0},{"pre":1,"post":79,"w":0.9076,"inh":0},{"pre":1,"post":85,"w":0.2686,"inh":0},{"pre":1,"post":97,"w":5.7073,"inh":0},{"pre":2,"post":64,"w":0.3943,"inh":0},{"pre":2,"post":65,"w":4.5558,"inh":0},{"pre":2,"post":66,"w":2.9666,"inh":0},{"pre":2,"post":67,"w":0.2593,"inh":0},{"pre":2,"post":68,"w":4.3684,"inh":0},{"pre":2,"post":69,"w":8.7438,"inh":0},{"pre":2,"post":70,"w":14.4537,"inh":0},{"pre":2,"post":71,"w":34.0276,"inh":0},{"pre":2,"post":72,"w":0.2135,"inh":0},{"pre":2,"post":73,"w":2.8683,"inh":0},{"pre":2,"post":74,"w":41.3473,"inh":0},{"pre":2,"post":75,"w":0.9716,"inh":0},{"pre":2,"post":76,"w":0.1315,"inh":0},{"pre":2,"post":77,"w":0.3915,"inh":0},{"pre":2,"post":78,"w":1.4108,"inh":0},{"pre":2,"post":79,"w":4.527,"inh":0},{"pre":2,"post":85,"w":27.6993,"inh":0},{"pre":2,"post":89,"w":23.4002,"inh":0},{"pre":2,"post":97,"w":4.9636,"inh":0},{"pre":3,"post":64,"w":0.1146,"inh":0},{"pre":3,"post":65,"w":38.8057,"inh":0},{"pre":3,"post":66,"w":0.4394,"inh":0},{"pre":3,"post":67,"w":0.1778,"inh":0},{"pre":3,"post":68,"w":0.998,"inh":0},{"pre":3,"post":69,"w":1.0243,"inh":0},{"pre":3,"post":70,"w":2.7726,"inh":0},{"pre":3,"post":71,"w":18.4621,"inh":0},{"pre":3,"post":72,"w":0.6792,"inh":0},{"pre":3,"post":73,"w":3.4132,"inh":0},{"pre":3,"post":74,"w":3.3,"inh":0},{"pre":3,"post":75,"w":3.0218,"inh":0},{"pre":3,"post":76,"w":14.9276,"inh":0},{"pre":3,"post":77,"w":1.5002,"inh":0},{"pre":3,"post":78,"w":13.8224,"inh":0},{"pre":3,"post":79,"w":0.3227,"inh":0},{"pre":3,"post":85,"w":8.0366,"inh":0},{"pre":3,"post":89,"w":0.3645,"inh":0},{"pre":3,"post":97,"w":1.7305,"inh":0},{"pre":4,"post":64,"w":3.9341,"inh":0},{"pre":4,"post":65,"w":5.7064,"inh":0},{"pre":4,"post":66,"w":1.3421,"inh":0},{"pre":4,"post":67,"w":0.1009,"inh":0},{"pre":4,"post":68,"w":0.5782,"inh":0},{"pre":4,"post":69,"w":0.7289,"inh":0},{"pre":4,"post":70,"w":0.1,"inh":0},{"pre":4,"post":71,"w":0.6624,"inh":0},{"pre":4,"post":72,"w":39.1123,"inh":0},{"pre":4,"post":73,"w":36.9466,"inh":0},{"pre":4,"post":74,"w":1.9192,"inh":0},{"pre":4,"post":75,"w":2.9859,"inh":0},{"pre":4,"post":76,"w":0.2824,"inh":0},{"pre":4,"post":77,"w":1.8771,"inh":0},{"pre":4,"post":78,"w":16.0435,"inh":0},{"pre":4,"post":79,"w":0.3723,"inh":0},{"pre":4,"post":85,"w":18.7561,"inh":0},{"pre":4,"post":89,"w":4.0004,"inh":0},{"pre":4,"post":97,"w":0.4111,"inh":0},{"pre":5,"post":64,"w":13.3538,"inh":0},{"pre":5,"post":65,"w":9.8187,"inh":0},{"pre":5,"post":66,"w":22.8378,"inh":0},{"pre":5,"post":67,"w":1.2594,"inh":0},{"pre":5,"post":68,"w":8.1637,"inh":0},{"pre":5,"post":69,"w":2.9046,"inh":0},{"pre":5,"post":70,"w":0.7753,"inh":0},{"pre":5,"post":71,"w":0.5483,"inh":0},{"pre":5,"post":72,"w":10.5856,"inh":0},{"pre":5,"post":73,"w":0.2134,"inh":0},{"pre":5,"post":74,"w":1.0875,"inh":0},{"pre":5,"post":75,"w":6.0265,"inh":0},{"pre":5,"post":76,"w":0.796,"inh":0},{"pre":5,"post":77,"w":1.0652,"inh":0},{"pre":5,"post":78,"w":0.2114,"inh":0},{"pre":5,"post":79,"w":1.4302,"inh":0},{"pre":5,"post":85,"w":1.3492,"inh":0},{"pre":5,"post":97,"w":11.6498,"inh":0},{"pre":6,"post":64,"w":0.1414,"inh":0},{"pre":6,"post":65,"w":0.368,"inh":0},{"pre":6,"post":66,"w":0.7848,"inh":0},{"pre":6,"post":67,"w":4.7663,"inh":0},{"pre":6,"post":68,"w":21.0649,"inh":0},{"pre":6,"post":69,"w":4.7886,"inh":0},{"pre":6,"post":70,"w":1.1487,"inh":0},{"pre":6,"post":71,"w":0.8487,"inh":0},{"pre":6,"post":72,"w":11.9415,"inh":0},{"pre":6,"post":73,"w":3.1565,"inh":0},{"pre":6,"post":74,"w":0.4306,"inh":0},{"pre":6,"post":75,"w":0.6092,"inh":0},{"pre":6,"post":76,"w":0.5121,"inh":0},{"pre":6,"post":77,"w":1.7128,"inh":0},{"pre":6,"post":78,"w":0.4037,"inh":0},{"pre":6,"post":79,"w":2.3587,"inh":0},{"pre":6,"post":85,"w":0.4655,"inh":0},{"pre":6,"post":92,"w":4.7542,"inh":0},{"pre":6,"post":97,"w":2.2486,"inh":0},{"pre":7,"post":64,"w":15.3459,"inh":0},{"pre":7,"post":65,"w":2.3672,"inh":0},{"pre":7,"post":66,"w":24.6548,"inh":0},{"pre":7,"post":67,"w":0.2926,"inh":0},{"pre":7,"post":68,"w":9.0553,"inh":0},{"pre":7,"post":69,"w":1.0331,"inh":0},{"pre":7,"post":70,"w":0.3079,"inh":0},{"pre":7,"post":71,"w":43.6454,"inh":0},{"pre":7,"post":72,"w":0.4135,"inh":0},{"pre":7,"post":73,"w":0.2761,"inh":0},{"pre":7,"post":74,"w":0.2785,"inh":0},{"pre":7,"post":75,"w":1.0094,"inh":0},{"pre":7,"post":76,"w":0.7908,"inh":0},{"pre":7,"post":77,"w":1.8198,"inh":0},{"pre":7,"post":78,"w":2.7767,"inh":0},{"pre":7,"post":79,"w":0.7425,"inh":0},{"pre":7,"post":85,"w":0.4508,"inh":0},{"pre":7,"post":89,"w":0.1053,"inh":0},{"pre":7,"post":97,"w":7.0547,"inh":0},{"pre":8,"post":64,"w":36.6046,"inh":0},{"pre":8,"post":65,"w":49.4688,"inh":0},{"pre":8,"post":66,"w":0.8612,"inh":0},{"pre":8,"post":67,"w":0.8248,"inh":0},{"pre":8,"post":68,"w":1.0438,"inh":0},{"pre":8,"post":69,"w":0.7924,"inh":0},{"pre":8,"post":70,"w":1.2003,"inh":0},{"pre":8,"post":71,"w":1.0359,"inh":0},{"pre":8,"post":72,"w":25.3261,"inh":0},{"pre":8,"post":73,"w":0.5436,"inh":0},{"pre":8,"post":74,"w":0.3167,"inh":0},{"pre":8,"post":75,"w":1.3522,"inh":0},{"pre":8,"post":76,"w":6.0263,"inh":0},{"pre":8,"post":77,"w":0.4881,"inh":0},{"pre":8,"post":78,"w":0.3625,"inh":0},{"pre":8,"post":79,"w":2.6454,"inh":0},{"pre":8,"post":85,"w":0.5353,"inh":0},{"pre":8,"post":97,"w":0.1,"inh":0},{"pre":9,"post":64,"w":10.5121,"inh":0},{"pre":9,"post":65,"w":2.4613,"inh":0},{"pre":9,"post":66,"w":1.6111,"inh":0},{"pre":9,"post":67,"w":0.3748,"inh":0},{"pre":9,"post":68,"w":0.6621,"inh":0},{"pre":9,"post":69,"w":0.9569,"inh":0},{"pre":9,"post":70,"w":1.0217,"inh":0},{"pre":9,"post":71,"w":1.4591,"inh":0},{"pre":9,"post":72,"w":21.3627,"inh":0},{"pre":9,"post":73,"w":1.1186,"inh":0},{"pre":9,"post":74,"w":6.1994,"inh":0},{"pre":9,"post":75,"w":0.7587,"inh":0},{"pre":9,"post":76,"w":3.1431,"inh":0},{"pre":9,"post":77,"w":4.7806,"inh":0},{"pre":9,"post":78,"w":0.4656,"inh":0},{"pre":9,"post":79,"w":5.7286,"inh":0},{"pre":9,"post":85,"w":0.5053,"inh":0},{"pre":9,"post":97,"w":17.9317,"inh":0},{"pre":10,"post":64,"w":1.6169,"inh":0},{"pre":10,"post":65,"w":1.3214,"inh":0},{"pre":10,"post":66,"w":0.3312,"inh":0},{"pre":10,"post":67,"w":2.0176,"inh":0},{"pre":10,"post":68,"w":23.5316,"inh":0},{"pre":10,"post":69,"w":0.802,"inh":0},{"pre":10,"post":70,"w":30.2188,"inh":0},{"pre":10,"post":71,"w":0.1,"inh":0},{"pre":10,"post":72,"w":0.1,"inh":0},{"pre":10,"post":73,"w":0.2804,"inh":0},{"pre":10,"post":74,"w":0.428,"inh":0},{"pre":10,"post":75,"w":8.9162,"inh":0},{"pre":10,"post":76,"w":0.5856,"inh":0},{"pre":10,"post":77,"w":5.299,"inh":0},{"pre":10,"post":78,"w":2.1065,"inh":0},{"pre":10,"post":79,"w":55.3506,"inh":0},{"pre":10,"post":85,"w":1.7657,"inh":0},{"pre":10,"post":89,"w":69.5458,"inh":0},{"pre":10,"post":97,"w":19.3569,"inh":0},{"pre":11,"post":64,"w":0.4202,"inh":0},{"pre":11,"post":65,"w":6.294,"inh":0},{"pre":11,"post":66,"w":8.3867,"inh":0},{"pre":11,"post":67,"w":4.8935,"inh":0},{"pre":11,"post":68,"w":14.4895,"inh":0},{"pre":11,"post":69,"w":15.2819,"inh":0},{"pre":11,"post":70,"w":44.3484,"inh":0},{"pre":11,"post":71,"w":2.5889,"inh":0},{"pre":11,"post":72,"w":1.5958,"inh":0},{"pre":11,"post":73,"w":3.6695,"inh":0},{"pre":11,"post":74,"w":0.1828,"inh":0},{"pre":11,"post":75,"w":0.1,"inh":0},{"pre":11,"post":76,"w":0.5097,"inh":0},{"pre":11,"post":77,"w":0.5178,"inh":0},{"pre":11,"post":78,"w":8.8881,"inh":0},{"pre":11,"post":79,"w":2.5957,"inh":0},{"pre":11,"post":85,"w":0.3415,"inh":0},{"pre":11,"post":97,"w":0.1561,"inh":0},{"pre":12,"post":64,"w":0.1044,"inh":0},{"pre":12,"post":65,"w":5.3071,"inh":0},{"pre":12,"post":66,"w":4.0378,"inh":0},{"pre":12,"post":67,"w":5.9929,"inh":0},{"pre":12,"post":68,"w":0.8288,"inh":0},{"pre":12,"post":69,"w":1.169,"inh":0},{"pre":12,"post":70,"w":0.1079,"inh":0},{"pre":12,"post":71,"w":22.441,"inh":0},{"pre":12,"post":72,"w":0.6084,"inh":0},{"pre":12,"post":73,"w":5.6924,"inh":0},{"pre":12,"post":74,"w":1.9005,"inh":0},{"pre":12,"post":75,"w":5.6433,"inh":0},{"pre":12,"post":76,"w":0.8851,"inh":0},{"pre":12,"post":77,"w":0.4217,"inh":0},{"pre":12,"post":78,"w":10.1987,"inh":0},{"pre":12,"post":79,"w":42.9517,"inh":0},{"pre":12,"post":85,"w":0.623,"inh":0},{"pre":12,"post":97,"w":4.4482,"inh":0},{"pre":13,"post":64,"w":0.346,"inh":0},{"pre":13,"post":65,"w":0.3806,"inh":0},{"pre":13,"post":66,"w":1.0677,"inh":0},{"pre":13,"post":67,"w":12.0857,"inh":0},{"pre":13,"post":68,"w":0.761,"inh":0},{"pre":13,"post":69,"w":0.4127,"inh":0},{"pre":13,"post":70,"w":0.226,"inh":0},{"pre":13,"post":71,"w":0.9069,"inh":0},{"pre":13,"post":72,"w":2.5115,"inh":0},{"pre":13,"post":73,"w":3.076,"inh":0},{"pre":13,"post":74,"w":0.2501,"inh":0},{"pre":13,"post":75,"w":1.0844,"inh":0},{"pre":13,"post":76,"w":4.9306,"inh":0},{"pre":13,"post":77,"w":0.9658,"inh":0},{"pre":13,"post":78,"w":3.4918,"inh":0},{"pre":13,"post":79,"w":1.214,"inh":0},{"pre":13,"post":85,"w":17.5532,"inh":0},{"pre":13,"post":89,"w":0.1757,"inh":0},{"pre":13,"post":97,"w":0.8932,"inh":0},{"pre":14,"post":64,"w":0.1,"inh":0},{"pre":14,"post":65,"w":0.2392,"inh":0},{"pre":14,"post":66,"w":1.973,"inh":0},{"pre":14,"post":67,"w":3.2221,"inh":0},{"pre":14,"post":68,"w":0.4108,"inh":0},{"pre":14,"post":69,"w":0.4491,"inh":0},{"pre":14,"post":70,"w":9.1562,"inh":0},{"pre":14,"post":71,"w":0.6855,"inh":0},{"pre":14,"post":72,"w":1.2529,"inh":0},{"pre":14,"post":73,"w":36.6752,"inh":0},{"pre":14,"post":74,"w":0.2056,"inh":0},{"pre":14,"post":75,"w":0.2164,"inh":0},{"pre":14,"post":76,"w":1.5031,"inh":0},{"pre":14,"post":77,"w":0.8439,"inh":0},{"pre":14,"post":78,"w":1.359,"inh":0},{"pre":14,"post":79,"w":3.4231,"inh":0},{"pre":14,"post":85,"w":1.5301,"inh":0},{"pre":14,"post":89,"w":0.1745,"inh":0},{"pre":14,"post":97,"w":1.3823,"inh":0},{"pre":15,"post":64,"w":0.3061,"inh":0},{"pre":15,"post":65,"w":0.1647,"inh":0},{"pre":15,"post":66,"w":21.8202,"inh":0},{"pre":15,"post":67,"w":2.5293,"inh":0},{"pre":15,"post":68,"w":26.1488,"inh":0},{"pre":15,"post":69,"w":0.7716,"inh":0},{"pre":15,"post":70,"w":4.2448,"inh":0},{"pre":15,"post":71,"w":1.0394,"inh":0},{"pre":15,"post":72,"w":0.8318,"inh":0},{"pre":15,"post":73,"w":5.6773,"inh":0},{"pre":15,"post":74,"w":0.1,"inh":0},{"pre":15,"post":75,"w":0.3317,"inh":0},{"pre":15,"post":76,"w":0.1011,"inh":0},{"pre":15,"post":77,"w":2.4857,"inh":0},{"pre":15,"post":78,"w":53.9158,"inh":0},{"pre":15,"post":79,"w":21.834,"inh":0},{"pre":15,"post":85,"w":0.11,"inh":0},{"pre":15,"post":89,"w":1.1826,"inh":0},{"pre":15,"post":97,"w":4.6477,"inh":0},{"pre":16,"post":64,"w":6.817,"inh":0},{"pre":16,"post":65,"w":0.1408,"inh":0},{"pre":16,"post":66,"w":10.4756,"inh":0},{"pre":16,"post":67,"w":1.1407,"inh":0},{"pre":16,"post":68,"w":0.1039,"inh":0},{"pre":16,"post":69,"w":6.3018,"inh":0},{"pre":16,"post":70,"w":1.926,"inh":0},{"pre":16,"post":71,"w":10.354,"inh":0},{"pre":16,"post":72,"w":36.1969,"inh":0},{"pre":16,"post":73,"w":2.1141,"inh":0},{"pre":16,"post":74,"w":3.2666,"inh":0},{"pre":16,"post":75,"w":0.4655,"inh":0},{"pre":16,"post":76,"w":11.6817,"inh":0},{"pre":16,"post":77,"w":0.5371,"inh":0},{"pre":16,"post":78,"w":0.2501,"inh":0},{"pre":16,"post":79,"w":1.0816,"inh":0},{"pre":16,"post":85,"w":0.5174,"inh":0},{"pre":16,"post":97,"w":5.0599,"inh":0},{"pre":17,"post":64,"w":0.6875,"inh":0},{"pre":17,"post":65,"w":4.111,"inh":0},{"pre":17,"post":66,"w":8.9685,"inh":0},{"pre":17,"post":67,"w":0.5748,"inh":0},{"pre":17,"post":68,"w":0.2724,"inh":0},{"pre":17,"post":69,"w":0.2745,"inh":0},{"pre":17,"post":70,"w":0.3944,"inh":0},{"pre":17,"post":71,"w":1.8259,"inh":0},{"pre":17,"post":72,"w":1.2266,"inh":0},{"pre":17,"post":73,"w":14.2212,"inh":0},{"pre":17,"post":74,"w":53.9615,"inh":0},{"pre":17,"post":75,"w":4.2072,"inh":0},{"pre":17,"post":76,"w":1.4803,"inh":0},{"pre":17,"post":77,"w":7.2531,"inh":0},{"pre":17,"post":78,"w":0.1823,"inh":0},{"pre":17,"post":79,"w":18.1756,"inh":0},{"pre":17,"post":85,"w":2.0641,"inh":0},{"pre":17,"post":89,"w":1.8091,"inh":0},{"pre":17,"post":97,"w":39.3801,"inh":0},{"pre":18,"post":64,"w":0.8646,"inh":0},{"pre":18,"post":65,"w":4.1126,"inh":0},{"pre":18,"post":66,"w":24.6447,"inh":0},{"pre":18,"post":67,"w":1.1287,"inh":0},{"pre":18,"post":68,"w":11.0166,"inh":0},{"pre":18,"post":69,"w":1.0965,"inh":0},{"pre":18,"post":70,"w":0.6751,"inh":0},{"pre":18,"post":71,"w":13.491,"inh":0},{"pre":18,"post":72,"w":13.119,"inh":0},{"pre":18,"post":73,"w":1.6805,"inh":0},{"pre":18,"post":74,"w":0.5064,"inh":0},{"pre":18,"post":75,"w":4.0008,"inh":0},{"pre":18,"post":76,"w":0.1832,"inh":0},{"pre":18,"post":77,"w":2.4762,"inh":0},{"pre":18,"post":78,"w":1.4761,"inh":0},{"pre":18,"post":79,"w":2.3865,"inh":0},{"pre":18,"post":85,"w":0.8712,"inh":0},{"pre":18,"post":92,"w":11.1849,"inh":0},{"pre":18,"post":97,"w":0.5132,"inh":0},{"pre":19,"post":64,"w":5.1324,"inh":0},{"pre":19,"post":65,"w":3.9943,"inh":0},{"pre":19,"post":66,"w":3.5201,"inh":0},{"pre":19,"post":67,"w":0.1,"inh":0},{"pre":19,"post":68,"w":57.6295,"inh":0},{"pre":19,"post":69,"w":63.5398,"inh":0},{"pre":19,"post":70,"w":0.2717,"inh":0},{"pre":19,"post":71,"w":0.8854,"inh":0},{"pre":19,"post":72,"w":1.897,"inh":0},{"pre":19,"post":73,"w":11.3744,"inh":0},{"pre":19,"post":74,"w":2.4387,"inh":0},{"pre":19,"post":75,"w":13.24,"inh":0},{"pre":19,"post":76,"w":1.6672,"inh":0},{"pre":19,"post":77,"w":5.9935,"inh":0},{"pre":19,"post":78,"w":3.3339,"inh":0},{"pre":19,"post":79,"w":0.1,"inh":0},{"pre":19,"post":85,"w":4.5771,"inh":0},{"pre":19,"post":89,"w":0.6164,"inh":0},{"pre":19,"post":97,"w":3.6773,"inh":0},{"pre":20,"post":64,"w":1.9519,"inh":0},{"pre":20,"post":65,"w":4.8484,"inh":0},{"pre":20,"post":66,"w":1.6169,"inh":0},{"pre":20,"post":67,"w":2.3896,"inh":0},{"pre":20,"post":68,"w":1.388,"inh":0},{"pre":20,"post":69,"w":0.7162,"inh":0},{"pre":20,"post":70,"w":0.1,"inh":0},{"pre":20,"post":71,"w":0.8452,"inh":0},{"pre":20,"post":72,"w":3.5176,"inh":0},{"pre":20,"post":73,"w":0.5104,"inh":0},{"pre":20,"post":74,"w":1.8021,"inh":0},{"pre":20,"post":75,"w":1.1011,"inh":0},{"pre":20,"post":76,"w":0.3051,"inh":0},{"pre":20,"post":77,"w":46.802,"inh":0},{"pre":20,"post":78,"w":0.1,"inh":0},{"pre":20,"post":79,"w":1.5876,"inh":0},{"pre":20,"post":103,"w":6.4639,"inh":0},{"pre":20,"post":105,"w":0.8456,"inh":0},{"pre":20,"post":108,"w":4.903,"inh":0},{"pre":20,"post":112,"w":1.5605,"inh":0},{"pre":20,"post":116,"w":0.7351,"inh":0},{"pre":21,"post":64,"w":2.875,"inh":0},{"pre":21,"post":65,"w":3.5021,"inh":0},{"pre":21,"post":66,"w":0.5113,"inh":0},{"pre":21,"post":67,"w":1.887,"inh":0},{"pre":21,"post":68,"w":0.8451,"inh":0},{"pre":21,"post":69,"w":3.5292,"inh":0},{"pre":21,"post":70,"w":0.2261,"inh":0},{"pre":21,"post":71,"w":2.4537,"inh":0},{"pre":21,"post":72,"w":2.7755,"inh":0},{"pre":21,"post":73,"w":4.978,"inh":0},{"pre":21,"post":74,"w":2.1216,"inh":0},{"pre":21,"post":75,"w":0.4557,"inh":0},{"pre":21,"post":76,"w":0.1496,"inh":0},{"pre":21,"post":77,"w":0.966,"inh":0},{"pre":21,"post":78,"w":1.4162,"inh":0},{"pre":21,"post":79,"w":3.133,"inh":0},{"pre":21,"post":103,"w":0.3063,"inh":0},{"pre":21,"post":105,"w":1.4615,"inh":0},{"pre":21,"post":108,"w":0.68,"inh":0},{"pre":21,"post":112,"w":1.2872,"inh":0},{"pre":21,"post":116,"w":2.0668,"inh":0},{"pre":22,"post":64,"w":0.111,"inh":0},{"pre":22,"post":65,"w":0.4246,"inh":0},{"pre":22,"post":66,"w":17.7722,"inh":0},{"pre":22,"post":67,"w":38.3318,"inh":0},{"pre":22,"post":68,"w":0.4308,"inh":0},{"pre":22,"post":69,"w":0.5461,"inh":0},{"pre":22,"post":70,"w":10.1044,"inh":0},{"pre":22,"post":71,"w":1.7079,"inh":0},{"pre":22,"post":72,"w":0.1219,"inh":0},{"pre":22,"post":73,"w":1.2007,"inh":0},{"pre":22,"post":74,"w":11.0739,"inh":0},{"pre":22,"post":75,"w":7.5913,"inh":0},{"pre":22,"post":76,"w":19.9357,"inh":0},{"pre":22,"post":77,"w":36.0886,"inh":0},{"pre":22,"post":78,"w":0.8938,"inh":0},{"pre":22,"post":79,"w":9.7978,"inh":0},{"pre":22,"post":103,"w":2.9034,"inh":0},{"pre":22,"post":105,"w":0.9227,"inh":0},{"pre":22,"post":108,"w":0.2457,"inh":0},{"pre":22,"post":112,"w":0.9705,"inh":0},{"pre":22,"post":116,"w":13.9747,"inh":0},{"pre":23,"post":64,"w":7.2084,"inh":0},{"pre":23,"post":65,"w":1.8741,"inh":0},{"pre":23,"post":66,"w":0.3249,"inh":0},{"pre":23,"post":67,"w":16.0243,"inh":0},{"pre":23,"post":68,"w":0.9272,"inh":0},{"pre":23,"post":69,"w":2.0736,"inh":0},{"pre":23,"post":70,"w":2.2551,"inh":0},{"pre":23,"post":71,"w":2.6716,"inh":0},{"pre":23,"post":72,"w":0.7901,"inh":0},{"pre":23,"post":73,"w":0.101,"inh":0},{"pre":23,"post":74,"w":0.5211,"inh":0},{"pre":23,"post":75,"w":38.4635,"inh":0},{"pre":23,"post":76,"w":0.4572,"inh":0},{"pre":23,"post":77,"w":1.0138,"inh":0},{"pre":23,"post":78,"w":2.5513,"inh":0},{"pre":23,"post":79,"w":3.4599,"inh":0},{"pre":23,"post":103,"w":25.3975,"inh":0},{"pre":23,"post":105,"w":0.1532,"inh":0},{"pre":23,"post":108,"w":17.1637,"inh":0},{"pre":23,"post":112,"w":1.9904,"inh":0},{"pre":23,"post":113,"w":0.21,"inh":0},{"pre":23,"post":116,"w":4.7443,"inh":0},{"pre":24,"post":64,"w":0.5184,"inh":0},{"pre":24,"post":65,"w":0.5852,"inh":0},{"pre":24,"post":66,"w":1.6647,"inh":0},{"pre":24,"post":67,"w":30.0316,"inh":0},{"pre":24,"post":68,"w":0.2185,"inh":0},{"pre":24,"post":69,"w":3.6667,"inh":0},{"pre":24,"post":70,"w":9.5747,"inh":0},{"pre":24,"post":71,"w":1.5496,"inh":0},{"pre":24,"post":72,"w":14.769,"inh":0},{"pre":24,"post":73,"w":17.014,"inh":0},{"pre":24,"post":74,"w":41.9417,"inh":0},{"pre":24,"post":75,"w":0.6459,"inh":0},{"pre":24,"post":76,"w":0.3314,"inh":0},{"pre":24,"post":77,"w":3.8192,"inh":0},{"pre":24,"post":78,"w":2.6665,"inh":0},{"pre":24,"post":79,"w":0.4687,"inh":0},{"pre":24,"post":103,"w":44.5738,"inh":0},{"pre":24,"post":105,"w":13.552,"inh":0},{"pre":24,"post":112,"w":4.8916,"inh":0},{"pre":24,"post":116,"w":0.9569,"inh":0},{"pre":25,"post":64,"w":7.2608,"inh":0},{"pre":25,"post":65,"w":39.6105,"inh":0},{"pre":25,"post":66,"w":0.7825,"inh":0},{"pre":25,"post":67,"w":2.3986,"inh":0},{"pre":25,"post":68,"w":0.6313,"inh":0},{"pre":25,"post":69,"w":1.7517,"inh":0},{"pre":25,"post":70,"w":0.1,"inh":0},{"pre":25,"post":71,"w":13.0014,"inh":0},{"pre":25,"post":72,"w":0.8942,"inh":0},{"pre":25,"post":73,"w":1.2293,"inh":0},{"pre":25,"post":74,"w":7.0531,"inh":0},{"pre":25,"post":75,"w":0.956,"inh":0},{"pre":25,"post":76,"w":0.9349,"inh":0},{"pre":25,"post":77,"w":8.2262,"inh":0},{"pre":25,"post":78,"w":0.1967,"inh":0},{"pre":25,"post":79,"w":0.8654,"inh":0},{"pre":25,"post":103,"w":132.2776,"inh":0},{"pre":25,"post":105,"w":0.1,"inh":0},{"pre":25,"post":108,"w":7.5888,"inh":0},{"pre":25,"post":112,"w":7.7581,"inh":0},{"pre":25,"post":116,"w":0.7881,"inh":0},{"pre":26,"post":64,"w":0.5685,"inh":0},{"pre":26,"post":65,"w":0.1625,"inh":0},{"pre":26,"post":66,"w":5.2413,"inh":0},{"pre":26,"post":67,"w":6.3543,"inh":0},{"pre":26,"post":68,"w":0.434,"inh":0},{"pre":26,"post":69,"w":2.6554,"inh":0},{"pre":26,"post":70,"w":0.3313,"inh":0},{"pre":26,"post":71,"w":1.6435,"inh":0},{"pre":26,"post":72,"w":1.0955,"inh":0},{"pre":26,"post":73,"w":0.147,"inh":0},{"pre":26,"post":74,"w":8.747,"inh":0},{"pre":26,"post":75,"w":0.5216,"inh":0},{"pre":26,"post":76,"w":1.2021,"inh":0},{"pre":26,"post":77,"w":2.7098,"inh":0},{"pre":26,"post":78,"w":19.6464,"inh":0},{"pre":26,"post":79,"w":13.5856,"inh":0},{"pre":26,"post":103,"w":3.5591,"inh":0},{"pre":26,"post":105,"w":1.5727,"inh":0},{"pre":26,"post":108,"w":5.2781,"inh":0},{"pre":26,"post":112,"w":0.1,"inh":0},{"pre":26,"post":116,"w":3.8469,"inh":0},{"pre":27,"post":64,"w":0.8824,"inh":0},{"pre":27,"post":65,"w":0.7255,"inh":0},{"pre":27,"post":66,"w":2.7563,"inh":0},{"pre":27,"post":67,"w":9.9739,"inh":0},{"pre":27,"post":68,"w":0.2342,"inh":0},{"pre":27,"post":69,"w":0.2979,"inh":0},{"pre":27,"post":70,"w":1.5544,"inh":0},{"pre":27,"post":71,"w":0.5114,"inh":0},{"pre":27,"post":72,"w":1.6539,"inh":0},{"pre":27,"post":73,"w":2.304,"inh":0},{"pre":27,"post":74,"w":2.5655,"inh":0},{"pre":27,"post":75,"w":3.2551,"inh":0},{"pre":27,"post":76,"w":0.1816,"inh":0},{"pre":27,"post":77,"w":1.762,"inh":0},{"pre":27,"post":78,"w":3.9744,"inh":0},{"pre":27,"post":79,"w":0.8778,"inh":0},{"pre":27,"post":100,"w":4.8973,"inh":0},{"pre":27,"post":103,"w":0.1,"inh":0},{"pre":27,"post":105,"w":8.6567,"inh":0},{"pre":27,"post":108,"w":8.3354,"inh":0},{"pre":27,"post":112,"w":9.868,"inh":0},{"pre":27,"post":116,"w":1.4478,"inh":0},{"pre":28,"post":64,"w":0.5413,"inh":0},{"pre":28,"post":65,"w":5.1149,"inh":0},{"pre":28,"post":66,"w":0.636,"inh":0},{"pre":28,"post":67,"w":1.6409,"inh":0},{"pre":28,"post":68,"w":0.8476,"inh":0},{"pre":28,"post":69,"w":3.7312,"inh":0},{"pre":28,"post":70,"w":8.6812,"inh":0},{"pre":28,"post":71,"w":3.2759,"inh":0},{"pre":28,"post":72,"w":21.4534,"inh":0},{"pre":28,"post":73,"w":13.7224,"inh":0},{"pre":28,"post":74,"w":2.8053,"inh":0},{"pre":28,"post":75,"w":1.9301,"inh":0},{"pre":28,"post":76,"w":8.8462,"inh":0},{"pre":28,"post":77,"w":3.7257,"inh":0},{"pre":28,"post":78,"w":4.6153,"inh":0},{"pre":28,"post":79,"w":15.8078,"inh":0},{"pre":28,"post":103,"w":0.3063,"inh":0},{"pre":28,"post":105,"w":4.6518,"inh":0},{"pre":28,"post":108,"w":0.2889,"inh":0},{"pre":28,"post":112,"w":2.0131,"inh":0},{"pre":28,"post":116,"w":12.308,"inh":0},{"pre":29,"post":64,"w":0.1,"inh":0},{"pre":29,"post":65,"w":13.8256,"inh":0},{"pre":29,"post":66,"w":0.1275,"inh":0},{"pre":29,"post":67,"w":5.667,"inh":0},{"pre":29,"post":68,"w":4.5728,"inh":0},{"pre":29,"post":69,"w":10.4854,"inh":0},{"pre":29,"post":70,"w":0.387,"inh":0},{"pre":29,"post":71,"w":0.212,"inh":0},{"pre":29,"post":72,"w":0.2841,"inh":0},{"pre":29,"post":73,"w":1.3299,"inh":0},{"pre":29,"post":74,"w":0.5676,"inh":0},{"pre":29,"post":75,"w":6.2377,"inh":0},{"pre":29,"post":76,"w":5.9285,"inh":0},{"pre":29,"post":77,"w":0.3822,"inh":0},{"pre":29,"post":78,"w":5.1503,"inh":0},{"pre":29,"post":79,"w":0.9901,"inh":0},{"pre":29,"post":103,"w":1.8471,"inh":0},{"pre":29,"post":105,"w":11.9851,"inh":0},{"pre":29,"post":108,"w":32.8421,"inh":0},{"pre":29,"post":112,"w":1.2592,"inh":0},{"pre":29,"post":113,"w":0.5165,"inh":0},{"pre":29,"post":116,"w":11.0669,"inh":0},{"pre":30,"post":64,"w":119.8757,"inh":0},{"pre":30,"post":65,"w":21.4956,"inh":0},{"pre":30,"post":66,"w":1.0042,"inh":0},{"pre":30,"post":67,"w":5.3385,"inh":0},{"pre":30,"post":68,"w":1.3283,"inh":0},{"pre":30,"post":69,"w":0.2142,"inh":0},{"pre":30,"post":70,"w":0.5441,"inh":0},{"pre":30,"post":71,"w":0.9666,"inh":0},{"pre":30,"post":72,"w":0.5084,"inh":0},{"pre":30,"post":73,"w":0.1725,"inh":0},{"pre":30,"post":74,"w":13.1393,"inh":0},{"pre":30,"post":75,"w":2.8519,"inh":0},{"pre":30,"post":76,"w":0.3686,"inh":0},{"pre":30,"post":77,"w":0.9956,"inh":0},{"pre":30,"post":78,"w":0.6035,"inh":0},{"pre":30,"post":79,"w":2.3327,"inh":0},{"pre":30,"post":103,"w":0.5074,"inh":0},{"pre":30,"post":105,"w":1.662,"inh":0},{"pre":30,"post":112,"w":302.4712,"inh":0},{"pre":30,"post":116,"w":3.559,"inh":0},{"pre":31,"post":64,"w":43.4828,"inh":0},{"pre":31,"post":65,"w":2.0232,"inh":0},{"pre":31,"post":66,"w":1.4053,"inh":0},{"pre":31,"post":67,"w":11.9006,"inh":0},{"pre":31,"post":68,"w":1.3346,"inh":0},{"pre":31,"post":69,"w":48.6114,"inh":0},{"pre":31,"post":70,"w":13.5261,"inh":0},{"pre":31,"post":71,"w":7.0509,"inh":0},{"pre":31,"post":72,"w":0.7771,"inh":0},{"pre":31,"post":73,"w":42.0026,"inh":0},{"pre":31,"post":74,"w":38.816,"inh":0},{"pre":31,"post":75,"w":44.8794,"inh":0},{"pre":31,"post":76,"w":2.8939,"inh":0},{"pre":31,"post":77,"w":47.8795,"inh":0},{"pre":31,"post":78,"w":1.745,"inh":0},{"pre":31,"post":79,"w":5.7635,"inh":0},{"pre":31,"post":103,"w":4.999,"inh":0},{"pre":31,"post":105,"w":3.2665,"inh":0},{"pre":31,"post":108,"w":0.211,"inh":0},{"pre":31,"post":112,"w":3.0271,"inh":0},{"pre":31,"post":113,"w":90.798,"inh":0},{"pre":31,"post":116,"w":1.0342,"inh":0},{"pre":32,"post":64,"w":0.2217,"inh":0},{"pre":32,"post":65,"w":9.4561,"inh":0},{"pre":32,"post":66,"w":0.3542,"inh":0},{"pre":32,"post":67,"w":0.2539,"inh":0},{"pre":32,"post":68,"w":0.1007,"inh":0},{"pre":32,"post":69,"w":3.6028,"inh":0},{"pre":32,"post":70,"w":0.4067,"inh":0},{"pre":32,"post":71,"w":0.7111,"inh":0},{"pre":32,"post":72,"w":0.1453,"inh":0},{"pre":32,"post":73,"w":8.0285,"inh":0},{"pre":32,"post":74,"w":1.9138,"inh":0},{"pre":32,"post":75,"w":0.3328,"inh":0},{"pre":32,"post":76,"w":4.2106,"inh":0},{"pre":32,"post":77,"w":1.9945,"inh":0},{"pre":32,"post":78,"w":1.4724,"inh":0},{"pre":32,"post":79,"w":0.2085,"inh":0},{"pre":32,"post":103,"w":0.2909,"inh":0},{"pre":32,"post":105,"w":4.1283,"inh":0},{"pre":32,"post":108,"w":1.5448,"inh":0},{"pre":32,"post":112,"w":0.7883,"inh":0},{"pre":32,"post":116,"w":48.5442,"inh":0},{"pre":33,"post":64,"w":2.3913,"inh":0},{"pre":33,"post":65,"w":0.5202,"inh":0},{"pre":33,"post":66,"w":2.2027,"inh":0},{"pre":33,"post":67,"w":0.2072,"inh":0},{"pre":33,"post":68,"w":0.4601,"inh":0},{"pre":33,"post":69,"w":5.2282,"inh":0},{"pre":33,"post":70,"w":0.1576,"inh":0},{"pre":33,"post":71,"w":0.3231,"inh":0},{"pre":33,"post":72,"w":3.1406,"inh":0},{"pre":33,"post":73,"w":2.0527,"inh":0},{"pre":33,"post":74,"w":54.673,"inh":0},{"pre":33,"post":75,"w":11.971,"inh":0},{"pre":33,"post":76,"w":25.9879,"inh":0},{"pre":33,"post":77,"w":3.9443,"inh":0},{"pre":33,"post":78,"w":0.8685,"inh":0},{"pre":33,"post":79,"w":2.1138,"inh":0},{"pre":33,"post":103,"w":0.6089,"inh":0},{"pre":33,"post":105,"w":0.9926,"inh":0},{"pre":33,"post":112,"w":15.0375,"inh":0},{"pre":34,"post":64,"w":1.3834,"inh":0},{"pre":34,"post":65,"w":0.4922,"inh":0},{"pre":34,"post":66,"w":16.7736,"inh":0},{"pre":34,"post":67,"w":0.8683,"inh":0},{"pre":34,"post":68,"w":37.7205,"inh":0},{"pre":34,"post":69,"w":1.2379,"inh":0},{"pre":34,"post":70,"w":0.4207,"inh":0},{"pre":34,"post":71,"w":4.3592,"inh":0},{"pre":34,"post":72,"w":0.1,"inh":0},{"pre":34,"post":73,"w":4.527,"inh":0},{"pre":34,"post":74,"w":1.875,"inh":0},{"pre":34,"post":75,"w":14.0045,"inh":0},{"pre":34,"post":76,"w":6.2754,"inh":0},{"pre":34,"post":77,"w":3.7887,"inh":0},{"pre":34,"post":78,"w":0.8882,"inh":0},{"pre":34,"post":79,"w":6.6957,"inh":0},{"pre":34,"post":103,"w":0.2674,"inh":0},{"pre":34,"post":108,"w":1.2755,"inh":0},{"pre":34,"post":112,"w":9.2386,"inh":0},{"pre":34,"post":116,"w":0.3652,"inh":0},{"pre":35,"post":64,"w":0.9258,"inh":0},{"pre":35,"post":65,"w":62.274,"inh":0},{"pre":35,"post":66,"w":6.4334,"inh":0},{"pre":35,"post":67,"w":5.9379,"inh":0},{"pre":35,"post":68,"w":0.458,"inh":0},{"pre":35,"post":69,"w":0.2482,"inh":0},{"pre":35,"post":70,"w":19.5004,"inh":0},{"pre":35,"post":71,"w":1.2581,"inh":0},{"pre":35,"post":72,"w":2.0204,"inh":0},{"pre":35,"post":73,"w":1.0012,"inh":0},{"pre":35,"post":74,"w":0.3865,"inh":0},{"pre":35,"post":75,"w":2.2393,"inh":0},{"pre":35,"post":76,"w":0.764,"inh":0},{"pre":35,"post":77,"w":7.0079,"inh":0},{"pre":35,"post":78,"w":3.4665,"inh":0},{"pre":35,"post":79,"w":2.1006,"inh":0},{"pre":35,"post":103,"w":8.0529,"inh":0},{"pre":35,"post":105,"w":1.3462,"inh":0},{"pre":35,"post":108,"w":0.3986,"inh":0},{"pre":35,"post":112,"w":2.4454,"inh":0},{"pre":35,"post":116,"w":0.8256,"inh":0},{"pre":36,"post":64,"w":0.4238,"inh":0},{"pre":36,"post":65,"w":2.057,"inh":0},{"pre":36,"post":66,"w":1.4759,"inh":0},{"pre":36,"post":67,"w":0.1425,"inh":0},{"pre":36,"post":68,"w":3.6802,"inh":0},{"pre":36,"post":69,"w":3.9474,"inh":0},{"pre":36,"post":70,"w":14.9418,"inh":0},{"pre":36,"post":71,"w":3.9819,"inh":0},{"pre":36,"post":72,"w":34.0083,"inh":0},{"pre":36,"post":73,"w":0.6479,"inh":0},{"pre":36,"post":74,"w":0.3607,"inh":0},{"pre":36,"post":75,"w":13.7684,"inh":0},{"pre":36,"post":76,"w":0.1369,"inh":0},{"pre":36,"post":77,"w":0.9598,"inh":0},{"pre":36,"post":78,"w":17.5733,"inh":0},{"pre":36,"post":79,"w":0.462,"inh":0},{"pre":36,"post":100,"w":1.2289,"inh":0},{"pre":36,"post":103,"w":5.3622,"inh":0},{"pre":36,"post":108,"w":0.4046,"inh":0},{"pre":36,"post":112,"w":5.0396,"inh":0},{"pre":36,"post":116,"w":2.466,"inh":0},{"pre":37,"post":64,"w":0.1698,"inh":0},{"pre":37,"post":65,"w":2.1714,"inh":0},{"pre":37,"post":66,"w":12.1991,"inh":0},{"pre":37,"post":67,"w":0.246,"inh":0},{"pre":37,"post":68,"w":0.8384,"inh":0},{"pre":37,"post":69,"w":80.6884,"inh":0},{"pre":37,"post":70,"w":219.623,"inh":0},{"pre":37,"post":71,"w":6.4787,"inh":0},{"pre":37,"post":72,"w":1.3221,"inh":0},{"pre":37,"post":73,"w":1.1813,"inh":0},{"pre":37,"post":74,"w":9.7105,"inh":0},{"pre":37,"post":75,"w":14.2094,"inh":0},{"pre":37,"post":76,"w":24.9974,"inh":0},{"pre":37,"post":77,"w":2.4827,"inh":0},{"pre":37,"post":78,"w":0.1421,"inh":0},{"pre":37,"post":79,"w":3.7482,"inh":0},{"pre":37,"post":103,"w":3.5512,"inh":0},{"pre":37,"post":105,"w":7.1618,"inh":0},{"pre":37,"post":108,"w":9.6471,"inh":0},{"pre":37,"post":112,"w":0.3175,"inh":0},{"pre":37,"post":116,"w":0.2537,"inh":0},{"pre":38,"post":64,"w":1.8839,"inh":0},{"pre":38,"post":65,"w":6.2118,"inh":0},{"pre":38,"post":66,"w":0.1,"inh":0},{"pre":38,"post":67,"w":0.1,"inh":0},{"pre":38,"post":68,"w":12.8069,"inh":0},{"pre":38,"post":69,"w":2.0421,"inh":0},{"pre":38,"post":70,"w":1.3533,"inh":0},{"pre":38,"post":71,"w":8.0686,"inh":0},{"pre":38,"post":72,"w":5.0982,"inh":0},{"pre":38,"post":73,"w":1.7211,"inh":0},{"pre":38,"post":74,"w":0.5934,"inh":0},{"pre":38,"post":75,"w":1.5985,"inh":0},{"pre":38,"post":76,"w":0.9984,"inh":0},{"pre":38,"post":77,"w":3.1867,"inh":0},{"pre":38,"post":78,"w":7.5414,"inh":0},{"pre":38,"post":79,"w":3.6032,"inh":0},{"pre":38,"post":103,"w":1.1018,"inh":0},{"pre":38,"post":108,"w":1.7581,"inh":0},{"pre":38,"post":112,"w":0.2423,"inh":0},{"pre":38,"post":116,"w":5.387,"inh":0},{"pre":39,"post":64,"w":1.1407,"inh":0},{"pre":39,"post":65,"w":0.1186,"inh":0},{"pre":39,"post":66,"w":1.1279,"inh":0},{"pre":39,"post":67,"w":15.4812,"inh":0},{"pre":39,"post":68,"w":3.9647,"inh":0},{"pre":39,"post":69,"w":2.3032,"inh":0},{"pre":39,"post":70,"w":6.0792,"inh":0},{"pre":39,"post":71,"w":0.7369,"inh":0},{"pre":39,"post":72,"w":0.5092,"inh":0},{"pre":39,"post":73,"w":3.7278,"inh":0},{"pre":39,"post":74,"w":0.3156,"inh":0},{"pre":39,"post":75,"w":0.3815,"inh":0},{"pre":39,"post":76,"w":5.6902,"inh":0},{"pre":39,"post":77,"w":0.5255,"inh":0},{"pre":39,"post":78,"w":0.6232,"inh":0},{"pre":39,"post":79,"w":12.6913,"inh":0},{"pre":39,"post":103,"w":13.3865,"inh":0},{"pre":39,"post":105,"w":1.0647,"inh":0},{"pre":39,"post":108,"w":5.6408,"inh":0},{"pre":39,"post":112,"w":0.9345,"inh":0},{"pre":39,"post":116,"w":0.3701,"inh":0},{"pre":41,"post":103,"w":0.1026,"inh":0},{"pre":41,"post":105,"w":3.3824,"inh":0},{"pre":41,"post":108,"w":8.8843,"inh":0},{"pre":41,"post":112,"w":0.7306,"inh":0},{"pre":41,"post":116,"w":28.8371,"inh":0},{"pre":42,"post":103,"w":33.3488,"inh":0},{"pre":42,"post":105,"w":0.219,"inh":0},{"pre":42,"post":108,"w":4.4808,"inh":0},{"pre":42,"post":112,"w":0.6579,"inh":0},{"pre":42,"post":116,"w":6.1805,"inh":0},{"pre":44,"post":103,"w":1.0513,"inh":0},{"pre":44,"post":105,"w":3.3741,"inh":0},{"pre":44,"post":108,"w":21.191,"inh":0},{"pre":44,"post":112,"w":3.7063,"inh":0},{"pre":44,"post":116,"w":3.9676,"inh":0},{"pre":45,"post":103,"w":3.6121,"inh":0},{"pre":45,"post":105,"w":0.734,"inh":0},{"pre":45,"post":108,"w":0.463,"inh":0},{"pre":45,"post":112,"w":0.2241,"inh":0},{"pre":45,"post":116,"w":24.6841,"inh":0},{"pre":46,"post":103,"w":0.7568,"inh":0},{"pre":46,"post":105,"w":2.1441,"inh":0},{"pre":46,"post":108,"w":0.9568,"inh":0},{"pre":46,"post":112,"w":0.5826,"inh":0},{"pre":46,"post":116,"w":2.1862,"inh":0},{"pre":48,"post":103,"w":2.9146,"inh":0},{"pre":48,"post":105,"w":1.047,"inh":0},{"pre":48,"post":108,"w":1.6109,"inh":0},{"pre":48,"post":112,"w":14.2056,"inh":0},{"pre":48,"post":116,"w":7.152,"inh":0},{"pre":49,"post":103,"w":0.5324,"inh":0},{"pre":49,"post":105,"w":1.536,"inh":0},{"pre":49,"post":108,"w":6.7761,"inh":0},{"pre":49,"post":112,"w":36.0632,"inh":0},{"pre":49,"post":116,"w":3.0813,"inh":0},{"pre":52,"post":85,"w":12.8736,"inh":0},{"pre":52,"post":97,"w":0.5201,"inh":0},{"pre":53,"post":85,"w":2.0051,"inh":0},{"pre":53,"post":89,"w":3.6451,"inh":0},{"pre":53,"post":97,"w":17.5655,"inh":0},{"pre":54,"post":85,"w":0.8352,"inh":0},{"pre":54,"post":92,"w":1.9912,"inh":0},{"pre":54,"post":97,"w":2.5258,"inh":0},{"pre":55,"post":85,"w":3.3103,"inh":0},{"pre":55,"post":97,"w":1.6926,"inh":0},{"pre":56,"post":85,"w":1.145,"inh":0},{"pre":56,"post":89,"w":64.8507,"inh":0},{"pre":57,"post":85,"w":0.3314,"inh":0},{"pre":57,"post":97,"w":0.6942,"inh":0},{"pre":58,"post":85,"w":12.6664,"inh":0},{"pre":58,"post":97,"w":1.6331,"inh":0},{"pre":59,"post":85,"w":20.6537,"inh":0},{"pre":59,"post":97,"w":2.1477,"inh":0},{"pre":60,"post":85,"w":0.9693,"inh":0},{"pre":60,"post":92,"w":4.6814,"inh":0},{"pre":60,"post":97,"w":3.9635,"inh":0},{"pre":61,"post":85,"w":0.3065,"inh":0},{"pre":61,"post":89,"w":1.476,"inh":0},{"pre":61,"post":97,"w":10.9482,"inh":0},{"pre":62,"post":85,"w":7.4579,"inh":0},{"pre":62,"post":97,"w":0.8261,"inh":0},{"pre":64,"post":85,"w":1.1732,"inh":1},{"pre":64,"post":97,"w":0.6442,"inh":1},{"pre":64,"post":103,"w":6.3064,"inh":1},{"pre":64,"post":105,"w":0.1756,"inh":1},{"pre":64,"post":112,"w":3.7581,"inh":1},{"pre":64,"post":116,"w":13.1714,"inh":1},{"pre":65,"post":85,"w":1.2394,"inh":1},{"pre":65,"post":97,"w":1.8949,"inh":1},{"pre":65,"post":103,"w":0.9792,"inh":1},{"pre":65,"post":105,"w":10.7107,"inh":1},{"pre":65,"post":108,"w":0.9127,"inh":1},{"pre":65,"post":112,"w":0.9793,"inh":1},{"pre":65,"post":116,"w":4.1974,"inh":1},{"pre":66,"post":85,"w":5.2597,"inh":1},{"pre":66,"post":97,"w":0.213,"inh":1},{"pre":66,"post":103,"w":7.2398,"inh":1},{"pre":66,"post":105,"w":4.2253,"inh":1},{"pre":66,"post":108,"w":4.3652,"inh":1},{"pre":66,"post":112,"w":0.1725,"inh":1},{"pre":66,"post":116,"w":0.9591,"inh":1},{"pre":67,"post":85,"w":0.8975,"inh":1},{"pre":67,"post":97,"w":0.3951,"inh":1},{"pre":67,"post":103,"w":0.2182,"inh":1},{"pre":67,"post":105,"w":0.1248,"inh":1},{"pre":67,"post":108,"w":68.6085,"inh":1},{"pre":67,"post":112,"w":2.864,"inh":1},{"pre":67,"post":116,"w":0.14,"inh":1},{"pre":68,"post":85,"w":0.1,"inh":1},{"pre":68,"post":97,"w":1.6413,"inh":1},{"pre":68,"post":103,"w":28.9573,"inh":1},{"pre":68,"post":105,"w":6.2901,"inh":1},{"pre":68,"post":108,"w":1.2499,"inh":1},{"pre":68,"post":112,"w":1.2048,"inh":1},{"pre":68,"post":116,"w":2.3579,"inh":1},{"pre":69,"post":85,"w":5.3198,"inh":1},{"pre":69,"post":92,"w":55.5415,"inh":1},{"pre":69,"post":97,"w":16.5344,"inh":1},{"pre":69,"post":103,"w":8.3291,"inh":1},{"pre":69,"post":105,"w":0.2911,"inh":1},{"pre":69,"post":112,"w":0.6606,"inh":1},{"pre":69,"post":116,"w":0.759,"inh":1},{"pre":70,"post":85,"w":0.8445,"inh":1},{"pre":70,"post":97,"w":1.746,"inh":1},{"pre":70,"post":103,"w":1.6173,"inh":1},{"pre":70,"post":105,"w":14.4727,"inh":1},{"pre":70,"post":108,"w":11.3674,"inh":1},{"pre":70,"post":112,"w":5.6195,"inh":1},{"pre":70,"post":116,"w":3.9673,"inh":1},{"pre":71,"post":103,"w":8.8748,"inh":1},{"pre":71,"post":105,"w":0.4292,"inh":1},{"pre":71,"post":108,"w":0.4661,"inh":1},{"pre":71,"post":112,"w":4.1935,"inh":1},{"pre":71,"post":116,"w":3.3161,"inh":1},{"pre":72,"post":85,"w":3.1655,"inh":1},{"pre":72,"post":97,"w":0.1,"inh":1},{"pre":72,"post":103,"w":6.4618,"inh":1},{"pre":72,"post":105,"w":7.3781,"inh":1},{"pre":72,"post":108,"w":0.3039,"inh":1},{"pre":72,"post":112,"w":1.027,"inh":1},{"pre":72,"post":116,"w":47.9036,"inh":1},{"pre":73,"post":85,"w":21.9429,"inh":1},{"pre":73,"post":97,"w":1.106,"inh":1},{"pre":73,"post":103,"w":0.8627,"inh":1},{"pre":73,"post":105,"w":7.7698,"inh":1},{"pre":73,"post":112,"w":5.2693,"inh":1},{"pre":73,"post":116,"w":1.2351,"inh":1},{"pre":74,"post":85,"w":32.6664,"inh":1},{"pre":74,"post":97,"w":11.8617,"inh":1},{"pre":74,"post":103,"w":0.8352,"inh":1},{"pre":74,"post":105,"w":0.3657,"inh":1},{"pre":74,"post":112,"w":1.2952,"inh":1},{"pre":75,"post":85,"w":16.1217,"inh":1},{"pre":75,"post":97,"w":0.2811,"inh":1},{"pre":75,"post":103,"w":6.9499,"inh":1},{"pre":75,"post":105,"w":3.9013,"inh":1},{"pre":75,"post":112,"w":5.1331,"inh":1},{"pre":75,"post":116,"w":0.4274,"inh":1},{"pre":76,"post":85,"w":6.3082,"inh":1},{"pre":76,"post":97,"w":1.4079,"inh":1},{"pre":76,"post":103,"w":11.6716,"inh":1},{"pre":76,"post":105,"w":24.5841,"inh":1},{"pre":76,"post":112,"w":4.3898,"inh":1},{"pre":76,"post":116,"w":1.6096,"inh":1},{"pre":77,"post":85,"w":0.2924,"inh":1},{"pre":77,"post":97,"w":1.9001,"inh":1},{"pre":77,"post":103,"w":19.49,"inh":1},{"pre":77,"post":105,"w":7.5364,"inh":1},{"pre":77,"post":112,"w":0.1,"inh":1},{"pre":77,"post":116,"w":4.3629,"inh":1},{"pre":78,"post":85,"w":0.1802,"inh":1},{"pre":78,"post":89,"w":0.6481,"inh":1},{"pre":78,"post":97,"w":58.743,"inh":1},{"pre":78,"post":103,"w":0.1,"inh":1},{"pre":78,"post":105,"w":6.5223,"inh":1},{"pre":78,"post":108,"w":12.2887,"inh":1},{"pre":78,"post":112,"w":2.8165,"inh":1},{"pre":78,"post":113,"w":0.3676,"inh":1},{"pre":78,"post":116,"w":0.4909,"inh":1},{"pre":79,"post":85,"w":5.963,"inh":1},{"pre":79,"post":92,"w":0.726,"inh":1},{"pre":79,"post":97,"w":5.8258,"inh":1},{"pre":79,"post":103,"w":2.9101,"inh":1},{"pre":79,"post":105,"w":0.3894,"inh":1},{"pre":79,"post":112,"w":0.481,"inh":1},{"pre":79,"post":116,"w":0.4678,"inh":1}]};
+
+const BRAIN_FUTURE = {"version":"dioma_brain_viz_v1","meta":{"seed":42,"ticks_measured":0,"n_synapses":0,"title":"Плановые регионы (транш 3, концепт)","note":"Концепт: плановые регионы (зрение VL/VR и ассоциативный слой) не выращены — связей и активности нет; показаны регионы и их геометрия."},"regions":[{"label":"SL","kind":"sensor","ghost":0,"inhibitory":0,"center":[-60,-60,0],"radius":15},{"label":"SR","kind":"sensor","ghost":0,"inhibitory":0,"center":[60,-60,0],"radius":15},{"label":"WL","kind":"sensor","ghost":0,"inhibitory":0,"center":[-30,-75,0],"radius":12},{"label":"WR","kind":"sensor","ghost":0,"inhibitory":0,"center":[30,-75,0],"radius":12},{"label":"I","kind":"inter","ghost":0,"inhibitory":1,"center":[0,-30,0],"radius":12},{"label":"ML","kind":"motor","ghost":0,"inhibitory":0,"center":[-60,60,0],"radius":15},{"label":"MR","kind":"motor","ghost":0,"inhibitory":0,"center":[60,60,0],"radius":15},{"label":"VL","kind":"sensor","ghost":1,"inhibitory":0,"center":[-45,-90,0],"radius":14},{"label":"VR","kind":"sensor","ghost":1,"inhibitory":0,"center":[45,-90,0],"radius":14},{"label":"ASSOC_E","kind":"assoc","ghost":1,"inhibitory":0,"center":[0,0,0],"radius":26},{"label":"ASSOC_I","kind":"assoc","ghost":1,"inhibitory":1,"center":[0,-35,24],"radius":14}],"neurons":[{"id":0,"region":0,"inh":0,"act":0,"pos":[-61.3238,-58.9077,15.8741]},{"id":1,"region":0,"inh":0,"act":0,"pos":[-60.559,-59.4345,11.0497]},{"id":2,"region":0,"inh":0,"act":0,"pos":[-66.6467,-61.3479,11.5627]},{"id":3,"region":0,"inh":0,"act":0,"pos":[-55.9381,-56.3711,10.8793]},{"id":4,"region":0,"inh":0,"act":0,"pos":[-64.982,-53.5354,11.2213]},{"id":5,"region":0,"inh":0,"act":0,"pos":[-60.8367,-56.5958,8.7724]},{"id":6,"region":0,"inh":0,"act":0,"pos":[-67.4099,-59.849,6.956]},{"id":7,"region":0,"inh":0,"act":0,"pos":[-58.3267,-63.9834,10.4511]},{"id":8,"region":0,"inh":0,"act":0,"pos":[-62.8469,-59.297,8.0384]},{"id":9,"region":0,"inh":0,"act":0,"pos":[-60.6892,-57.2866,3.4702]},{"id":10,"region":0,"inh":0,"act":0,"pos":[-64.2544,-65.1916,11.9016]},{"id":11,"region":0,"inh":0,"act":0,"pos":[-63.5799,-62.5369,4.3896]},{"id":12,"region":0,"inh":0,"act":0,"pos":[-65.6512,-55.1421,6.6275]},{"id":13,"region":0,"inh":0,"act":0,"pos":[-66.0669,-57.7559,14.1754]},{"id":14,"region":0,"inh":0,"act":0,"pos":[-60.8418,-64.41,7.0707]},{"id":15,"region":0,"inh":0,"act":0,"pos":[-59.8501,-54.0629,13.2881]},{"id":16,"region":0,"inh":0,"act":0,"pos":[-56.8927,-60.4179,4.0662]},{"id":17,"region":0,"inh":0,"act":0,"pos":[-55.1086,-59.8604,8.5915]},{"id":18,"region":0,"inh":0,"act":0,"pos":[-59.2431,-61.9311,14.5109]},{"id":19,"region":0,"inh":0,"act":0,"pos":[-58.7516,-53.06,6.57]},{"id":20,"region":1,"inh":0,"act":0,"pos":[60.9376,-53.4035,10.921]},{"id":21,"region":1,"inh":0,"act":0,"pos":[64.9004,-58.1353,12.0734]},{"id":22,"region":1,"inh":0,"act":0,"pos":[56.7291,-62.7657,14.9599]},{"id":23,"region":1,"inh":0,"act":0,"pos":[52.3837,-59.6333,9.0166]},{"id":24,"region":1,"inh":0,"act":0,"pos":[62.8901,-62.6737,5.8065]},{"id":25,"region":1,"inh":0,"act":0,"pos":[54.4386,-55.2327,6.61]},{"id":26,"region":1,"inh":0,"act":0,"pos":[62.0868,-54.7149,5.7913]},{"id":27,"region":1,"inh":0,"act":0,"pos":[57.3105,-65.63,10.6994]},{"id":28,"region":1,"inh":0,"act":0,"pos":[54.6641,-57.4324,13.8472]},{"id":29,"region":1,"inh":0,"act":0,"pos":[59.5245,-57.9639,11.2274]},{"id":30,"region":1,"inh":0,"act":0,"pos":[60.1392,-59.6197,8.4466]},{"id":31,"region":1,"inh":0,"act":0,"pos":[65.1776,-58.7425,7.0665]},{"id":32,"region":1,"inh":0,"act":0,"pos":[55.0329,-63.1648,7.142]},{"id":33,"region":1,"inh":0,"act":0,"pos":[58.3179,-61.5021,3.9904]},{"id":34,"region":1,"inh":0,"act":0,"pos":[56.3782,-53.1062,11.1315]},{"id":35,"region":1,"inh":0,"act":0,"pos":[58.0145,-56.6167,4.1994]},{"id":36,"region":1,"inh":0,"act":0,"pos":[62.2594,-65.3173,9.7893]},{"id":37,"region":1,"inh":0,"act":0,"pos":[60.6514,-57.5546,16.163]},{"id":38,"region":1,"inh":0,"act":0,"pos":[63.5434,-62.7351,13.7838]},{"id":39,"region":1,"inh":0,"act":0,"pos":[57.3308,-60.5417,11.097]},{"id":40,"region":2,"inh":0,"act":0,"pos":[-30.0439,-76.1761,4.9855]},{"id":41,"region":2,"inh":0,"act":0,"pos":[-31.7546,-68.0834,10.0073]},{"id":42,"region":2,"inh":0,"act":0,"pos":[-36.3745,-71.3036,4.6626]},{"id":43,"region":2,"inh":0,"act":0,"pos":[-34.5026,-76.9879,3.7033]},{"id":44,"region":2,"inh":0,"act":0,"pos":[-32.8481,-72.6617,9.6421]},{"id":45,"region":2,"inh":0,"act":0,"pos":[-29.5238,-70.7307,3.7405]},{"id":46,"region":2,"inh":0,"act":0,"pos":[-31.1698,-74.3773,14.7011]},{"id":47,"region":2,"inh":0,"act":0,"pos":[-37.159,-78.659,7.6545]},{"id":48,"region":2,"inh":0,"act":0,"pos":[-33.968,-78.4827,11.5576]},{"id":49,"region":2,"inh":0,"act":0,"pos":[-38.1681,-72.6765,11.2509]},{"id":50,"region":2,"inh":0,"act":0,"pos":[-29.3826,-79.8138,9.1536]},{"id":51,"region":2,"inh":0,"act":0,"pos":[-26.3639,-73.5982,9.8868]},{"id":52,"region":3,"inh":0,"act":0,"pos":[32.8115,-81.1049,4.6828]},{"id":53,"region":3,"inh":0,"act":0,"pos":[36.6216,-76.5729,8.6998]},{"id":54,"region":3,"inh":0,"act":0,"pos":[29.5485,-74.3416,5.7065]},{"id":55,"region":3,"inh":0,"act":0,"pos":[28.4492,-69.5042,11.076]},{"id":56,"region":3,"inh":0,"act":0,"pos":[26.963,-77.5403,2.5023]},{"id":57,"region":3,"inh":0,"act":0,"pos":[24.1872,-74.4326,9.0265]},{"id":58,"region":3,"inh":0,"act":0,"pos":[30.7226,-74.9054,13.6022]},{"id":59,"region":3,"inh":0,"act":0,"pos":[31.4381,-76.624,9.0571]},{"id":60,"region":3,"inh":0,"act":0,"pos":[27.4769,-80.6321,9.6892]},{"id":61,"region":3,"inh":0,"act":0,"pos":[34.761,-70.1872,8.5814]},{"id":62,"region":3,"inh":0,"act":0,"pos":[28.7323,-69.9585,4.2102]},{"id":63,"region":3,"inh":0,"act":0,"pos":[34.2798,-74.3361,1.9872]},{"id":64,"region":4,"inh":1,"act":0,"pos":[-4.5421,-27.8909,1.2442]},{"id":65,"region":4,"inh":1,"act":0,"pos":[-4.4363,-23.5537,5.0769]},{"id":66,"region":4,"inh":1,"act":0,"pos":[1.2471,-20.4741,6.2495]},{"id":67,"region":4,"inh":1,"act":0,"pos":[-4.0704,-23.3844,11.3611]},{"id":68,"region":4,"inh":1,"act":0,"pos":[7.3291,-25.0792,6.5049]},{"id":69,"region":4,"inh":1,"act":0,"pos":[2.6021,-25.1433,1.6362]},{"id":70,"region":4,"inh":1,"act":0,"pos":[5.5587,-31.8525,4.8314]},{"id":71,"region":4,"inh":1,"act":0,"pos":[5.7184,-30.1621,11.6619]},{"id":72,"region":4,"inh":1,"act":0,"pos":[0.2169,-27.8293,6.3255]},{"id":73,"region":4,"inh":1,"act":0,"pos":[0.3394,-34.713,9.7828]},{"id":74,"region":4,"inh":1,"act":0,"pos":[1.6354,-31.0902,-0.1595]},{"id":75,"region":4,"inh":1,"act":0,"pos":[1.0037,-27.8102,9.0088]},{"id":76,"region":4,"inh":1,"act":0,"pos":[-6.1125,-30.144,8.6132]},{"id":77,"region":4,"inh":1,"act":0,"pos":[-1.5196,-29.3692,14.0004]},{"id":78,"region":4,"inh":1,"act":0,"pos":[3.0409,-23.2714,12.2699]},{"id":79,"region":4,"inh":1,"act":0,"pos":[-2.2325,-33.5402,4.4654]},{"id":80,"region":5,"inh":0,"act":0,"pos":[-59.8321,59.9559,2.6215]},{"id":81,"region":5,"inh":0,"act":0,"pos":[-62.7668,65.796,2.7056]},{"id":82,"region":5,"inh":0,"act":0,"pos":[-57.9971,61.7858,5.9093]},{"id":83,"region":5,"inh":0,"act":0,"pos":[-64.1644,65.7568,7.5094]},{"id":84,"region":5,"inh":0,"act":0,"pos":[-56.6022,65.9412,4.8828]},{"id":85,"region":5,"inh":0,"act":0,"pos":[-62.2478,55.7215,8.9648]},{"id":86,"region":5,"inh":0,"act":0,"pos":[-60.3019,63.4366,9.5813]},{"id":87,"region":5,"inh":0,"act":0,"pos":[-62.2732,59.6859,12.3532]},{"id":88,"region":5,"inh":0,"act":0,"pos":[-66.5714,59.8343,12.2975]},{"id":89,"region":5,"inh":0,"act":0,"pos":[-58.9934,58.6171,14.5531]},{"id":90,"region":5,"inh":0,"act":0,"pos":[-55.2158,59.5207,9.1449]},{"id":91,"region":5,"inh":0,"act":0,"pos":[-60.1029,68.9743,8.6685]},{"id":92,"region":5,"inh":0,"act":0,"pos":[-64.1406,58.2236,4.8586]},{"id":93,"region":5,"inh":0,"act":0,"pos":[-61.9228,64.585,15.1039]},{"id":94,"region":5,"inh":0,"act":0,"pos":[-65.9096,66.3999,11.6234]},{"id":95,"region":5,"inh":0,"act":0,"pos":[-57.9687,66.2158,12.562]},{"id":96,"region":5,"inh":0,"act":0,"pos":[-55.1946,63.1407,11.0756]},{"id":97,"region":5,"inh":0,"act":0,"pos":[-57.4072,56.2395,7.6711]},{"id":98,"region":5,"inh":0,"act":0,"pos":[-62.3577,61.3399,8.0083]},{"id":99,"region":5,"inh":0,"act":0,"pos":[-66.859,61.6001,6.0933]},{"id":100,"region":6,"inh":0,"act":0,"pos":[58.7975,58.7971,16.548]},{"id":101,"region":6,"inh":0,"act":0,"pos":[55.9017,65.3273,7.4035]},{"id":102,"region":6,"inh":0,"act":0,"pos":[55.7146,61.9118,13.2424]},{"id":103,"region":6,"inh":0,"act":0,"pos":[57.7915,54.2888,7.3528]},{"id":104,"region":6,"inh":0,"act":0,"pos":[59.9048,60.7399,3.108]},{"id":105,"region":6,"inh":0,"act":0,"pos":[60.8202,55.4404,4.5072]},{"id":106,"region":6,"inh":0,"act":0,"pos":[59.8529,58.9536,7.4707]},{"id":107,"region":6,"inh":0,"act":0,"pos":[58.1525,65.2434,12.1171]},{"id":108,"region":6,"inh":0,"act":0,"pos":[64.2056,56.5205,11.6132]},{"id":109,"region":6,"inh":0,"act":0,"pos":[63.5299,60.6546,14.369]},{"id":110,"region":6,"inh":0,"act":0,"pos":[65.1038,57.5977,7.1913]},{"id":111,"region":6,"inh":0,"act":0,"pos":[52.9286,59.2305,11.3407]},{"id":112,"region":6,"inh":0,"act":0,"pos":[61.5079,53.2445,12.1322]},{"id":113,"region":6,"inh":0,"act":0,"pos":[57.781,58.1456,10.3794]},{"id":114,"region":6,"inh":0,"act":0,"pos":[53.5207,57.7141,6.7844]},{"id":115,"region":6,"inh":0,"act":0,"pos":[63.4114,62.6968,6.6408]},{"id":116,"region":6,"inh":0,"act":0,"pos":[56.6511,54.368,13.1747]},{"id":117,"region":6,"inh":0,"act":0,"pos":[56.0049,61.7849,5.2473]},{"id":118,"region":6,"inh":0,"act":0,"pos":[60.7809,60.6414,11.0618]},{"id":119,"region":6,"inh":0,"act":0,"pos":[62.3149,64.6825,9.638]},{"id":120,"region":7,"inh":0,"act":0,"pos":[-42.6775,-90.6461,9.1442]},{"id":121,"region":7,"inh":0,"act":0,"pos":[-48.0824,-87.1173,11.1327]},{"id":122,"region":7,"inh":0,"act":0,"pos":[-43.6796,-98.1408,11.1966]},{"id":123,"region":7,"inh":0,"act":0,"pos":[-43.2538,-87.1079,5.5703]},{"id":124,"region":7,"inh":0,"act":0,"pos":[-51.3844,-91.1709,7.1602]},{"id":125,"region":7,"inh":0,"act":0,"pos":[-37.7413,-94.8369,7.2006]},{"id":126,"region":7,"inh":0,"act":0,"pos":[-46.4172,-83.5079,4.7683]},{"id":127,"region":7,"inh":0,"act":0,"pos":[-49.3318,-99.2307,5.5484]},{"id":128,"region":7,"inh":0,"act":0,"pos":[-35.5377,-86.5716,5.2533]},{"id":129,"region":7,"inh":0,"act":0,"pos":[-57.3909,-84.4112,5.0786]},{"id":130,"region":7,"inh":0,"act":0,"pos":[-39.8576,-99.109,3.5485]},{"id":131,"region":7,"inh":0,"act":0,"pos":[-42.5364,-79.3539,2.0992]},{"id":132,"region":7,"inh":0,"act":0,"pos":[-55.8061,-96.3363,1.4892]},{"id":133,"region":7,"inh":0,"act":0,"pos":[-35.7963,-91.4522,0.7486]},{"id":134,"region":7,"inh":0,"act":0,"pos":[-49.0759,-83.6851,-0.1168]},{"id":135,"region":7,"inh":0,"act":0,"pos":[-47.3307,-102.3253,-0.0969]},{"id":136,"region":7,"inh":0,"act":0,"pos":[-35.2075,-82.2237,-0.6679]},{"id":137,"region":7,"inh":0,"act":0,"pos":[-52.1055,-89.6406,-0.5659]},{"id":138,"region":7,"inh":0,"act":0,"pos":[-36.7359,-97.822,-2.2254]},{"id":139,"region":7,"inh":0,"act":0,"pos":[-46.2252,-79.6878,-3.6527]},{"id":140,"region":7,"inh":0,"act":0,"pos":[-51.4163,-98.2118,-3.4599]},{"id":141,"region":7,"inh":0,"act":0,"pos":[-35.3068,-87.9912,-4.0958]},{"id":142,"region":7,"inh":0,"act":0,"pos":[-49.7833,-86.7536,-2.5488]},{"id":143,"region":7,"inh":0,"act":0,"pos":[-43.1867,-99.3834,-6.5663]},{"id":144,"region":7,"inh":0,"act":0,"pos":[-41.9017,-82.8803,-6.0589]},{"id":145,"region":7,"inh":0,"act":0,"pos":[-51.7917,-91.3955,-6.8673]},{"id":146,"region":7,"inh":0,"act":0,"pos":[-37.6931,-92.6285,-9.2249]},{"id":147,"region":7,"inh":0,"act":0,"pos":[-47.3401,-85.6451,-6.1134]},{"id":148,"region":7,"inh":0,"act":0,"pos":[-45.5925,-93.5072,-7.0131]},{"id":149,"region":7,"inh":0,"act":0,"pos":[-43.1039,-88.6432,-9.6059]},{"id":150,"region":8,"inh":0,"act":0,"pos":[48.4452,-90.6309,12.8053]},{"id":151,"region":8,"inh":0,"act":0,"pos":[42.6058,-87.7152,6.1147]},{"id":152,"region":8,"inh":0,"act":0,"pos":[46.4324,-96.7755,10.3956]},{"id":153,"region":8,"inh":0,"act":0,"pos":[48.711,-85.0636,7.9881]},{"id":154,"region":8,"inh":0,"act":0,"pos":[38.9573,-91.6413,6.264]},{"id":155,"region":8,"inh":0,"act":0,"pos":[53.653,-95.5,8.0966]},{"id":156,"region":8,"inh":0,"act":0,"pos":[43.3764,-83.9846,5.0887]},{"id":157,"region":8,"inh":0,"act":0,"pos":[41.2333,-99.3041,5.159]},{"id":158,"region":8,"inh":0,"act":0,"pos":[57.4159,-85.4715,5.3242]},{"id":159,"region":8,"inh":0,"act":0,"pos":[34.0965,-85.7964,4.9415]},{"id":160,"region":8,"inh":0,"act":0,"pos":[48.5017,-98.1731,3.6695]},{"id":161,"region":8,"inh":0,"act":0,"pos":[47.861,-79.8372,1.8175]},{"id":162,"region":8,"inh":0,"act":0,"pos":[35.022,-95.9809,1.7818]},{"id":163,"region":8,"inh":0,"act":0,"pos":[56.8846,-92.3226,0.9862]},{"id":164,"region":8,"inh":0,"act":0,"pos":[38.5194,-80.8685,0.3399]},{"id":165,"region":8,"inh":0,"act":0,"pos":[42.9112,-102.059,-0.9437]},{"id":166,"region":8,"inh":0,"act":0,"pos":[53.8859,-82.6427,-1.2078]},{"id":167,"region":8,"inh":0,"act":0,"pos":[32.9497,-90.1343,-2.4606]},{"id":168,"region":8,"inh":0,"act":0,"pos":[50.5669,-94.9086,-1.0313]},{"id":169,"region":8,"inh":0,"act":0,"pos":[44.2071,-77.5609,-2.9902]},{"id":170,"region":8,"inh":0,"act":0,"pos":[39.6584,-97.5023,-3.024]},{"id":171,"region":8,"inh":0,"act":0,"pos":[56.1236,-88.12,-5.4029]},{"id":172,"region":8,"inh":0,"act":0,"pos":[37.2941,-85.1305,-6.2137]},{"id":173,"region":8,"inh":0,"act":0,"pos":[46.8427,-96.6306,-4.2741]},{"id":174,"region":8,"inh":0,"act":0,"pos":[50.6878,-81.0076,-8.3696]},{"id":175,"region":8,"inh":0,"act":0,"pos":[38.5405,-91.521,-6.3678]},{"id":176,"region":8,"inh":0,"act":0,"pos":[51.0818,-93.8897,-9.4273]},{"id":177,"region":8,"inh":0,"act":0,"pos":[42.3746,-84.5897,-9.932]},{"id":178,"region":8,"inh":0,"act":0,"pos":[43.7637,-94.8462,-11.8677]},{"id":179,"region":8,"inh":0,"act":0,"pos":[47.777,-87.9396,-11.7814]},{"id":180,"region":9,"inh":0,"act":0,"pos":[2.6581,0.124,16.6822]},{"id":181,"region":9,"inh":0,"act":0,"pos":[-1.5031,3.8531,14.1146]},{"id":182,"region":9,"inh":0,"act":0,"pos":[1.0554,-4.1963,15.5326]},{"id":183,"region":9,"inh":0,"act":0,"pos":[5.1551,7.5136,18.9529]},{"id":184,"region":9,"inh":0,"act":0,"pos":[-4.8007,0.3525,9.0535]},{"id":185,"region":9,"inh":0,"act":0,"pos":[7.206,-6.4365,18.6719]},{"id":186,"region":9,"inh":0,"act":0,"pos":[-1.3683,8.1181,15.8671]},{"id":187,"region":9,"inh":0,"act":0,"pos":[-5.5315,-9.3478,17.6592]},{"id":188,"region":9,"inh":0,"act":0,"pos":[12.2738,4.6634,19.2939]},{"id":189,"region":9,"inh":0,"act":0,"pos":[-10.5073,5.337,15.9895]},{"id":190,"region":9,"inh":0,"act":0,"pos":[2.3351,-4.7476,6.3543]},{"id":191,"region":9,"inh":0,"act":0,"pos":[5.8564,15.7156,19.8886]},{"id":192,"region":9,"inh":0,"act":0,"pos":[-10.4319,-7.1451,12.0462]},{"id":193,"region":9,"inh":0,"act":0,"pos":[18.3717,-4.9031,16.167]},{"id":194,"region":9,"inh":0,"act":0,"pos":[-9.3077,13.6455,15.539]},{"id":195,"region":9,"inh":0,"act":0,"pos":[-3.2996,-15.1433,14.7353]},{"id":196,"region":9,"inh":0,"act":0,"pos":[10.8932,10.7139,11.2468]},{"id":197,"region":9,"inh":0,"act":0,"pos":[-3.8673,0.8932,3.3269]},{"id":198,"region":9,"inh":0,"act":0,"pos":[9.7803,-10.3823,11.5965]},{"id":199,"region":9,"inh":0,"act":0,"pos":[0.6107,13.8411,10.6524]},{"id":200,"region":9,"inh":0,"act":0,"pos":[-12.049,-14.6544,12.9147]},{"id":201,"region":9,"inh":0,"act":0,"pos":[5.2228,-0.219,2.5112]},{"id":202,"region":9,"inh":0,"act":0,"pos":[-5.1436,4.0643,3.384]},{"id":203,"region":9,"inh":0,"act":0,"pos":[4.6373,-16.7606,9.3019]},{"id":204,"region":9,"inh":0,"act":0,"pos":[9.3997,15.9369,8.0785]},{"id":205,"region":9,"inh":0,"act":0,"pos":[-19.0203,-4.745,10.4628]},{"id":206,"region":9,"inh":0,"act":0,"pos":[16.7395,-7.3077,7.9689]},{"id":207,"region":9,"inh":0,"act":0,"pos":[-3.0036,10.2376,3.419]},{"id":208,"region":9,"inh":0,"act":0,"pos":[-5.6492,-19.7121,8.3398]},{"id":209,"region":9,"inh":0,"act":0,"pos":[15.7009,7.4018,7.9754]},{"id":210,"region":9,"inh":0,"act":0,"pos":[-12.5723,4.302,4.9212]},{"id":211,"region":9,"inh":0,"act":0,"pos":[7.9992,-12.8788,4.4774]},{"id":212,"region":9,"inh":0,"act":0,"pos":[3.8938,20.9628,6.0414]},{"id":213,"region":9,"inh":0,"act":0,"pos":[-18.2271,-13.2705,6.9896]},{"id":214,"region":9,"inh":0,"act":0,"pos":[25.9788,-1.7355,4.7298]},{"id":215,"region":9,"inh":0,"act":0,"pos":[-9.3782,9.2172,2.9198]},{"id":216,"region":9,"inh":0,"act":0,"pos":[0.4361,-25.0705,5.6945]},{"id":217,"region":9,"inh":0,"act":0,"pos":[17.4995,17.9656,2.8005]},{"id":218,"region":9,"inh":0,"act":0,"pos":[-21.0228,-0.7245,3.4372]},{"id":219,"region":9,"inh":0,"act":0,"pos":[11.5746,-9.8314,3.4219]},{"id":220,"region":9,"inh":0,"act":0,"pos":[-4.0315,22.2841,0.8542]},{"id":221,"region":9,"inh":0,"act":0,"pos":[-8.8553,-13.7614,2.1695]},{"id":222,"region":9,"inh":0,"act":0,"pos":[23.4958,6.1357,2.7541]},{"id":223,"region":9,"inh":0,"act":0,"pos":[-19.6171,8.062,-0.5588]},{"id":224,"region":9,"inh":0,"act":0,"pos":[3.4939,-11.1489,0.9762]},{"id":225,"region":9,"inh":0,"act":0,"pos":[8.0594,19.6014,1.0114]},{"id":226,"region":9,"inh":0,"act":0,"pos":[-20.738,-10.8728,-0.2776]},{"id":227,"region":9,"inh":0,"act":0,"pos":[3.3202,-1.2163,-0.2641]},{"id":228,"region":9,"inh":0,"act":0,"pos":[-13.9956,20.7621,-1.0079]},{"id":229,"region":9,"inh":0,"act":0,"pos":[-3.0899,-17.7427,-1.6753]},{"id":230,"region":9,"inh":0,"act":0,"pos":[12.2574,7.1272,-1.9717]},{"id":231,"region":9,"inh":0,"act":0,"pos":[-24.4347,2.5873,-4.4884]},{"id":232,"region":9,"inh":0,"act":0,"pos":[6.4898,-5.8777,-2.5023]},{"id":233,"region":9,"inh":0,"act":0,"pos":[0.6,18.116,-4.3224]},{"id":234,"region":9,"inh":0,"act":0,"pos":[-17.9758,-16.7793,-3.9721]},{"id":235,"region":9,"inh":0,"act":0,"pos":[17.6205,1.7869,-2.9681]},{"id":236,"region":9,"inh":0,"act":0,"pos":[-17.7639,15.3677,-4.6204]},{"id":237,"region":9,"inh":0,"act":0,"pos":[2.4557,-17.1081,-4.3644]},{"id":238,"region":9,"inh":0,"act":0,"pos":[15.3967,21.5678,-8.866]},{"id":239,"region":9,"inh":0,"act":0,"pos":[-22.2367,-3.5891,-7.846]},{"id":240,"region":9,"inh":0,"act":0,"pos":[19.1189,-9.5695,-7.6415]},{"id":241,"region":9,"inh":0,"act":0,"pos":[-5.764,12.8731,-6.8877]},{"id":242,"region":9,"inh":0,"act":0,"pos":[-5.654,-14.8492,-5.4709]},{"id":243,"region":9,"inh":0,"act":0,"pos":[19.0991,6.8588,-8.4509]},{"id":244,"region":9,"inh":0,"act":0,"pos":[-13.7331,5.6319,-6.2134]},{"id":245,"region":9,"inh":0,"act":0,"pos":[4.3147,-8.4227,-4.1026]},{"id":246,"region":9,"inh":0,"act":0,"pos":[5.7126,18.5335,-10.6977]},{"id":247,"region":9,"inh":0,"act":0,"pos":[-17.402,-13.3114,-11.1825]},{"id":248,"region":9,"inh":0,"act":0,"pos":[10.303,-1.4912,-7.1832]},{"id":249,"region":9,"inh":0,"act":0,"pos":[-11.1279,13.7361,-12.3566]},{"id":250,"region":9,"inh":0,"act":0,"pos":[-1.6736,-13.8596,-10.1742]},{"id":251,"region":9,"inh":0,"act":0,"pos":[10.4777,9.1195,-11.0088]},{"id":252,"region":9,"inh":0,"act":0,"pos":[-18.7436,0.6376,-15.5042]},{"id":253,"region":9,"inh":0,"act":0,"pos":[6.3958,-6.517,-8.6643]},{"id":254,"region":9,"inh":0,"act":0,"pos":[-0.6312,16.1455,-14.8134]},{"id":255,"region":9,"inh":0,"act":0,"pos":[-7.6651,-10.3882,-13.9856]},{"id":256,"region":9,"inh":0,"act":0,"pos":[16.1994,4.3184,-15.5972]},{"id":257,"region":9,"inh":0,"act":0,"pos":[-13.6244,9.4986,-19.8274]},{"id":258,"region":9,"inh":0,"act":0,"pos":[1.978,-11.382,-12.2024]},{"id":259,"region":9,"inh":0,"act":0,"pos":[7.0648,13.1163,-16.3368]},{"id":260,"region":9,"inh":0,"act":0,"pos":[-9.0458,-4.304,-14.0552]},{"id":261,"region":9,"inh":0,"act":0,"pos":[12.7088,-5.6105,-20.8692]},{"id":262,"region":9,"inh":0,"act":0,"pos":[-4.602,9.0271,-17.4176]},{"id":263,"region":9,"inh":0,"act":0,"pos":[-4.3797,-9.9106,-17.6164]},{"id":264,"region":9,"inh":0,"act":0,"pos":[7.4572,4.0315,-19.409]},{"id":265,"region":9,"inh":0,"act":0,"pos":[-8.0972,1.9328,-17.9121]},{"id":266,"region":9,"inh":0,"act":0,"pos":[6.4561,-7.2362,-21.7177]},{"id":267,"region":9,"inh":0,"act":0,"pos":[1.1925,8.8403,-23.5003]},{"id":268,"region":9,"inh":0,"act":0,"pos":[-4.5677,-3.3804,-22.3472]},{"id":269,"region":9,"inh":0,"act":0,"pos":[2.7572,0.3554,-22.9637]},{"id":270,"region":10,"inh":1,"act":0,"pos":[0.5279,-35.2592,28.3336]},{"id":271,"region":10,"inh":1,"act":0,"pos":[-4.3737,-31.4491,34.772]},{"id":272,"region":10,"inh":1,"act":0,"pos":[1.2473,-42.139,35.9865]},{"id":273,"region":10,"inh":1,"act":0,"pos":[3.8933,-29.4391,32.15]},{"id":274,"region":10,"inh":1,"act":0,"pos":[-8.3128,-36.2244,31.8041]},{"id":275,"region":10,"inh":1,"act":0,"pos":[9.1513,-40.1457,31.5245]},{"id":276,"region":10,"inh":1,"act":0,"pos":[-2.7757,-23.2058,32.4691]},{"id":277,"region":10,"inh":1,"act":0,"pos":[-4.4779,-43.831,30.1229]},{"id":278,"region":10,"inh":1,"act":0,"pos":[11.778,-30.4388,29.0684]},{"id":279,"region":10,"inh":1,"act":0,"pos":[-10.9266,-31.3269,29.2222]},{"id":280,"region":10,"inh":1,"act":0,"pos":[2.2938,-39.4809,25.2533]},{"id":281,"region":10,"inh":1,"act":0,"pos":[3.0247,-23.0176,27.5208]},{"id":282,"region":10,"inh":1,"act":0,"pos":[-11.2154,-42.0921,26.097]},{"id":283,"region":10,"inh":1,"act":0,"pos":[11.7245,-36.6635,25.9672]},{"id":284,"region":10,"inh":1,"act":0,"pos":[-6.469,-26.421,24.6687]},{"id":285,"region":10,"inh":1,"act":0,"pos":[-2.3655,-48.0623,23.8308]},{"id":286,"region":10,"inh":1,"act":0,"pos":[8.0509,-27.2765,22.1529]},{"id":287,"region":10,"inh":1,"act":0,"pos":[-11.2463,-34.7271,21.3224]},{"id":288,"region":10,"inh":1,"act":0,"pos":[6.4927,-42.0764,21.7657]},{"id":289,"region":10,"inh":1,"act":0,"pos":[-0.2126,-22.2744,20.169]},{"id":290,"region":10,"inh":1,"act":0,"pos":[-5.7469,-42.8889,20.0568]},{"id":291,"region":10,"inh":1,"act":0,"pos":[6.8752,-34.1036,21.0322]},{"id":292,"region":10,"inh":1,"act":0,"pos":[-8.6034,-29.2207,17.9511]},{"id":293,"region":10,"inh":1,"act":0,"pos":[1.4074,-41.9274,19.0038]},{"id":294,"region":10,"inh":1,"act":0,"pos":[3.2758,-28.7056,17.4275]},{"id":295,"region":10,"inh":1,"act":0,"pos":[-8.8331,-37.1159,15.2179]},{"id":296,"region":10,"inh":1,"act":0,"pos":[8.0537,-39.2845,13.3102]},{"id":297,"region":10,"inh":1,"act":0,"pos":[-2.4084,-27.5216,12.8502]},{"id":298,"region":10,"inh":1,"act":0,"pos":[-2.3885,-38.7705,14.967]},{"id":299,"region":10,"inh":1,"act":0,"pos":[1.8573,-33.3343,16.8505]}],"links":[]};
+
+const INITIAL_TAB = "future";
+// ─── Мозг-вьюер dioma: canvas 2D, ручная 3D→2D проекция ────────────────────
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const $ = (id) => document.getElementById(id);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+// ── состояние вьюера ──
+let DATA = null;            // активный датасет
+let cur = null;             // препроцессированный датасет
+let tab = INITIAL_TAB === 'future' ? 'future' : 'current';
+let yaw = 0.65, pitch = 0.38, dist = 3.8;
+const DEF = { yaw: 0.65, pitch: 0.38, dist: 3.8 };
+let autospin = true, paused = false, dragging = false;
+let showGhosts = true, showLabels = true, showLinks = true;
+let wtFrac = 0.02, ptScale = 1.0, present = false;
+let regionVis = [];
+let dirty = true, lowGlow = false;
+let lastX = 0, lastY = 0, lastT = performance.now();
+let W = 0, H = 0;
+
+// палитра классов регионов (сенсоры — циан, моторы — оранж,
+// тормозные — красно-пурпурные, ассоциативный слой — фиолетовый)
+const KIND_COLOR = {
+  sensor: '#41d7ff', motor: '#ffa940', inter: '#ff5d8a',
+  assoc: '#b388ff', ghost: '#8fa3c0'
+};
+
+function hexA(hex, a) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+}
+function mixHex(c1, c2, t, a) {
+  const r1 = parseInt(c1.slice(1, 3), 16), g1 = parseInt(c1.slice(3, 5), 16), b1 = parseInt(c1.slice(5, 7), 16);
+  const r2 = parseInt(c2.slice(1, 3), 16), g2 = parseInt(c2.slice(3, 5), 16), b2 = parseInt(c2.slice(5, 7), 16);
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const b = Math.round(b1 + (b2 - b1) * t);
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+}
+// цвет региона: класс + призрачность
+function tintOf(r) {
+  const c = KIND_COLOR[r.kind] || '#8fa3c0';
+  return r.ghost ? hexA(c, 0.4) : c;
+}
+
+// ── препроцессинг датасета: нормализация в единичный шар + индексы ──
+function prep(data) {
+  const n0 = data.neurons.length;
+  let cx = 0, cy = 0, cz = 0;
+  for (const nn of data.neurons) { cx += nn.pos[0]; cy += nn.pos[1]; cz += nn.pos[2]; }
+  cx /= Math.max(1, n0); cy /= Math.max(1, n0); cz /= Math.max(1, n0);
+  let R = 1e-6;
+  for (const nn of data.neurons) {
+    R = Math.max(R, Math.hypot(nn.pos[0] - cx, nn.pos[1] - cy, nn.pos[2] - cz));
+  }
+  const S = 1 / R;
+  const regions = data.regions.map(r => ({
+    label: r.label, kind: r.kind, ghost: !!r.ghost,
+    center: [(r.center[0] - cx) * S, (r.center[1] - cy) * S, (r.center[2] - cz) * S],
+    radius: r.radius * S
+  }));
+  const neurons = data.neurons.map(nn => ({
+    id: nn.id, region: nn.region, inh: !!nn.inh, act: nn.act,
+    pos: [(nn.pos[0] - cx) * S, (nn.pos[1] - cy) * S, (nn.pos[2] - cz) * S],
+    ghost: !!(regions[nn.region] && regions[nn.region].ghost)
+  }));
+  let wmax = 1e-6;
+  for (const l of data.links) wmax = Math.max(wmax, Math.abs(l.w));
+  const links = data.links.map(l => ({
+    pre: l.pre, post: l.post, w: l.w, inh: !!l.inh, w01: Math.abs(l.w) / wmax
+  }));
+  const counts = new Array(regions.length).fill(0);
+  for (const nn of neurons) counts[nn.region]++;
+  const maxAct = neurons.reduce((m, x) => Math.max(m, x.act), 0) || 1;
+  return { data, regions, neurons, links, counts, maxAct };
+}
+
+function setData(d, keepVis) {
+  DATA = d;
+  cur = prep(d);
+  if (!keepVis || regionVis.length !== cur.regions.length) {
+    regionVis = cur.regions.map(r => !r.ghost || showGhosts);
+  }
+  if (!showGhosts) regionVis = regionVis.map((v, i) => v && !cur.regions[i].ghost);
+  $('title').textContent = d.meta.title;
+  const nb = $('note');
+  if (d.meta.note) { nb.hidden = false; nb.textContent = d.meta.note; } else { nb.hidden = true; }
+  $('metabox').textContent =
+    'Формат: ' + d.version + '\n' +
+    'Тиков замера активности: ' + d.meta.ticks_measured + '\n' +
+    'Синапсов в коннектоме: ' + d.meta.n_synapses + '\n' +
+    'Связей в срезе: ' + d.links.length;
+  const hasGhost = cur.regions.some(r => r.ghost);
+  $('f-ghost').disabled = !hasGhost;
+  $('f-ghost').checked = showGhosts;
+  buildRegionList();
+  dirty = true;
+}
+
+function buildRegionList() {
+  const box = $('reglist');
+  box.textContent = '';
+  cur.regions.forEach((r, i) => {
+    const lab = document.createElement('label');
+    lab.className = 'reg';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = regionVis[i] !== false;
+    cb.addEventListener('change', () => { regionVis[i] = cb.checked; dirty = true; });
+    const dot = document.createElement('span');
+    dot.className = 'dot'; dot.style.background = tintOf(r);
+    const nm = document.createElement('span'); nm.textContent = r.label;
+    const cnt = document.createElement('span'); cnt.className = 'cnt';
+    cnt.textContent = cur.counts[i];
+    lab.append(cb, dot, nm, cnt);
+    box.appendChild(lab);
+  });
+}
+
+// ── перспективная проекция: yaw по Y, pitch по X, камера на -Z ──
+function proj(p) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const x = p[0] * cy + p[2] * sy;
+  const z = -p[0] * sy + p[2] * cy;
+  const y2 = p[1] * cp - z * sp;
+  const z2 = p[1] * sp + z * cp;
+  const f = Math.max(W, H) * 1.35;
+  const sc = f / (dist - z2);
+  return { x: W / 2 + x * sc, y: H / 2 - y2 * sc, z: z2, s: sc };
+}
+
+function render() {
+  // фон: вертикальный градиент под космос
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, present ? '#0f1522' : '#0b1322');
+  bg.addColorStop(1, present ? '#0a0e14' : '#04060c');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  const regs = cur.regions, neurons = cur.neurons, links = cur.links;
+  const vis = (i) => regionVis[i] !== false;
+
+  // ── 1. оболочки регионов: полупрозрачные эллипсоиды, painter ──
+  const hulls = [];
+  for (let i = 0; i < regs.length; i++) {
+    const r = regs[i];
+    if (!vis(i) || (r.ghost && !showGhosts)) continue;
+    hulls.push({ r, c: proj(r.center) });
+  }
+  hulls.sort((a, b) => a.c.z - b.c.z);
+  for (const h of hulls) drawHull(h);
+
+  // ── 2. связи: сортировка по глубине, альфа/толщина по дистанции ──
+  if (showLinks) {
+    const items = [];
+    for (const l of links) {
+      if (l.w01 < wtFrac) continue;
+      const pa = neurons[l.pre], pb = neurons[l.post];
+      if (!pa || !pb) continue;
+      if (!vis(pa.region) || !vis(pb.region)) continue;
+      if ((pa.ghost || pb.ghost) && !showGhosts) continue;
+      const a = proj(pa.pos), b = proj(pb.pos);
+      items.push({ a, b, l, z: (a.z + b.z) / 2 });
+    }
+    items.sort((x, y) => x.z - y.z);
+    for (const it of items) drawLink(it);
+  }
+
+  // ── 3. нейроны: светящиеся точки, яркость по активности ──
+  const dots = [];
+  for (const nn of neurons) {
+    if (!vis(nn.region)) continue;
+    if (nn.ghost && !showGhosts) continue;
+    dots.push({ nn, p: proj(nn.pos) });
+  }
+  dots.sort((a, b) => a.p.z - b.p.z);
+  for (const d of dots) drawNeuron(d);
+
+  // ── 4. подписи регионов (поверх всего) ──
+  if (showLabels) {
+    const labs = [];
+    for (let i = 0; i < regs.length; i++) {
+      const r = regs[i];
+      if (!vis(i) || (r.ghost && !showGhosts)) continue;
+      labs.push({ r, c: proj(r.center), i });
+    }
+    labs.sort((a, b) => a.c.z - b.c.z);
+    for (const l of labs) drawLabel(l);
+  }
+}
+
+// эллипсоид-каркас: три больших круга (XY, XZ, YZ)
+function ring3D(r, u, v, N) {
+  const pts = [];
+  for (let k = 0; k < N; k++) {
+    const t = (k / N) * Math.PI * 2;
+    const p = [0, 0, 0];
+    p[u] = Math.cos(t) * r.radius;
+    p[v] = Math.sin(t) * r.radius;
+    pts.push([r.center[0] + p[0], r.center[1] + p[1], r.center[2] + p[2]]);
+  }
+  return pts;
+}
+function drawHull(h) {
+  const r = h.r;
+  const alpha = r.ghost ? (present ? 0.24 : 0.15) : (present ? 0.40 : 0.28);
+  const col = KIND_COLOR[r.kind] || '#8fa3c0';
+  ctx.strokeStyle = hexA(col, alpha);
+  ctx.lineWidth = r.ghost ? 1.2 : 1.5;
+  ctx.setLineDash(r.ghost ? [3, 5] : []);
+  for (const pair of [[0, 1], [0, 2], [1, 2]]) {
+    const ring = ring3D(r, pair[0], pair[1], 28);
+    ctx.beginPath();
+    for (let k = 0; k < ring.length; k++) {
+      const p = proj(ring[k]);
+      if (k === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+}
+
+function drawLink(it) {
+  const a = it.a, b = it.b, l = it.l;
+  const zf = clamp(0.30 + (Math.max(a.z, b.z) + 1) * 0.45, 0.18, 1.0); // глубина
+  const cBoost = present ? 1.35 : 1.0;
+  let col, dash = [];
+  if (l.inh) {
+    // тормозные — малиновые пунктиром
+    col = hexA('#ff3b5c', clamp((0.30 + 0.55 * l.w01) * zf * cBoost, 0.12, 0.95));
+    dash = [5, 4];
+  } else {
+    // возбуждающие — изумрудный градиент по |весу|
+    col = mixHex('#0e6e42', '#2bd97a', l.w01, clamp((0.22 + 0.62 * l.w01) * zf * cBoost, 0.1, 0.95));
+  }
+  ctx.strokeStyle = col;
+  ctx.lineWidth = (0.6 + 1.4 * l.w01) * (0.6 + 0.4 * zf) * (present ? 1.3 : 1.0);
+  ctx.setLineDash(dash);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawNeuron(d) {
+  const nn = d.nn, p = d.p;
+  const reg = cur.regions[nn.region] || { kind: 'ghost' };
+  const col = KIND_COLOR[reg.kind] || '#8fa3c0';
+  const act = clamp(nn.act / cur.maxAct, 0, 1);
+  const zf = clamp(0.5 + (p.z + 1) * 0.5, 0.35, 1.2);
+  const r = clamp((0.007 + 0.022 * act) * ptScale * p.s * zf, 1.1, 46);
+  const alpha = nn.ghost
+    ? (present ? 0.45 : 0.30)
+    : clamp(0.42 + 0.58 * act, 0.42, 1.0);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = col;
+  ctx.shadowBlur = lowGlow ? 0 : 6 + 16 * act;
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function roundRectPath(x, y, w, h, rad) {
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
+}
+
+function drawLabel(it) {
+  const reg = cur.regions[it.i];
+  const c = it.c;
+  const col = KIND_COLOR[reg.kind] || '#8fa3c0';
+  const zf = clamp(0.55 + (c.z + 1) * 0.45, 0.4, 1.25);
+  const fs = clamp((present ? 16 : 12.5) * zf * (0.85 + c.s * 0.3), 9, present ? 44 : 34);
+  const txt = reg.label + ' · ' + cur.counts[it.i];
+  ctx.font = '600 ' + fs.toFixed(1) + 'px "Segoe UI", system-ui, sans-serif';
+  const tw = ctx.measureText(txt).width;
+  const px = 7, py = 4;
+  const bx = c.x - tw / 2 - px, by = c.y - fs / 2 - py;
+  ctx.fillStyle = 'rgba(7,11,20,0.74)';
+  roundRectPath(bx, by, tw + px * 2, fs + py * 2, 6);
+  ctx.fill();
+  ctx.strokeStyle = hexA(col, reg.ghost ? 0.4 : 0.8);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = reg.ghost ? hexA(col, 0.85) : col;
+  ctx.fillText(txt, c.x, c.y + fs * 0.33);
+}
+
+// ── холст и события ──
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = $('stage').getBoundingClientRect();
+  W = rect.width; H = rect.height;
+  cv.width = Math.max(1, Math.round(W * dpr));
+  cv.height = Math.max(1, Math.round(H * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  dirty = true;
+}
+window.addEventListener('resize', resize);
+
+cv.addEventListener('pointerdown', (e) => {
+  dragging = true; autospin = false; dirty = true;
+  lastX = e.clientX; lastY = e.clientY;
+  cv.classList.add('dragging');
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  yaw += (e.clientX - lastX) * 0.006;
+  pitch = clamp(pitch + (e.clientY - lastY) * 0.006, -1.45, 1.45);
+  lastX = e.clientX; lastY = e.clientY;
+  dirty = true;
+});
+function endDrag() { dragging = false; cv.classList.remove('dragging'); }
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+cv.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  dist = clamp(dist * Math.exp(e.deltaY * 0.0012), 1.15, 9);
+  dirty = true;
+}, { passive: false });
+cv.addEventListener('dblclick', () => {
+  yaw = DEF.yaw; pitch = DEF.pitch; dist = DEF.dist;
+  autospin = true; paused = false; dirty = true;
+});
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); paused = !paused; dirty = true; }
+});
+
+// ── вкладки ──
+document.querySelectorAll('.tab').forEach((b) => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    tab = b.dataset.tab;
+    setData(tab === 'future' ? BRAIN_FUTURE : BRAIN_CURRENT, false);
+    autospin = true; paused = false; dirty = true;
+  });
+});
+
+// ── сайдбар: фильтры и оформление ──
+$('f-ghost').addEventListener('change', (e) => {
+  showGhosts = e.target.checked;
+  cur.regions.forEach((r, i) => { if (r.ghost) regionVis[i] = showGhosts; });
+  dirty = true;
+});
+$('f-labels').addEventListener('change', (e) => { showLabels = e.target.checked; dirty = true; });
+$('f-links').addEventListener('change', (e) => { showLinks = e.target.checked; dirty = true; });
+$('f-present').addEventListener('change', (e) => {
+  present = e.target.checked;
+  document.body.classList.toggle('present', present);
+  dirty = true;
+});
+$('s-wt').addEventListener('input', (e) => {
+  wtFrac = (+e.target.value) / 100;
+  $('wt-val').textContent = e.target.value + '%';
+  dirty = true;
+});
+$('s-ps').addEventListener('input', (e) => {
+  ptScale = (+e.target.value) / 100;
+  $('ps-val').textContent = e.target.value + '%';
+  dirty = true;
+});
+$('b-sensor').addEventListener('click', () => setKindOnly('sensor'));
+$('b-motor').addEventListener('click', () => setKindOnly('motor'));
+$('b-all').addEventListener('click', () => {
+  regionVis = regionVis.map((_, i) => !cur.regions[i].ghost || showGhosts);
+  syncChecks(); dirty = true;
+});
+function setKindOnly(kind) {
+  regionVis = cur.regions.map((r) => r.kind === kind && (!r.ghost || showGhosts));
+  syncChecks(); dirty = true;
+}
+function syncChecks() {
+  const cbs = document.querySelectorAll('#reglist input[type=checkbox]');
+  regionVis.forEach((v, i) => { if (cbs[i]) cbs[i].checked = v; });
+}
+
+// ── легенда ──
+function buildLegend() {
+  const lg = $('legend');
+  lg.textContent = '';
+  const rows = [
+    ['sensor', 'Сенсоры (запах, стены)'],
+    ['motor', 'Моторы (руль)'],
+    ['inter', 'Тормозные интернейроны'],
+    ['assoc', 'Ассоциативный слой'],
+  ];
+  for (const row of rows) {
+    const d = document.createElement('div'); d.className = 'lrow';
+    const s = document.createElement('span'); s.className = 'sw dot';
+    s.style.background = KIND_COLOR[row[0]];
+    const t = document.createElement('span'); t.textContent = row[1];
+    d.append(s, t); lg.appendChild(d);
+  }
+  const g1 = document.createElement('div'); g1.className = 'lrow';
+  g1.innerHTML = '<span class="sw" style="background:linear-gradient(90deg,#0e6e42,#2bd97a)"></span><span>Возбуждающие связи (ярче = вес)</span>';
+  lg.appendChild(g1);
+  const g2 = document.createElement('div'); g2.className = 'lrow';
+  g2.innerHTML = '<span class="sw dash"></span><span>Тормозные связи</span>';
+  lg.appendChild(g2);
+  const g3 = document.createElement('div'); g3.className = 'lrow';
+  g3.innerHTML = '<span class="sw dot" style="background:rgba(143,163,192,.5)"></span><span>Плановые регионы (транш 3)</span>';
+  lg.appendChild(g3);
+}
+
+// ── цикл отрисовки: RAF, перерисовка только при изменениях ──
+let fpsTimes = [];
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (autospin && !paused) { yaw += 0.0038; dirty = true; }
+  if (dirty) {
+    render();
+    dirty = false;
+    const dt = now - lastT;
+    lastT = now;
+    fpsTimes.push(dt);
+    if (fpsTimes.length > 30) fpsTimes.shift();
+    const avg = fpsTimes.reduce((a, b) => a + b, 0) / fpsTimes.length;
+    // адаптивное качество: на слабых машинах снимаем shadowBlur
+    if (avg > 26) lowGlow = true;
+    else if (avg < 14) lowGlow = false;
+  }
+}
+
+// ── старт ──
+function init() {
+  resize();
+  buildLegend();
+  document.querySelectorAll('.tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === INITIAL_TAB));
+  setData(tab === 'future' ? BRAIN_FUTURE : BRAIN_CURRENT, false);
+  $('wt-val').textContent = '2%';
+  $('ps-val').textContent = '100%';
+  requestAnimationFrame(loop);
+}
+init();
+
+</script>
+</body>
+</html>

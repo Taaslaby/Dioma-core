@@ -1,5 +1,7 @@
 // dioma-render: базовый спрайтовый шейдер (вершины квада + инстансные атрибуты).
 //
+// NDC: Y вверх = верх экрана (соглашение сайд-вью); мировая Y растёт вверх.
+//
 // Uniform камеры — 32 байта (2×vec4):
 //   camera.xy    — центр камеры (мировые координаты)
 //   camera.z     — зум
@@ -54,13 +56,13 @@ fn vs_main(in: VsIn) -> VsOut {
     );
     let world = rotated + in.instance_pos;
 
-    // Мир → NDC (ось Y вверх).
+    // Мир → NDC: Y вверх = верх экрана (соглашение сайд-вью); мировая Y растёт вверх.
     let center = cam.camera.xy;
     let zoom = cam.camera.z;
     let vp = cam.viewport.xy;
     let ndc = vec2<f32>(
         (world.x - center.x) / (vp.x * 0.5 / zoom),
-        -(world.y - center.y) / (vp.y * 0.5 / zoom),
+        (world.y - center.y) / (vp.y * 0.5 / zoom),
     );
 
     var out: VsOut;

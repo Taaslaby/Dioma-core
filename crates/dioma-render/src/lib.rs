@@ -8,7 +8,14 @@
 //! радиальными источниками света, частицами и пост-обработкой
 //! (виньетка/зерно, размытие). Текстуры собираются в атлас из процедурных
 //! генераторов (круг, кольцо, ягода, полоса, мягкий круг) — ноль
-//! ассет-файлов. Все шейдеры встроены через `include_str!`.
+//! ассет-файлов. Тайловые карты (Tilemap/TileBatch — сетка u16-тайлов,
+//! рендерящаяся базовым спрайтовым батчем) и параллакс-слои фона
+//! ([`Renderer::render_parallax`]) — без новых пайплайнов. Все шейдеры
+//! встроены через `include_str!`.
+//!
+//! Соглашение осей (сайд-вью): мировая Y растёт вверх, верх экрана = больший
+//! Y мира (NDC Y вверх); X — вправо. [`Camera::screen_to_world`] согласован
+//! с рендером — используйте его для пикинга.
 
 pub mod atlas;
 pub mod batch;
@@ -22,6 +29,7 @@ pub mod postprocess;
 pub mod profiler;
 pub mod renderer;
 pub mod sprite;
+pub mod tilemap;
 
 pub use atlas::SpriteAtlas;
 pub use batch::SpriteBatch;
@@ -35,3 +43,4 @@ pub use postprocess::{PostFx, PostProcess};
 pub use profiler::RenderStats;
 pub use renderer::Renderer;
 pub use sprite::{Sprite, SpriteFx};
+pub use tilemap::{TileBatch, Tilemap, TilesetUv};

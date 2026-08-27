@@ -5,7 +5,7 @@
 //! Description: HH спина (быстрый точный рефлекс) + HAAP средний мозг
 //!              (мотивация/настроение) + LIF-кора (пластичность, «словарь»).
 //!              Органы — отдельные BrainRunner со своими dt; связь —
-//!              межорганные аксоны с задержкой в 1 мировой тик (25 мс):
+//!              межорганные аксоны с задержкой в 1 мировой тик (50 мс):
 //!              спайки пре-группы за тик × вес приходят током в целевой
 //!              орган на следующем тике.
 //! author: Atlasov anton
@@ -16,11 +16,12 @@ use crate::engine::neurons::{Brain, PlasticityParams};
 use crate::Grown;
 
 /// Мировой тик (мс) — общий для всех органов.
-pub const TICK_MS: f32 = 25.0;
+/// (×2: тик 50 мс — как в C3, см. `env::world_clock::TICK_MS`.)
+pub const TICK_MS: f32 = 50.0;
 /// Шаг интеграции HH и HAAP.
 const DT_FINE: f32 = 0.05;
-/// Подшагов тонкого органа на тик.
-const SUBSTEPS_FINE: usize = 500;
+/// Подшагов тонкого органа на тик (1000 × 0.05 мс = 50 мс; ×2: тик 50 мс).
+const SUBSTEPS_FINE: usize = 1000;
 
 // ─── Стандартная спина: 10 S (боль) → 10 M (мотонейроны) ───────────────────
 // I-популяция (индексы SPINE_N_S..SPINE_N_S+SPINE_N_I) зарезервирована под
@@ -106,12 +107,16 @@ pub struct WorldInputs {
 /// Спайковая активность органов за тик (сумма по подшагам).
 #[derive(Default, Clone)]
 pub struct OrganSpikes {
+    /// Спайки спинального рефлекса.
     pub spine: Vec<i32>,
+    /// Спайки среднего мозга.
     pub midbrain: Vec<i32>,
+    /// Спайки коркового/игрового мозга.
     pub cortex: Vec<i32>,
 }
 
 impl OrganSpikes {
+    /// Возвращает спайки выбранного органа без копирования буфера.
     pub fn of(&self, o: OrganId) -> &[i32] {
         match o {
             OrganId::Spine => &self.spine,
@@ -309,10 +314,7 @@ mod tests {
             );
             let target = ci[start] as usize;
             let expected = SPINE_N_S + SPINE_N_I + s % SPINE_N_M;
-            assert_eq!(
-                target, expected,
-                "S[{s}] → {target}, а должен → {expected}"
-            );
+            assert_eq!(target, expected, "S[{s}] → {target}, а должен → {expected}");
             assert!(
                 (vals[start] - SPINE_W_SM).abs() < 1e-6,
                 "S[{s}]: вес {:.3} ≠ {:.3}",
@@ -324,7 +326,8 @@ mod tests {
         // I- и M-нейроны: нет исходящих рёбер.
         for i in SPINE_N_S..n {
             assert_eq!(
-                rp[i], rp[i + 1],
+                rp[i],
+                rp[i + 1],
                 "нейрон {i}: должен быть пустым, получил рёбра [{}, {})",
                 rp[i],
                 rp[i + 1]

@@ -2,27 +2,42 @@
 //!
 //! Адаптер: любой доступный; fallback — программный; нет — тест пропускается
 //! (CI без видеокарты не падает).
+//!
+//! ВАЖНО: GPU-устройство создаётся ОДИН раз на процесс (`OnceLock`).
+//! Параллельное создание нескольких wgpu-устройств в одном процессе на
+//! некоторых драйверах приводит к зависанию `request_adapter`/
+//! `request_device` — воспроизводится тестами `gpu_probe.rs`.
 
-use std::sync::Arc;
+#![allow(dead_code)] // каждый тест-бинарь использует свою подвыборку хелперов
+
+use std::sync::{Arc, OnceLock};
 
 use dioma_render::Camera;
 
 /// GPU-пара для offscreen-тестов.
 ///
-/// `device` обёрнут в `Arc`: wgpu 22 `Device` не клонируется, а атлас хранит
-/// клон устройства для авто-роста (см. `SpriteAtlas::new`).
+/// `device` и `queue` обёрнуты в `Arc`: wgpu 22 `Device` и `Queue` не
+/// клонируются, а тесты и атлас (авто-рост) держат клоны одного контекста.
+#[derive(Clone)]
 pub struct TestGpu {
     pub device: Arc<wgpu::Device>,
-    pub queue: wgpu::Queue,
+    pub queue: Arc<wgpu::Queue>,
 }
 
 /// Стандартный размер offscreen-цели.
 pub const W: u32 = 64;
 pub const H: u32 = 64;
 
+/// Одно устройство на процесс (см. доки модуля про зависание драйвера).
+static SHARED_GPU: OnceLock<Option<TestGpu>> = OnceLock::new();
+
 /// Поднимает устройство (та же схема fallback-адаптера, что в основном тесте).
 /// Возвращает `None`, если GPU недоступен — тест надо пропустить.
+///
+/// Повторные вызовы возвращают клон того же устройства (`Arc`): GPU-контекст
+/// создаётся ровно один раз на тест-бинарный процесс.
 pub fn gpu() -> Option<TestGpu> {
+    let init = || {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
     let mut adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
@@ -51,7 +66,12 @@ pub fn gpu() -> Option<TestGpu> {
             return None;
         }
     };
-    Some(TestGpu { device: Arc::new(device), queue })
+    Some(TestGpu {
+        device: Arc::new(device),
+        queue: Arc::new(queue),
+    })
+    };
+    SHARED_GPU.get_or_init(init).clone()
 }
 
 /// Offscreen-цель `w×h` RGBA8UnormSrgb (RENDER_ATTACHMENT | COPY_SRC) + её view.

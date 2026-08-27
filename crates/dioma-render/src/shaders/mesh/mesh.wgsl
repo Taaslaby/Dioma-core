@@ -33,13 +33,14 @@ struct VsOut {
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
-    // Мир → NDC (ось Y вверх), как в спрайтовом шейдере.
+    // Мир → NDC: Y вверх = верх экрана (соглашение сайд-вью); мировая Y растёт
+    // вверх — как в спрайтовом шейдере.
     let center = cam.camera.xy;
     let zoom = cam.camera.z;
     let vp = cam.viewport.xy;
     let ndc = vec2<f32>(
         (in.position.x - center.x) / (vp.x * 0.5 / zoom),
-        -(in.position.y - center.y) / (vp.y * 0.5 / zoom),
+        (in.position.y - center.y) / (vp.y * 0.5 / zoom),
     );
 
     var out: VsOut;

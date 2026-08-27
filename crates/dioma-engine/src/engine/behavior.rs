@@ -73,24 +73,71 @@ fn slot_ok(state: usize) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BehaviorOp {
     /// Читает слот в регистр.
-    Sensor { dst: u8, state: usize },
+    Sensor {
+        dst: u8,
+        state: usize,
+    },
     /// Безусловная запись в слот (действие).
-    Action { state: usize, src: u8 },
+    Action {
+        state: usize,
+        src: u8,
+    },
     /// Предикат: если регистр cond > 0, записать src в слот.
-    IfAct { cond: u8, state: usize, src: u8 },
-    Const { dst: u8, value: f32 },
-    Add { dst: u8, a: u8, b: u8 },
-    Sub { dst: u8, a: u8, b: u8 },
-    Mul { dst: u8, a: u8, b: u8 },
-    Max { dst: u8, a: u8, b: u8 },
-    Min { dst: u8, a: u8, b: u8 },
-    Clamp01 { reg: u8 },
+    IfAct {
+        cond: u8,
+        state: usize,
+        src: u8,
+    },
+    Const {
+        dst: u8,
+        value: f32,
+    },
+    Add {
+        dst: u8,
+        a: u8,
+        b: u8,
+    },
+    Sub {
+        dst: u8,
+        a: u8,
+        b: u8,
+    },
+    Mul {
+        dst: u8,
+        a: u8,
+        b: u8,
+    },
+    Max {
+        dst: u8,
+        a: u8,
+        b: u8,
+    },
+    Min {
+        dst: u8,
+        a: u8,
+        b: u8,
+    },
+    Clamp01 {
+        reg: u8,
+    },
     /// Экспоненциальное затухание/насыщение: exp(src).
-    Exp { dst: u8, src: u8 },
+    Exp {
+        dst: u8,
+        src: u8,
+    },
     /// dst += (target − dst) · alpha — плавное притяжение.
-    Relax { dst: u8, target: u8, alpha: f32 },
+    Relax {
+        dst: u8,
+        target: u8,
+        alpha: f32,
+    },
     /// dst = max(0, src − baseline) · gain.
-    Threshold { dst: u8, src: u8, baseline: f32, gain: f32 },
+    Threshold {
+        dst: u8,
+        src: u8,
+        baseline: f32,
+        gain: f32,
+    },
 }
 
 /// Параметры мутаций поведенческой программы.
@@ -186,11 +233,9 @@ fn compile_op(op: BehaviorOp) -> Result<Vec<T>, String> {
     let out = match op {
         BehaviorOp::Sensor { dst, state } => vec![T::LoadState(dst, state)],
         BehaviorOp::Action { state, src } => vec![T::StoreState(state, src)],
-        BehaviorOp::IfAct { cond, state, src } => vec![
-            T::PredOn(cond),
-            T::StoreState(state, src),
-            T::PredOff,
-        ],
+        BehaviorOp::IfAct { cond, state, src } => {
+            vec![T::PredOn(cond), T::StoreState(state, src), T::PredOff]
+        }
         BehaviorOp::Const { dst, value } => vec![T::LoadConst(dst, value)],
         BehaviorOp::Add { dst, a, b } => vec![T::MathAdd(dst, a, b)],
         BehaviorOp::Sub { dst, a, b } => vec![T::MathSub(dst, a, b)],
@@ -205,7 +250,12 @@ fn compile_op(op: BehaviorOp) -> Result<Vec<T>, String> {
             T::MathMul(SCRATCH, SCRATCH, SCRATCH2),
             T::MathAdd(dst, dst, SCRATCH),
         ],
-        BehaviorOp::Threshold { dst, src, baseline, gain } => vec![
+        BehaviorOp::Threshold {
+            dst,
+            src,
+            baseline,
+            gain,
+        } => vec![
             T::LoadConst(SCRATCH, baseline),
             T::MathSub(dst, src, SCRATCH),
             T::LoadConst(SCRATCH2, 0.0),
@@ -250,22 +300,27 @@ impl BehaviorProgram {
         unsafe { super::vm::execute(states.as_mut_ptr(), core::ptr::null(), n, &self.bytecode) }
     }
 
+    /// Возвращает исходные операции программы для инспекции и мутаций.
     pub fn ops(&self) -> &[BehaviorOp] {
         &self.ops
     }
+    /// Число инструкций в программе.
     pub fn len(&self) -> usize {
         self.ops.len()
     }
+    /// Проверяет, является ли программа пустой.
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }
 
-    /// Сериализация → компактный Vec<u32> (для .taas/наследства).
+    /// Сериализация в компактный массив 32-битных слов (для TAAS и наследства).
     pub fn to_u32(&self) -> Vec<u32> {
         pack_all(&self.ops)
     }
 
-    /// Дезerialization.
+    /// Восстанавливает программу из компактного представления `u32`.
+    /// Возвращает ошибку, если поток содержит неизвестную операцию или
+    /// обрывается посреди инструкции.
     pub fn from_u32(words: &[u32]) -> Result<Self, String> {
         let ops = unpack_all(words)?;
         Self::from_ops(ops)
@@ -322,18 +377,58 @@ fn rnd_action(rng: &mut XorShift) -> usize {
 /// Случайная валидная инструкция (для мутаций и стартовых программ).
 fn random_op(rng: &mut XorShift) -> BehaviorOp {
     match rng.next_u64() % 12 {
-        0 => BehaviorOp::Sensor { dst: rnd_reg(rng), state: rnd_sensor(rng) },
-        1 => BehaviorOp::Action { state: rnd_action(rng), src: rnd_reg(rng) },
-        2 => BehaviorOp::IfAct { cond: rnd_reg(rng), state: rnd_action(rng), src: rnd_reg(rng) },
-        3 => BehaviorOp::Const { dst: rnd_reg(rng), value: rng.unit() as f32 * 2.0 - 1.0 },
-        4 => BehaviorOp::Add { dst: rnd_reg(rng), a: rnd_reg(rng), b: rnd_reg(rng) },
-        5 => BehaviorOp::Sub { dst: rnd_reg(rng), a: rnd_reg(rng), b: rnd_reg(rng) },
-        6 => BehaviorOp::Mul { dst: rnd_reg(rng), a: rnd_reg(rng), b: rnd_reg(rng) },
-        7 => BehaviorOp::Max { dst: rnd_reg(rng), a: rnd_reg(rng), b: rnd_reg(rng) },
-        8 => BehaviorOp::Min { dst: rnd_reg(rng), a: rnd_reg(rng), b: rnd_reg(rng) },
+        0 => BehaviorOp::Sensor {
+            dst: rnd_reg(rng),
+            state: rnd_sensor(rng),
+        },
+        1 => BehaviorOp::Action {
+            state: rnd_action(rng),
+            src: rnd_reg(rng),
+        },
+        2 => BehaviorOp::IfAct {
+            cond: rnd_reg(rng),
+            state: rnd_action(rng),
+            src: rnd_reg(rng),
+        },
+        3 => BehaviorOp::Const {
+            dst: rnd_reg(rng),
+            value: rng.unit() as f32 * 2.0 - 1.0,
+        },
+        4 => BehaviorOp::Add {
+            dst: rnd_reg(rng),
+            a: rnd_reg(rng),
+            b: rnd_reg(rng),
+        },
+        5 => BehaviorOp::Sub {
+            dst: rnd_reg(rng),
+            a: rnd_reg(rng),
+            b: rnd_reg(rng),
+        },
+        6 => BehaviorOp::Mul {
+            dst: rnd_reg(rng),
+            a: rnd_reg(rng),
+            b: rnd_reg(rng),
+        },
+        7 => BehaviorOp::Max {
+            dst: rnd_reg(rng),
+            a: rnd_reg(rng),
+            b: rnd_reg(rng),
+        },
+        8 => BehaviorOp::Min {
+            dst: rnd_reg(rng),
+            a: rnd_reg(rng),
+            b: rnd_reg(rng),
+        },
         9 => BehaviorOp::Clamp01 { reg: rnd_reg(rng) },
-        10 => BehaviorOp::Exp { dst: rnd_reg(rng), src: rnd_reg(rng) },
-        _ => BehaviorOp::Relax { dst: rnd_reg(rng), target: rnd_reg(rng), alpha: rng.unit() as f32 * 0.5 },
+        10 => BehaviorOp::Exp {
+            dst: rnd_reg(rng),
+            src: rnd_reg(rng),
+        },
+        _ => BehaviorOp::Relax {
+            dst: rnd_reg(rng),
+            target: rnd_reg(rng),
+            alpha: rng.unit() as f32 * 0.5,
+        },
     }
 }
 
@@ -360,7 +455,12 @@ fn pack_all(ops: &[BehaviorOp]) -> Vec<u32> {
                 out.push(pack(12, *dst, *target, 0));
                 out.push(alpha.to_bits());
             }
-            BehaviorOp::Threshold { dst, src, baseline, gain } => {
+            BehaviorOp::Threshold {
+                dst,
+                src,
+                baseline,
+                gain,
+            } => {
                 out.push(pack(13, *dst, *src, 0));
                 out.push(baseline.to_bits());
                 out.push(gain.to_bits());
@@ -393,9 +493,19 @@ fn unpack_all(words: &[u32]) -> Result<Vec<BehaviorOp>, String> {
         let b = (w >> 8) as u8;
         let c = w as u8;
         match tag {
-            1 => out.push(BehaviorOp::Sensor { dst: a, state: b as usize }),
-            2 => out.push(BehaviorOp::Action { state: b as usize, src: a }),
-            3 => out.push(BehaviorOp::IfAct { cond: a, state: b as usize, src: c }),
+            1 => out.push(BehaviorOp::Sensor {
+                dst: a,
+                state: b as usize,
+            }),
+            2 => out.push(BehaviorOp::Action {
+                state: b as usize,
+                src: a,
+            }),
+            3 => out.push(BehaviorOp::IfAct {
+                cond: a,
+                state: b as usize,
+                src: c,
+            }),
             4 => {
                 let value = read_f32(&mut i)?;
                 out.push(BehaviorOp::Const { dst: a, value });
@@ -409,7 +519,11 @@ fn unpack_all(words: &[u32]) -> Result<Vec<BehaviorOp>, String> {
             11 => out.push(BehaviorOp::Exp { dst: a, src: b }),
             12 => {
                 let alpha = read_f32(&mut i)?;
-                out.push(BehaviorOp::Relax { dst: a, target: b, alpha });
+                out.push(BehaviorOp::Relax {
+                    dst: a,
+                    target: b,
+                    alpha,
+                });
             }
             13 => {
                 let baseline = read_f32(&mut i)?;
@@ -574,7 +688,10 @@ mod tests {
                 state: 11,
                 src: 2,
             },
-            BehaviorOp::Const { dst: 2, value: 0.65 },
+            BehaviorOp::Const {
+                dst: 2,
+                value: 0.65,
+            },
             BehaviorOp::Relax {
                 dst: 3,
                 target: 1,

@@ -5,9 +5,10 @@
 //!
 //!
 //! Advances the simulation and provides engine commands to scripts.
-//! Borrowing scheme: mutable world state resides in [`Inner`]; before execution,
-//! the script is **extracted** from the agent's slot—this allows the command, via services,
-//! to access the entire world, including the executor itself.
+//! Borrowing scheme: mutable world state resides in the private `Inner` state;
+//! before execution,
+//! //! the script is **extracted** from the agent's slot—this allows a command, via services,
+//! //! to access the entire world, including the agent currently executing it.
 //!
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
@@ -82,7 +83,8 @@ impl World {
         id
     }
 
-    /// Вешает скрипт на слот. Машина стартует заново при каждом событии.
+    /// Компилирует исходник и прикрепляет программу к слоту агента.
+    /// Машина запускается заново для каждого нового события этого слота.
     pub fn attach_script(&mut self, id: AgentId, slot_idx: u8, src: &str) -> Result<(), String> {
         let prog = crate::script::compile(src, &self.cmds)?;
         let ag = self
@@ -142,7 +144,11 @@ impl World {
 
     // ── главный цикл ────────────────────────────────────────────────────
 
-    /// Один такт мира: карта → доставка сообщений → скрипты → таймеры → физика.
+    /// Продвигает объектный мир на один тик.
+    ///
+    /// Сначала обновляется химия карты, затем доставляются отложенные
+    /// сообщения, исполняются скрипты и таймеры. Физика выполняется последней,
+    /// чтобы скрипты текущего тика видели согласованное состояние мира.
     pub fn step(&mut self) {
         self.inner.time.0 += 1;
         self.inner.log.clear();
@@ -231,7 +237,9 @@ impl World {
                 );
             }
             // сопротивление среды: толчок затухает за несколько тиков
-            ag.vel = ag.vel * 0.5;
+            // (²: тик 50 мс — 0.25 = 0.5²: за секунду затухание то же,
+            // что при тике 25 мс: 0.25²⁰ = 0.5⁴⁰).
+            ag.vel = ag.vel * 0.25;
         }
     }
 

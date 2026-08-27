@@ -83,9 +83,7 @@ unsafe fn execute_chunk(
             Opcode::MathMul(dst, lhs, rhs) => {
                 registers[idx(dst)] = registers[idx(lhs)] * registers[idx(rhs)];
             }
-            Opcode::MathFastExp(dst, src) => {
-                registers[idx(dst)] = registers[idx(src)].exp()
-            }
+            Opcode::MathFastExp(dst, src) => registers[idx(dst)] = registers[idx(src)].exp(),
             Opcode::MathClamp01(reg) => {
                 registers[idx(reg)] = registers[idx(reg)].max(f32x8::ZERO).min(f32x8::ONE);
             }
@@ -104,8 +102,7 @@ unsafe fn execute_chunk(
                     * (registers[idx(potential)] - registers[idx(reversal)]);
             }
             Opcode::PhysDiffusionDecay(reg, baseline, tau, dt) => {
-                registers[idx(reg)] =
-                    diffusion_decay(registers[idx(reg)], baseline, tau, dt);
+                registers[idx(reg)] = diffusion_decay(registers[idx(reg)], baseline, tau, dt);
             }
         }
     }
@@ -142,12 +139,8 @@ unsafe fn execute_scalar(
             Opcode::MathMul(dst, lhs, rhs) => {
                 registers[idx(dst)] = registers[idx(lhs)] * registers[idx(rhs)]
             }
-            Opcode::MathFastExp(dst, src) => {
-                registers[idx(dst)] = registers[idx(src)].exp()
-            }
-            Opcode::MathClamp01(reg) => {
-                registers[idx(reg)] = registers[idx(reg)].clamp(0.0, 1.0)
-            }
+            Opcode::MathFastExp(dst, src) => registers[idx(dst)] = registers[idx(src)].exp(),
+            Opcode::MathClamp01(reg) => registers[idx(reg)] = registers[idx(reg)].clamp(0.0, 1.0),
             Opcode::MathMax(dst, lhs, rhs) => {
                 registers[idx(dst)] = registers[idx(lhs)].max(registers[idx(rhs)])
             }

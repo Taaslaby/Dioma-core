@@ -1,9 +1,17 @@
 //! Демо dioma-render: существа на орбитах с per-sprite эффектами, радиальным
-//! светом, частицами-пыльцой, пост-обработкой, флипбук-криттерами с Y-сортировкой
-//! и debug-оверлеем. winit 0.30 + wgpu 22.
+//! светом, частицами-пыльцой, пост-обработкой, флипбук-криттерами с Y-сортировкой,
+//! тайловой комнатой (Tilemap/TileBatch — травяной пол, пруд, стены) и двумя
+//! параллакс-слоями фона (солнце+кольцо 0.4, ягоды 0.7) и debug-оверлеем.
+//! winit 0.30 + wgpu 22.
+//!
+//! Соглашение осей (сайд-вью): мировая Y растёт вверх, верх экрана = больший
+//! Y мира. Сцена разложена под это: комната стоит в НИЖНЕЙ части кадра
+//! (мировые Y ≈ 0..128 — «пол» комнаты), а небо с солнцем/кольцом/ягодами —
+//! в верхней (Y ≈ 150..260). Криттеры и PNG-криттер шагают ПО ПОЛУ комнаты.
 //!
 //! Управление:
 //!   клик — выбрать существо (контур Outline);
+//!   стрелки — панорамирование камеры (виден параллакс: фон едет медленнее мира);
 //!   D — растворить выбранное (Dissolve), через 2 c оно возродится;
 //!   R — возродить всех;
 //!   V — переключить пост-эффект (None → VignetteGrain → Blur);
@@ -20,7 +28,7 @@ use std::time::Instant;
 use dioma_render::{
     atlas, Camera, DebugFont, Flipbook, Light, LightBatch, Mesh, MeshBatch, MeshBlend, MeshVertex,
     Particle, ParticleSystem, PostFx, PostProcess, Renderer, Sprite, SpriteAtlas, SpriteBatch,
-    SpriteFx,
+    SpriteFx, TileBatch, Tilemap, TilesetUv,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -29,9 +37,16 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // --frames=N: смоук-режим — прогнать N кадров и выйти самому
+    // (для проверки, что демо живёт без ручного закрытия окна).
+    let smoke_frames = std::env::args()
+        .find_map(|a| a.strip_prefix("--frames=").and_then(|s| s.parse::<u32>().ok()));
+    if let Some(n) = smoke_frames {
+        println!("смоук-режим: отрисую {n} кадров и выйду");
+    }
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut app = Demo::new();
+    let mut app = Demo::new(smoke_frames);
     event_loop.run_app(&mut app)?;
     Ok(())
 }
@@ -50,6 +65,24 @@ impl Rng {
     }
 }
 
+// ── Раскладка сцены (соглашение: мировая Y вверх = верх экрана) ────────────
+//
+// Комната: 20×4 тайла по 32 px → мировая область X 0..640, Y 0..128.
+// Визуально (Y вверх) ряд данных 0 — это ПОЛ комнаты (низ экрана), последний
+// ряд — потолок. Небо/параллакс живёт выше: Y ≈ 150..260.
+
+/// Верхняя грань ряда-пола (world Y); криттеры стоят на ней ногами.
+const FLOOR_Y: f32 = 32.0;
+
+/// Центр панорамирования ходока-криттера по полу (комната по X 0..640).
+const WALK_CENTER_X: f32 = 320.0;
+
+/// Мировая точка, где на экране висит солнце параллакс-слоя при стартовой
+/// камере (320, 80): солнце лежит в слое factor 0.4 на world (60, 190), что
+/// с учётом сдвига камеры слоя даёт ту же экранную позицию, что и мир
+/// (252, 238) в основном проходе. Существа кружат вокруг этой точки.
+const ORBIT_CENTER: [f32; 2] = [252.0, 238.0];
+
 /// Настроение существа — задаёт базовый per-sprite эффект.
 #[derive(Clone, Copy, PartialEq)]
 enum Mood {
@@ -61,7 +94,7 @@ enum Mood {
     Calm,
 }
 
-/// Существо: орбита вокруг солнца + состояние жизни.
+/// Существо: орбита вокруг точки солнца на экране + состояние жизни.
 struct Creature {
     orbit_angle: f32,
     orbit_speed: f32,
@@ -78,7 +111,10 @@ struct Creature {
 
 impl Creature {
     fn pos(&self) -> [f32; 2] {
-        [self.orbit_radius * self.orbit_angle.cos(), self.orbit_radius * self.orbit_angle.sin()]
+        [
+            ORBIT_CENTER[0] + self.orbit_radius * self.orbit_angle.cos(),
+            ORBIT_CENTER[1] + self.orbit_radius * self.orbit_angle.sin(),
+        ]
     }
 
     /// Базовый эффект настроения (без учёта выделения/растворения).
@@ -108,14 +144,14 @@ impl Creature {
     }
 }
 
-/// Криттер: «ходит» по кругу (анимируется флипбуком) или стоит на месте —
-/// с разной глубиной Y, чтобы была видна Y-сортировка спрайтов.
+/// Криттер: ходок «шагает» по полу комнаты (анимируется флипбуком) или стоит
+/// на месте — с разной глубиной Y, чтобы была видна Y-сортировка спрайтов.
 struct Critter {
     /// Позиция (для стоячих); у ходока пересчитывается из `angle`/`radius`.
     pos: [f32; 2],
-    /// Текущий угол ходока на орбите.
+    /// Текущий угол ходока (фаза шагания по полу).
     angle: f32,
-    /// Радиус орбиты ходока.
+    /// Амплитуда шагания ходока вокруг `WALK_CENTER_X`.
     radius: f32,
     /// Угловая скорость ходока.
     speed: f32,
@@ -144,9 +180,19 @@ struct Demo {
     post: Option<PostProcess>,
     font: Option<DebugFont>,
     flipbook: Option<Flipbook>,
+    /// Тайловая комната: батч перестраивается при изменении карты (здесь —
+    /// один раз), спрайты тайлов каждый кадр копируются в общий `batch`.
+    tile_batch: Option<TileBatch>,
+    /// Параллакс-слои фона: солнце+кольцо (factor 0.4) и ягоды (factor 0.7).
+    parallax_far: Option<SpriteBatch>,
+    parallax_mid: Option<SpriteBatch>,
     camera: Camera,
+    /// Направление панорамирования стрелками (компоненты −1/0/1).
+    pan_dir: [f32; 2],
     started: Option<Instant>,
     last_frame: Option<Instant>,
+    /// Смоук-режим: после N кадров приложение само выходит (None = обычный режим).
+    smoke_frames: Option<u32>,
     cursor: [f32; 2],
     creatures: Vec<Creature>,
     critters: Vec<Critter>,
@@ -157,7 +203,7 @@ struct Demo {
 }
 
 impl Demo {
-    fn new() -> Self {
+    fn new(smoke_frames: Option<u32>) -> Self {
         Self {
             instance: wgpu::Instance::new(wgpu::InstanceDescriptor::default()),
             window: None,
@@ -174,9 +220,14 @@ impl Demo {
             post: None,
             font: None,
             flipbook: None,
+            tile_batch: None,
+            parallax_far: None,
+            parallax_mid: None,
             camera: Camera::new([1.0, 1.0]),
+            pan_dir: [0.0, 0.0],
             started: None,
             last_frame: None,
+            smoke_frames,
             cursor: [0.0, 0.0],
             creatures: Vec::new(),
             critters: Vec::new(),
@@ -210,10 +261,21 @@ impl Demo {
         let Some(lights) = &mut self.lights else { return };
         let Some(particles) = &mut self.particles else { return };
         let Some(post) = &mut self.post else { return };
+        let Some(tile_batch) = &self.tile_batch else { return };
+        let Some(parallax_far) = &mut self.parallax_far else { return };
+        let Some(parallax_mid) = &mut self.parallax_mid else { return };
 
         renderer.begin_frame(dt);
         renderer.set_time(t);
         particles.update(dt);
+
+        // Панорамирование стрелками; кламп держит и пол комнаты (Y=0), и небо
+        // параллакса (до Y≈260) в кадре: центр X ∈ [100, 540] (комната 0..640
+        // почти целиком), центр Y ∈ [−60, 220] — при желании поменяйте границы.
+        let speed = 300.0 * dt;
+        self.camera.pan([self.pan_dir[0] * speed, self.pan_dir[1] * speed]);
+        self.camera.center[0] = self.camera.center[0].clamp(100.0, 540.0);
+        self.camera.center[1] = self.camera.center[1].clamp(-60.0, 220.0);
 
         // Криттеры: у ходока крутится угол, у всех растёт время анимации.
         for c in &mut self.critters {
@@ -223,30 +285,61 @@ impl Demo {
             }
         }
 
-        // ── Мир ──
+        // ── Мир: тайлы комнаты (слой LAYER_TILE = 0.0) + существа поверх ──
         batch.clear();
-        build_world(batch, atlas, &self.creatures, t);
+        for s in tile_batch.sprite_batch().sprites() {
+            batch.push(*s); // Sprite — Copy; тайлы перестраиваются только при rebuild
+        }
+        build_world(batch, atlas, &self.creatures);
         if let Some(fb) = &self.flipbook {
             build_critters(batch, atlas, &mut self.critters, fb);
         }
         build_png_critter(batch, atlas, t);
         batch.upload(queue);
 
+        // ── Параллакс-фон: солнце+кольцо (дальний слой 0.4) и ягоды (0.7) ──
+        // Мировые Y 150..260 — НЕБО НАД комнатой (Y вверх = верх экрана).
+        parallax_far.clear();
+        let mut sun = Sprite::new([60.0, 190.0], [56.0, 56.0], atlas.region("sun").unwrap());
+        sun.rotation = t * 0.3;
+        parallax_far.push(sun);
+        let mut ring = Sprite::new([60.0, 190.0], [150.0, 150.0], atlas.region("ring").unwrap());
+        ring.rotation = t * 0.12;
+        parallax_far.push(ring);
+        parallax_far.upload(queue);
+
+        parallax_mid.clear();
+        let berry_pos = [[-40.0, 215.0], [200.0, 250.0], [420.0, 175.0]];
+        for (i, name) in ["berry-a", "berry-b", "berry-c"].iter().enumerate() {
+            let bob = (t * 0.8 + i as f32).sin() * 6.0; // лёгкое покачивание
+            let mut berry = Sprite::new(
+                [berry_pos[i][0], berry_pos[i][1] + bob],
+                [46.0, 46.0],
+                atlas.region(name).unwrap(),
+            );
+            berry.rotation = t * 0.6 + i as f32;
+            parallax_mid.push(berry);
+        }
+        parallax_mid.upload(queue);
+
         // ── «Блоб»: деформируемый 2D-меш (CPU-деформация каждый кадр) ──
+        // Стоит справа от комнаты, на уровне её пола.
         mesh_batch.clear();
-        mesh_batch.push(&blob_mesh([310.0, -230.0], 48.0, t, atlas.region("sun").unwrap()));
+        mesh_batch.push(&blob_mesh([660.0, 60.0], 48.0, t, atlas.region("sun").unwrap()));
         mesh_batch.upload(queue);
 
         // ── Радиальные источники света ──
         lights.clear();
+        // Тёплый — над солнцем и существами (центр камеры (320, 80)).
         lights.push(Light {
-            position: [-150.0, -110.0],
+            position: [252.0, 238.0],
             radius: 240.0,
             intensity: 0.30,
             color: [1.0, 0.72, 0.42],
         });
+        // Холодный — над комнатой (правая половина пола и стены).
         lights.push(Light {
-            position: [80.0, 60.0],
+            position: [480.0, 80.0],
             radius: 320.0,
             intensity: 0.22,
             color: [0.35, 0.55, 1.0],
@@ -276,6 +369,17 @@ impl Demo {
         // Мир → текстура сцены (пост включён) или сразу поверхность (пост выкл).
         let scene_target = if self.post_enabled { post.scene_view() } else { &view };
         renderer.render(queue, &mut encoder, scene_target, atlas, batch, &self.camera);
+        // Параллакс-слои: поверх очищенного кадра (Load), камера со сдвинутым
+        // центром. Рисуются ПОСЛЕ render(): render() — единственный проход с
+        // очисткой, поэтому слой позади сцены читался бы только в свободной
+        // от комнаты области экрана; солнце/кольцо/ягоды стоят в мировых
+        // Y ≈ 150..260 — на экране это небо НАД комнатой (Y вверх).
+        renderer
+            .render_parallax(&mut encoder, queue, scene_target, atlas, parallax_far, &self.camera, 0.4)
+            .expect("factor 0.4 в диапазоне 0.0..=1.0");
+        renderer
+            .render_parallax(&mut encoder, queue, scene_target, atlas, parallax_mid, &self.camera, 0.7)
+            .expect("factor 0.7 в диапазоне 0.0..=1.0");
         renderer.render_meshes(
             &mut encoder,
             queue,
@@ -321,6 +425,7 @@ impl Demo {
                         info.offset[1] as u32,
                     ));
                 }
+                lines.push(format!("Tilemap: {} тайлов | Parallax: 2 слоя", tile_batch.len()));
                 renderer.render_debug_overlay(
                     &mut encoder,
                     queue,
@@ -372,7 +477,8 @@ impl Demo {
             return;
         }
         for _ in 0..2 {
-            let pos = [self.rng.range(-190.0, 190.0), self.rng.range(-140.0, 140.0)];
+            // Пыльца дрейфует над всей сценой: от пола комнаты до неба.
+            let pos = [self.rng.range(80.0, 560.0), self.rng.range(40.0, 300.0)];
             let vel = [self.rng.range(-18.0, 18.0), self.rng.range(-9.0, 9.0)];
             let shade = self.rng.range(0.75, 1.0);
             let mut p = Particle::new(
@@ -576,18 +682,66 @@ fn critter_png_rgba() -> (u32, u32, Vec<u8>) {
     (S, S, img)
 }
 
-/// PNG-криттер: ходит по орбите, как флипбук-ходок, но кадр один — загружен
-/// из PNG-файла и обрезан при загрузке. Мировая позиция соответствует центру
-/// НЕОБРЕЗАННОГО изображения: после обрезки полей квад сдвигается на
-/// обрезанное смещение, пересчитанное в мировые пиксели:
+/// Процедурный тайлсет 16×16: 4 тайла 8×8 в сетке 2×2 (индексы 1..=4).
+/// 1 — трава (зелёная с «шумными» крапинками по хэшу), 2 — земля (коричневая),
+/// 3 — вода (синяя со светлой линией волны), 4 — стена (тёмный камень со швами).
+fn tileset_rgba() -> (u32, u32, Vec<u8>) {
+    const S: u32 = 16;
+    let mut img = vec![0u8; (S * S * 4) as usize];
+    let hash = |x: u32, y: u32, seed: u32| -> u32 {
+        let mut h = x
+            .wrapping_mul(374_761_393)
+            .wrapping_add(y.wrapping_mul(668_265_263))
+            .wrapping_add(seed);
+        h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+        (h ^ (h >> 16)) & 0xff
+    };
+    for y in 0..S {
+        for x in 0..S {
+            let (cx, cy) = (x / 8, y / 8);
+            let (lx, ly) = (x % 8, y % 8);
+            let i = ((y * S + x) * 4) as usize;
+            let c: [u8; 4] = match (cx, cy) {
+                (0, 0) => {
+                    // Трава: зелёная база + крапинки-перепады оттенка по хэшу.
+                    let n = hash(x, y, 11);
+                    [34 + (n % 28) as u8, 128 + (n % 36) as u8, 42 + (n % 20) as u8, 255]
+                }
+                (1, 0) => {
+                    // Земля: коричневая с тёмными вкраплениями.
+                    let n = hash(x, y, 23);
+                    [124 + (n % 32) as u8, 82 + (n % 24) as u8, 44 + (n % 14) as u8, 255]
+                }
+                (0, 1) => {
+                    // Вода: синяя + светлая линия волны на ly == 5.
+                    let wave = if ly == 5 && (lx == 1 || lx == 4) { 190 } else { 0 };
+                    // (186 + wave) в u8 переполняется ДО .min() — считаем в u16.
+                    [26 + wave / 4, 88 + wave / 4, (186 + u16::from(wave)).min(255) as u8, 255]
+                }
+                _ => {
+                    // Стена: тёмный камень со швами по краям ячейки.
+                    let edge = if lx == 7 || ly == 7 { 26 } else { 0 };
+                    [62 + edge / 2, 58 + edge / 2, 70 + edge / 2, 255]
+                }
+            };
+            img[i..i + 4].copy_from_slice(&c);
+        }
+    }
+    (S, S, img)
+}
+
+/// PNG-криттер: шагает ПО ПОЛУ комнаты (как флипбук-ходок), кадр один —
+/// загружен из PNG-файла и обрезан при загрузке. Мировая позиция
+/// соответствует центру НЕОБРЕЗАННОГО изображения: после обрезки полей квад
+/// сдвигается на обрезанное смещение, пересчитанное в мировые пиксели:
 /// `world_pos − (offset / img_size) · sprite_size` — offset в пикселях
 /// исходного изображения (48×48), поэтому до масштабирования делим на img_size.
 fn build_png_critter(batch: &mut SpriteBatch, atlas: &SpriteAtlas, t: f32) {
     let Some(info) = atlas.region_info("png-critter") else { return };
     let img_size = 48.0; // исходный размер PNG до обрезки
     let sprite_size = 44.0;
-    let angle = t * 0.45;
-    let world_pos = [165.0 * angle.cos(), 165.0 * angle.sin()];
+    // Ходьба по полу: X колеблется по комнате, ноги на FLOOR_Y.
+    let world_pos = [WALK_CENTER_X + 230.0 * (t * 0.35).sin(), FLOOR_Y + sprite_size * 0.5];
     let shift = [
         info.offset[0] / img_size * sprite_size,
         info.offset[1] / img_size * sprite_size,
@@ -624,8 +778,9 @@ fn blit(dst: &mut [u8], dw: u32, dh: u32, src: &[u8], sw: u32, sh: u32, dx: i32,
     }
 }
 
-/// Криттеры: ходок (флипбук-анимация ног, глубина = Y позиции) и стоячие
-/// (разные `depth` — видна Y-сортировка на пересечениях).
+/// Криттеры: ходок «шагает» по полу комнаты (X колеблется, ноги на `FLOOR_Y`),
+/// стоячие стоят на полу (глубина = Y позиции — при лёгком перекрытии видна
+/// Y-сортировка: больший Y рисуется поверх).
 fn build_critters(
     batch: &mut SpriteBatch,
     atlas: &SpriteAtlas,
@@ -635,7 +790,10 @@ fn build_critters(
     let uv0 = atlas.region("critter_0").unwrap_or([0.0, 0.0, 1.0, 1.0]);
     for c in critters.iter() {
         let pos = if c.walking {
-            [c.radius * c.angle.cos(), c.radius * c.angle.sin()]
+            [
+                WALK_CENTER_X + c.radius * c.angle.cos(),
+                FLOOR_Y + c.size * 0.5, // центр спрайта: ноги стоят на полу
+            ]
         } else {
             c.pos
         };
@@ -648,30 +806,9 @@ fn build_critters(
     }
 }
 
-fn build_world(batch: &mut SpriteBatch, atlas: &SpriteAtlas, creatures: &[Creature], t: f32) {
-    // Фон: кольцо и солнце в центре мира.
-    let mut sun = Sprite::new([0.0, 0.0], [56.0, 56.0], atlas.region("sun").unwrap());
-    sun.layer = 0.0;
-    sun.rotation = t * 0.3;
-    batch.push(sun);
-
-    let mut ring = Sprite::new([0.0, 0.0], [150.0, 150.0], atlas.region("ring").unwrap());
-    ring.layer = 0.05;
-    ring.rotation = t * 0.12;
-    batch.push(ring);
-
-    // Ягоды на дальней орбите.
-    for (i, name) in ["berry-a", "berry-b", "berry-c", "berry-d"].iter().enumerate() {
-        let ang = t * 0.25 + i as f32 * std::f32::consts::TAU / 4.0;
-        let mut berry = Sprite::new(
-            [ang.cos() * 185.0, ang.sin() * 185.0],
-            [46.0, 46.0],
-            atlas.region(name).unwrap(),
-        );
-        berry.rotation = t * 0.6 + i as f32;
-        berry.layer = 0.1 + i as f32 * 0.01;
-        batch.push(berry);
-    }
+fn build_world(batch: &mut SpriteBatch, atlas: &SpriteAtlas, creatures: &[Creature]) {
+    // Фон (солнце, кольцо, ягоды) переехал в параллакс-слои — см. frame:
+    // render_parallax рисует их со сдвинутой камерой. Здесь — только существа.
 
     // Существа: тело + глаз (два региона атласа) + полоса состояния.
     for (i, c) in creatures.iter().enumerate() {
@@ -818,6 +955,28 @@ impl ApplicationHandler for Demo {
             atlas.add_rgba(&queue, &format!("critter_{}", i), w, h, &px).unwrap();
         }
 
+        // ── Тайлсет 2×2 (16×16): трава, земля, вода, стена ──
+        let (tw, th, tpx) = tileset_rgba();
+        atlas.add_rgba(&queue, "tileset", tw, th, &tpx).unwrap();
+        let tileset = TilesetUv::new(atlas.region("tileset").unwrap(), 2, 2);
+
+        // ── Комната 20×4 тайла по 32 px (мировая Y 0..128): ряд данных 0 —
+        // ПОЛ комнаты (стена-камень; при Y вверх это низ экрана), ряды 1..2 —
+        // травяной пол с прудом воды (3) и пятнами земли (2), ряд 3 — потолок.
+        // Криттеры шагают по полу: ноги на FLOOR_Y = 32. ──
+        let room_rows: [&[u16]; 4] = [
+            &[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+            &[4, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 4],
+            &[4, 1, 1, 3, 3, 3, 3, 3, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 4],
+            &[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+        ];
+        let room = Tilemap::from_rows(&room_rows, 32.0);
+        let mut tile_batch = TileBatch::new(&device, &room, &tileset);
+        tile_batch.upload(&queue);
+        // Параллакс-батчи наполняются каждый кадр (см. frame).
+        let parallax_far = SpriteBatch::new(&device, 2);
+        let parallax_mid = SpriteBatch::new(&device, 3);
+
         // ── PNG-ассет: криттер 48×48 с прозрачным полем 6px → temp-файл →
         // в атлас через add_png (поля обрезаются при загрузке). Пример
         // save_png + add_png; файл остаётся на диске (не удаляем). ──
@@ -845,7 +1004,7 @@ impl ApplicationHandler for Demo {
             Creature {
                 orbit_angle: 0.0,
                 orbit_speed: 0.5,
-                orbit_radius: 130.0,
+                orbit_radius: 120.0,
                 size: 44.0,
                 tint: [1.0, 0.85, 0.5, 1.0],
                 mood: Mood::Happy,
@@ -858,7 +1017,7 @@ impl ApplicationHandler for Demo {
             Creature {
                 orbit_angle: 2.1,
                 orbit_speed: 0.35,
-                orbit_radius: 150.0,
+                orbit_radius: 135.0,
                 size: 38.0,
                 tint: [0.6, 0.9, 1.0, 1.0],
                 mood: Mood::Sick,
@@ -871,7 +1030,7 @@ impl ApplicationHandler for Demo {
             Creature {
                 orbit_angle: 4.2,
                 orbit_speed: 0.45,
-                orbit_radius: 115.0,
+                orbit_radius: 105.0,
                 size: 40.0,
                 tint: [1.0, 0.7, 0.85, 1.0],
                 mood: Mood::Calm,
@@ -883,12 +1042,14 @@ impl ApplicationHandler for Demo {
             },
         ];
 
-        // Криттеры: ходок по кругу + трое стоячих с разной глубиной Y.
+        // Криттеры: ходок шагает по полу (X 80..560, ноги на FLOOR_Y),
+        // стоячие стоят на полу в ряд (двое слегка перекрываются с разной
+        // глубиной Y — видна Y-сортировка).
         let critters = vec![
             Critter {
                 pos: [0.0, 0.0],
                 angle: 0.0,
-                radius: 165.0,
+                radius: 240.0,
                 speed: 0.45,
                 anim_time: 0.0,
                 size: 44.0,
@@ -897,36 +1058,36 @@ impl ApplicationHandler for Demo {
                 walking: true,
             },
             Critter {
-                pos: [215.0, 55.0],
+                pos: [170.0, 60.0],
                 angle: 0.0,
                 radius: 0.0,
                 speed: 0.0,
                 anim_time: 3.0,
                 size: 56.0,
                 tint: [0.7, 0.85, 1.0, 1.0],
-                depth: 55.0,
+                depth: 60.0,
                 walking: false,
             },
             Critter {
-                pos: [215.0, 15.0],
+                pos: [184.0, 64.0],
                 angle: 0.0,
                 radius: 0.0,
                 speed: 0.0,
                 anim_time: 6.0,
                 size: 56.0,
                 tint: [1.0, 0.75, 0.8, 1.0],
-                depth: 15.0,
+                depth: 64.0,
                 walking: false,
             },
             Critter {
-                pos: [185.0, 35.0],
+                pos: [520.0, 56.0],
                 angle: 0.0,
                 radius: 0.0,
                 speed: 0.0,
                 anim_time: 1.0,
                 size: 48.0,
                 tint: [0.8, 1.0, 0.7, 1.0],
-                depth: 35.0,
+                depth: 56.0,
                 walking: false,
             },
         ];
@@ -938,14 +1099,22 @@ impl ApplicationHandler for Demo {
         self.config = Some(config);
         self.renderer = Some(renderer);
         self.atlas = Some(atlas);
-        self.batch = Some(SpriteBatch::new(&self.device.as_ref().unwrap(), 48));
+        // 200 тайлов комнаты + существа/криттеры/PNG — с запасом.
+        self.batch = Some(SpriteBatch::new(&self.device.as_ref().unwrap(), 256));
         self.mesh_batch = Some(MeshBatch::new(&self.device.as_ref().unwrap(), 512, 2048));
         self.lights = Some(LightBatch::new(&self.device.as_ref().unwrap(), 4));
         self.particles = Some(ParticleSystem::new(&self.device.as_ref().unwrap(), 240));
         self.post = Some(post);
         self.font = Some(font);
         self.flipbook = Some(critter_flipbook);
+        self.tile_batch = Some(tile_batch);
+        self.parallax_far = Some(parallax_far);
+        self.parallax_mid = Some(parallax_mid);
+        // Камера смотрит на комнату: центр (320, 80). Комната — мировая
+        // Y 0..128, поэтому при Y вверх она занимает нижнюю часть кадра
+        // (строки ~252..380), а небо параллакса (Y 150..260) — верхнюю.
         self.camera = Camera::new([size.width as f32, size.height as f32]);
+        self.camera.center = [320.0, 80.0];
         self.creatures = creatures;
         self.critters = critters;
         self.post_enabled = true;
@@ -986,24 +1155,45 @@ impl ApplicationHandler for Demo {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
+                    // Стрелки: зажатие задаёт направление панорамирования
+                    // (см. frame), отпускание — сбрасывает компоненту.
+                    let pressed = event.state == ElementState::Pressed;
                     match code {
-                        KeyCode::Escape => event_loop.exit(),
-                        KeyCode::KeyD => self.start_dissolve(),
-                        KeyCode::KeyR => self.respawn_all(),
-                        KeyCode::KeyV => self.cycle_post_fx(),
-                        KeyCode::F1 => self.toggle_overlay(),
-                        KeyCode::F2 => self.toggle_wireframe(),
-                        KeyCode::Digit1 => self.toggle_pass(0),
-                        KeyCode::Digit2 => self.toggle_pass(1),
-                        KeyCode::Digit3 => self.toggle_pass(2),
-                        KeyCode::Digit4 => self.toggle_pass(3),
-                        KeyCode::Digit5 => self.toggle_pass(4),
-                        KeyCode::Digit6 => self.toggle_pass(5),
+                        KeyCode::ArrowLeft => self.pan_dir[0] = if pressed { -1.0 } else { 0.0 },
+                        KeyCode::ArrowRight => self.pan_dir[0] = if pressed { 1.0 } else { 0.0 },
+                        KeyCode::ArrowUp => self.pan_dir[1] = if pressed { 1.0 } else { 0.0 },
+                        KeyCode::ArrowDown => self.pan_dir[1] = if pressed { -1.0 } else { 0.0 },
                         _ => {}
+                    }
+                    if pressed {
+                        match code {
+                            KeyCode::Escape => event_loop.exit(),
+                            KeyCode::KeyD => self.start_dissolve(),
+                            KeyCode::KeyR => self.respawn_all(),
+                            KeyCode::KeyV => self.cycle_post_fx(),
+                            KeyCode::F1 => self.toggle_overlay(),
+                            KeyCode::F2 => self.toggle_wireframe(),
+                            KeyCode::Digit1 => self.toggle_pass(0),
+                            KeyCode::Digit2 => self.toggle_pass(1),
+                            KeyCode::Digit3 => self.toggle_pass(2),
+                            KeyCode::Digit4 => self.toggle_pass(3),
+                            KeyCode::Digit5 => self.toggle_pass(4),
+                            KeyCode::Digit6 => self.toggle_pass(5),
+                            _ => {}
+                        }
                     }
                 }
             }
-            WindowEvent::RedrawRequested => self.frame(),
+            WindowEvent::RedrawRequested => {
+                self.frame();
+                if let Some(n) = &mut self.smoke_frames {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        println!("смоук: все кадры отрисованы без паники, выход");
+                        event_loop.exit();
+                    }
+                }
+            }
             _ => {}
         }
     }

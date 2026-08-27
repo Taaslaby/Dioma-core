@@ -24,10 +24,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
             }
             b'"' => {
                 let start = i + 1;
-                let end = src[start..]
-                    .find('"')
-                    .ok_or("незакрытая строка")?
-                    + start;
+                let end = src[start..].find('"').ok_or("незакрытая строка")? + start;
                 out.push(Tok::Str(src[start..end].to_string()));
                 i = end + 1;
             }
@@ -37,9 +34,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
                     i += 1;
                 }
                 let mut dot = false;
-                while i < b.len()
-                    && (b[i].is_ascii_digit() || (b[i] == b'.' && !dot))
-                {
+                while i < b.len() && (b[i].is_ascii_digit() || (b[i] == b'.' && !dot)) {
                     if b[i] == b'.' {
                         dot = true;
                     }
@@ -50,16 +45,18 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
                     return Err("одинокий минус: используй sub".into());
                 }
                 if dot {
-                    out.push(Tok::Float(text.parse().map_err(|e| format!("{text:?}: {e}"))?));
+                    out.push(Tok::Float(
+                        text.parse().map_err(|e| format!("{text:?}: {e}"))?,
+                    ));
                 } else {
-                    out.push(Tok::Int(text.parse().map_err(|e| format!("{text:?}: {e}"))?));
+                    out.push(Tok::Int(
+                        text.parse().map_err(|e| format!("{text:?}: {e}"))?,
+                    ));
                 }
             }
             _ if c.is_ascii_alphabetic() || c == b'_' => {
                 let start = i;
-                while i < b.len()
-                    && (b[i].is_ascii_alphanumeric() || b[i] == b'_')
-                {
+                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                     i += 1;
                 }
                 out.push(Tok::Ident(src[start..i].to_ascii_lowercase()));

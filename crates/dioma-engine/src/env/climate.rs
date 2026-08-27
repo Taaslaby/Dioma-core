@@ -114,13 +114,50 @@ impl Climate {
     pub fn step(&mut self) {
         let (dt, dl, dn) = DIFF;
         let (kt, kl, kn) = DECAY;
-        diffuse_field(&mut self.backend, &self.grid, &mut self.temp, &mut self.c2, dt, kt);
+        diffuse_field(
+            &mut self.backend,
+            &self.grid,
+            &mut self.temp,
+            &mut self.c2,
+            dt,
+            kt,
+        );
         mirror_bounds(&self.grid, &mut self.temp);
-        diffuse_field(&mut self.backend, &self.grid, &mut self.light, &mut self.c2, dl, kl);
+        diffuse_field(
+            &mut self.backend,
+            &self.grid,
+            &mut self.light,
+            &mut self.c2,
+            dl,
+            kl,
+        );
         mirror_bounds(&self.grid, &mut self.light);
-        diffuse_field(&mut self.backend, &self.grid, &mut self.nutrient, &mut self.c2, dn, kn);
+        diffuse_field(
+            &mut self.backend,
+            &self.grid,
+            &mut self.nutrient,
+            &mut self.c2,
+            dn,
+            kn,
+        );
         mirror_bounds(&self.grid, &mut self.nutrient);
         self.tick += 1;
+    }
+
+    /// Погасить свет по фазе суток (множитель 0..1): поле света целиком
+    /// умножается на освещённость фазы (см. `WorldClock::light_multiplier`).
+    ///
+    /// Почему поле, а не источник: комнаты-источники перенасыщают свет —
+    /// сид ~0.78/тик при распаде 0.05 держит ячейки комнат в потолке 1.0
+    /// даже при 15% «недолива», и один масштаб сида ночь бы не показал.
+    /// Гасим само поле: ночью оно стремится к 0.15 дневного уровня, и
+    /// плодородность (тепло × свет × питание) — рост ягод — следует за
+    /// сутками, как в C3 (свет движет ростом растений).
+    pub fn dim_light(&mut self, scale: f64) {
+        debug_assert!(scale >= 0.0 && scale <= 1.0);
+        for v in &mut self.light {
+            *v *= scale;
+        }
     }
 
     #[inline]
@@ -301,7 +338,10 @@ mod tests {
     fn gpu_diffusion_matches_cpu() {
         let gpu = pollster::block_on(DiffusionBackend::new());
         // Нет GPU — тест тривиален (тот же CPU-путь), честно.
-        let (mut a, mut b) = (Climate::new(0.0, 0.0, 40.0, 40.0, 2.0, backend_cpu()), Climate::new(0.0, 0.0, 40.0, 40.0, 2.0, gpu));
+        let (mut a, mut b) = (
+            Climate::new(0.0, 0.0, 40.0, 40.0, 2.0, backend_cpu()),
+            Climate::new(0.0, 0.0, 40.0, 40.0, 2.0, gpu),
+        );
         // Одинаковый источник.
         for i in 0..a.temp.len() {
             let v = ((i as f64 * 7919.0) % 1000.0) / 1000.0 * (i % 7) as f64 / 6.0;

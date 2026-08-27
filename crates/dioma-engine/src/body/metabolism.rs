@@ -30,20 +30,24 @@ pub mod chem {
     pub const N: usize = 9;
 }
 
-/// Тайм-константы распада (доля, остающаяся за тик 25 мс).
+/// Тайм-константы распада (доля, остающаяся за тик 50 мс).
+///
+/// (²: тик 50 мс) — каждый множитель возведён в квадрат: два 25-мс тика
+/// теперь укладываются в один 50-мс, поэтому за секунду (20 тактов) остаётся
+/// ровно та же доля, что при тике 25 мс (40 тактов): d₅₀²⁰ = (d₂₅²)²⁰ = d₂₅⁴⁰.
 pub mod decay {
     use super::chem;
     /// Гормональные химии: полураспад ~ минуты — память тела о недавней жизни.
-    pub const HORMONE_SLOW: f32 = 0.9995;
+    pub const HORMONE_SLOW: f32 = 0.99900025; // 0.9995²
     pub fn table() -> Vec<f32> {
-        let mut d = vec![0.999f32; chem::N];
-        d[chem::PAIN] = 0.90;
-        d[chem::REWARD] = 0.94;
-        d[chem::HUNGER] = 0.995;
-        d[chem::FATIGUE] = 0.995;
+        let mut d = vec![0.998001f32; chem::N]; // 0.999²
+        d[chem::PAIN] = 0.81; // 0.90²
+        d[chem::REWARD] = 0.8836; // 0.94²
+        d[chem::HUNGER] = 0.990025; // 0.995²
+        d[chem::FATIGUE] = 0.990025; // 0.995²
         d[chem::SEROTONIN] = HORMONE_SLOW;
         d[chem::CORTISOL] = HORMONE_SLOW;
-        d[chem::ACETYLCHOLINE] = 0.998;
+        d[chem::ACETYLCHOLINE] = 0.996004; // 0.998²
         d
     }
 }
@@ -169,12 +173,14 @@ impl Blood {
         let reactions = vec![
             // Пищеварение: 1 FOOD → 1 GLUCOSE + 0.3 ACh (внимание к миру:
             // поел — мозг получил посредник для обучения).
+            // (×2: тик 50 мс) — скорость реакции за такт удвоена: за секунду
+            // та же порция FOOD превращается в то же количество глюкозы.
             Reaction {
                 prop_r1: 1.0,
                 r1: chem::FOOD,
                 prop_r2: 0.0,
                 r2: usize::MAX,
-                rate: 0.10,
+                rate: 0.20,
                 prop_p1: 1.0,
                 p1: chem::GLUCOSE,
                 prop_p2: 0.3,
@@ -182,12 +188,13 @@ impl Blood {
             },
             // Ферментативное утоление: 1 HUNGER + 1 GLUCOSE → 1 GLUCOSE
             // (глюкоза — фермент: нужна, но conserve'd).
+            // (×2: тик 50 мс)
             Reaction {
                 prop_r1: 1.0,
                 r1: chem::HUNGER,
                 prop_r2: 1.0,
                 r2: chem::GLUCOSE,
-                rate: 0.010,
+                rate: 0.020,
                 prop_p1: 1.0,
                 p1: chem::GLUCOSE,
                 prop_p2: 0.0,
@@ -197,12 +204,13 @@ impl Blood {
             // Медленный каскад: сытость сегодня = спокойствие на часы.
             // rate мал намеренно: глюкоза не должна выгорать от одной сытости
             // (этой реакцией полураспад глюкозы — десятки секунд, не тики).
+            // (×2: тик 50 мс)
             Reaction {
                 prop_r1: 1.0,
                 r1: chem::GLUCOSE,
                 prop_r2: 0.0,
                 r2: usize::MAX,
-                rate: 0.0004,
+                rate: 0.0008,
                 prop_p1: 1.0,
                 p1: chem::SEROTONIN,
                 prop_p2: 0.0,
@@ -294,7 +302,9 @@ impl Blood {
             },
         ];
         let emitters = vec![
-            // Событие еды → дофамин.
+            // Событие еды → дофамин. Цифровой всплеск: НЕ ×2 — это импульс
+            // события, а не скорость; распад (0.8836/тик) уже пересчитан под
+            // тик 50 мс, и за секунду импульс гаснет так же, как при 25 мс.
             Emitter {
                 locus: locus::EVENT_ATE,
                 threshold: 0.5,
@@ -303,7 +313,7 @@ impl Blood {
                 digital: true,
                 chem: chem::REWARD,
             },
-            // Удар о стену → боль.
+            // Удар о стену → боль. Тоже событийный импульс — НЕ ×2 (см. выше).
             Emitter {
                 locus: locus::EVENT_WALL,
                 threshold: 0.5,
@@ -316,6 +326,9 @@ impl Blood {
             // Порог под реальный динамик: моторы дают ~5–20 спайков за тик,
             // а не десятки LIF-единиц. Раньше порог 25 делал утомление
             // мёртвым механизмом (fatigue всегда 0).
+            // Гейн НЕ ×2: RATE_MOTOR (спайки моторов за тик) сам удваивается
+            // вместе с BRAIN_STEPS_PER_TICK (100 подшагов вместо 50) — за
+            // секунду утомление копится с той же скоростью, что при 25 мс.
             Emitter {
                 locus: locus::RATE_MOTOR,
                 threshold: 6.0,
@@ -325,25 +338,29 @@ impl Blood {
                 chem: chem::FATIGUE,
             },
             // Дефицит глюкозы → голод (драйв из локуса, как у Creatures).
+            // (×2: тик 50 мс) — непрерывная продукция гормона: за такт вдвое
+            // больше, за секунду столько же.
             Emitter {
                 locus: locus::GLUCOSE_DEFICIT,
                 threshold: 15.0,
-                gain: 0.006,
+                gain: 0.012,
                 remove: false,
                 digital: false,
                 chem: chem::HUNGER,
             },
             // Дефицит глюкозы → стресс-гормон (медленный): хронический голод
             // копит кортизол, и существо становится пугливым на минуты.
+            // (×2: тик 50 мс)
             Emitter {
                 locus: locus::GLUCOSE_DEFICIT,
                 threshold: 40.0,
-                gain: 0.004,
+                gain: 0.008,
                 remove: false,
                 digital: false,
                 chem: chem::CORTISOL,
             },
             // Боль тоже вливает стресс (острый эпизод поверх хроники).
+            // Событийный импульс — НЕ ×2 (см. REWARD выше).
             Emitter {
                 locus: locus::EVENT_WALL,
                 threshold: 0.5,
@@ -371,11 +388,19 @@ impl Blood {
             emitters,
             loci: locus::defaults(),
             organ: BrainOrgan {
+                // Цена за единицу активности НЕ ×2: активность (спайки моторов
+                // за тик) сама удваивается от 100 подшагов мозга вместо 50 —
+                // расход глюкозы за секунду остаётся тем же, что при 25 мс
+                // (0.0015 × 2×R × 20 = 0.0015 × R × 40).
                 cost_per_activity: 0.0015,
-                starve_damage: 0.002,
+                // (×2: тик 50 мс) — урон за тик при пустой глюкозе удвоен
+                // (не связан с активностью мозга).
+                starve_damage: 0.004,
                 damage: 0.0,
+                // Цена за событие дофамина — НЕ ×2 (не скорость).
                 cost_per_dopamine: 0.4,
-                heal_rate: 0.000_05,
+                // (×2: тик 50 мс)
+                heal_rate: 0.0001,
             },
             pins,
         }
@@ -496,7 +521,8 @@ impl Blood {
         if self.conc[chem::GLUCOSE] > 150.0 && self.organ.damage > 0.0 {
             self.organ.damage = (self.organ.damage - self.organ.heal_rate).max(0.0);
             // Заживление тоже ест глюкозу — восстановление не бесплатно.
-            self.conc[chem::GLUCOSE] -= 0.01;
+            // (×2: тик 50 мс)
+            self.conc[chem::GLUCOSE] -= 0.02;
         }
         // Повреждение глушит глобальный гейн производительности.
         self.loci[locus::GAIN_GLOBAL] *= 1.0 - self.organ.damage;
@@ -713,6 +739,7 @@ mod hormone_tests {
     /// rate=0.02 сжигал ~2% запаса за тик (полураспад ~33 тика ≈ 0.8 с)
     /// и существо голодало за доли секунды просто от сытости. Теперь
     /// глюкоза тратится медленно, а серотонин всё ещё копится.
+    /// (÷2: тик 50 мс — 250 тиков = ~12.5 с, как 500 тиков при 25 мс.)
     #[test]
     fn serotonin_synthesis_does_not_drain_glucose() {
         let mut b = Blood::creature(false);
@@ -720,7 +747,7 @@ mod hormone_tests {
         let g0 = b.conc[chem::GLUCOSE];
         let s0 = b.conc[chem::SEROTONIN];
 
-        for _ in 0..500 {
+        for _ in 0..250 {
             b.update();
         }
 
@@ -730,7 +757,7 @@ mod hormone_tests {
             g0,
             b.conc[chem::GLUCOSE]
         );
-        // Серотонин — медленный фон: за 500 тиков (~12 с) заметно растёт,
+        // Серотонин — медленный фон: за 250 тиков (~12.5 с) заметно растёт,
         // но не взлетает (равновесие ~0.8×глюкоза, тает с HORMONE_SLOW).
         assert!(
             b.conc[chem::SEROTONIN] > s0 + 5.0,

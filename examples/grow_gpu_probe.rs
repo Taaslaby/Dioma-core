@@ -139,6 +139,9 @@ fn main() {
         wall_r: 0.0,
         food_near: true,
         wall: false,
+        place: 0,
+        heading: 0.0,
+        see_eat: false,
     };
     let mut steer_sum = 0.0f32;
     let mut drive_sum = 0.0f32;

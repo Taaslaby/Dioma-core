@@ -26,6 +26,9 @@ fn main() {
         wall_r: 0.0,
         food_near: true,
         wall: false,
+        place: 0,
+        heading: 0.0,
+        see_eat: false,
     };
 
     // Прогрев обеих сторон (компиляция шейдеров/раннеров, кэши).

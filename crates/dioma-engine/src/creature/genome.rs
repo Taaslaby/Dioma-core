@@ -26,6 +26,44 @@ const INSTINCT_SIGMA: f32 = 0.10;
 /// Сигма мутации генов метаболизма (относительная).
 const METAB_SIGMA: f32 = 0.10;
 
+/// Пол существа. Значения совпадают с C3 (`SkeletonConstants.h`:
+/// `enum {MALE=1, FEMALE=2}`; `Genome.cpp mySex`). Пол наследуется в геноме,
+/// но НЕ мутирует: в C3 ген пола — первый ген потомка и читается из СЛУЧАЙНО
+/// выбранного родителя («sex gene, so must pick randomly!», `Genome.cpp:328`).
+/// У нас «случайность» заменена детерминированным хэшем сида: один сид —
+/// один пол, но по диапазону сидов полы чередуются как случайные.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Sex {
+    Male = 1,
+    Female = 2,
+}
+
+impl Default for Sex {
+    fn default() -> Self {
+        Sex::Male
+    }
+}
+
+impl Sex {
+    /// Пол из сида существа: детерминированно (чёт/нечёт splitmix64-хэша).
+    /// Соседние сиды не коррелируют по полу.
+    pub fn from_seed(seed: u64) -> Self {
+        let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        if z & 1 == 0 {
+            Sex::Male
+        } else {
+            Sex::Female
+        }
+    }
+
+    pub fn idx(self) -> usize {
+        self as usize
+    }
+}
+
 /// Гены метаболизма: параметры органа «мозг» (Blood::BrainOrgan).
 /// Мутируют как всё остальное — тело эволюционирует вместе с мозгом.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,11 +81,13 @@ pub struct MetabolismGene {
 impl Default for MetabolismGene {
     fn default() -> Self {
         // Точка отсчёта — дефолтный орган `Blood::creature`.
+        // cost_per_activity НЕ ×2 (активность сама удваивается от подшагов
+        // мозга), остальные — те же значения, что в Blood::creature.
         Self {
             cost_per_activity: 0.0015,
-            starve_damage: 0.002,
+            starve_damage: 0.004,
             cost_per_dopamine: 0.4,
-            heal_rate: 0.000_05,
+            heal_rate: 0.0001,
         }
     }
 }
@@ -85,11 +125,16 @@ pub struct CreatureGenome {
     pub instincts: Vec<Instinct>,
     /// Гены метаболизма тела.
     pub metabolism: MetabolismGene,
+    /// Пол существа (1 = самец, 2 = самка, как в C3). Наследуется в геноме,
+    /// но НЕ мутирует — пол задаётся сидом при рождении (`Sex::from_seed`).
+    pub sex: Sex,
 }
 
 impl CreatureGenome {
     /// Потомок генома: каждый ген дрейфует от родительского значения.
     /// Детерминированно от сида (один сид — один потомок).
+    /// Пол не мутирует (см. [`Sex`]): у C3 ген пола не дрейфует —
+    /// он заново выбирается случайно при каждом наследовании.
     pub fn mutate(&self, rng: &mut XorShift) -> Self {
         Self {
             steering: self.steering.mutate(rng, STEERING_SIGMA),
@@ -104,6 +149,7 @@ impl CreatureGenome {
                 .map(|i| i.mutate(rng, INSTINCT_SIGMA))
                 .collect(),
             metabolism: self.metabolism.mutate(rng, METAB_SIGMA),
+            sex: self.sex,
         }
     }
 
@@ -111,11 +157,7 @@ impl CreatureGenome {
     /// родителя. Каждый дрейфует как обычный ген (тем же rng потомка) —
     /// приобретённый рефлекс становится наследственным, но не копируется
     /// бит-в-бит, а наследуется с изменчивостью.
-    pub fn add_learned_instincts(
-        &mut self,
-        learned: Vec<Instinct>,
-        rng: &mut XorShift,
-    ) {
+    pub fn add_learned_instincts(&mut self, learned: Vec<Instinct>, rng: &mut XorShift) {
         self.instincts
             .extend(learned.into_iter().map(|i| i.mutate(rng, INSTINCT_SIGMA)));
     }
@@ -163,5 +205,41 @@ mod tests {
             assert!(m.cost_per_dopamine >= 0.0);
             assert!(m.heal_rate >= 0.0);
         }
+    }
+
+    /// Пол не дрейфует: как в C3, ген пола не мутирует — пол задаётся
+    /// заново при наследовании (у нас — из сида потомка).
+    #[test]
+    fn mutate_keeps_sex() {
+        let base = CreatureGenome {
+            sex: Sex::Female,
+            ..CreatureGenome::default()
+        };
+        for _ in 0..16 {
+            let child = base.mutate(&mut XorShift::new(42));
+            assert_eq!(
+                child.sex, Sex::Female,
+                "мутация не должна менять пол (C3: пол не дрейфует)"
+            );
+        }
+    }
+
+    /// Пол из сида детерминирован и чередуется: один сид — один пол,
+    /// по диапазону сидов встречаются оба пола (как случайный выбор
+    /// родителя в C3, но без ГСЧ).
+    #[test]
+    fn sex_from_seed_is_deterministic_and_mixed() {
+        for seed in [0u64, 1, 7, 42, 99] {
+            assert_eq!(
+                Sex::from_seed(seed),
+                Sex::from_seed(seed),
+                "один сид — один пол"
+            );
+        }
+        let males = (0..64).filter(|&s| Sex::from_seed(s) == Sex::Male).count();
+        assert!(
+            males > 0 && males < 64,
+            "по диапазону сидов должны быть оба пола: самцов {males}/64"
+        );
     }
 }

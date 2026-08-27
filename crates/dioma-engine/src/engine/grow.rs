@@ -1,13 +1,12 @@
-//! -------------------------------------------------------------------------
-//! Filename:    src/grow.rs
-//! Class:       bioEngine_dna
-//! Purpose:     universal connectome growth
-//! Description: Layout (regions + morphogen secretion + axon specs + tag recognition)
+//! # Connectome growth
 //!
-//! → prometheus-grow world. Maternal gaussian bumps guide cones from step 0;
-//! tag table sets partner specificity. Presets: reflex / agent / cognitive.
-//! author: Atlasov anton
-//! -------------------------------------------------------------------------
+//! Этот модуль превращает генетическую схему [`Layout`] в [`Grown`].
+//! Регионы задают, где рождаются нейроны, `secrete` создаёт морфогенные
+//! источники, а `axons` и `allowed_pairs` ограничивают допустимые связи.
+//!
+//! Рост делегируется `prometheus-grow`. Поэтому CPU и GPU должны возвращать
+//! одну и ту же топологическую семантику, даже если численные веса слегка
+//! отличаются из-за f64/f32.
 use crate::rng::XorShift;
 use crate::Grown;
 use prometheus_grow::{
@@ -23,6 +22,7 @@ pub struct AxonSpec {
     pub max_len: f64,
 }
 
+/// Создаёт описание аксона, тянущегося к морфогену `target`.
 pub fn axon(target: &str, max_len: f64) -> AxonSpec {
     AxonSpec {
         target: target.to_string(),
@@ -51,10 +51,12 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// Общее число нейронов во всех регионах.
     pub fn n(&self) -> usize {
         self.regions.iter().map(|r| r.count).sum()
     }
 
+    /// Возвращает регион для каждого нейрона в CSR-порядке.
     pub fn region_of(&self) -> Vec<usize> {
         let mut v = Vec::with_capacity(self.n());
         for (ri, r) in self.regions.iter().enumerate() {
@@ -290,8 +292,8 @@ fn finalize(
     }
 }
 
-/// Вырастить коннектом из layout на CPU (rayon-диффузия прометея).
-pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
+/// Общий рост: шаги мира + опциональный снимок финальных позиций сом.
+fn grow_inner(layout: &Layout, st: &Steering, seed: u64, want_positions: bool) -> (Grown, Vec<[f64; 3]>) {
     let (mut world, region_of) = build_world(layout, st, seed);
 
     let t0 = std::time::Instant::now();
@@ -300,7 +302,43 @@ pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
     }
     let growth_s = t0.elapsed().as_secs_f64();
 
-    finalize(world, region_of, layout, st, growth_s)
+    // Позиции берём ДО сворачивания мира: `finalize` потребляет world, а
+    // `Grown` хранит только топологию. Индекс клетки = id нейрона (add_cell).
+    let positions = if want_positions {
+        world
+            .cells
+            .iter()
+            .map(|c| [c.soma.pos.x, c.soma.pos.y, c.soma.pos.z])
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let grown = finalize(world, region_of, layout, st, growth_s);
+    (grown, positions)
+}
+
+/// Вырастить коннектом из layout на CPU (rayon-диффузия прометея).
+pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
+    grow_inner(layout, st, seed, false).0
+}
+
+/// Вырастить коннектом и вернуть ФИНАЛЬНЫЕ позиции сом нейронов (индекс =
+/// id нейрона, тот же, что в `Grown::edges`). Позиции — из ростового мира
+/// после всех шагов, включая дрейф клеточной механики: это те самые
+/// координаты, где замыкались синапсы.
+///
+/// Сам `Grown` топологию только (рёбра/регионы/типы), поэтому визуализаторам
+/// нужен этот путь, чтобы показать честную геометрию мозга: растёт одно и то
+/// же, но мир не выбрасывается, пока позиции не скопированы.
+pub fn grow_with_positions(layout: &Layout, st: &Steering, seed: u64) -> (Grown, Vec<[f64; 3]>) {
+    let (grown, positions) = grow_inner(layout, st, seed, true);
+    debug_assert_eq!(
+        positions.len(),
+        grown.nt.len(),
+        "число клеток мира должно совпадать с числом нейронов"
+    );
+    (grown, positions)
 }
 
 /// Вырастить коннектом из layout с диффузией морфогенов на GPU (wgpu).

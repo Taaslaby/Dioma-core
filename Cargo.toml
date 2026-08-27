@@ -20,6 +20,18 @@ taas-format = { path = "crates/SiMuse/crates/taas-format" }
 pollster = "0.3"
 pillars-wgpu = { path = "crates/SiMuse/crates/pillars-wgpu" }
 
+# ── Мост «сим ↔ рендер»: рендерер, wgpu 22 (как в dioma-render) и winit 0.30
+#    (в dioma-render winit — только dev-dep, игре нужен напрямую) ──
+dioma-render = { path = "crates/dioma-render" }
+wgpu = { version = "22", features = ["wgsl"] }
+winit = "0.30"
+
+# Стейлы-примеры используют `pillars` (ядро нейродинамики), которое рефакторинг
+# «тонких зависимостей» вынес из runtime-зависимостей — примерам оно всё ещё
+# нужно, поэтому живёт здесь как dev-зависимость.
+[dev-dependencies]
+pillars = { path = "crates/SiMuse/crates/pillars" }
+
 # ── Активные бины (протоколы); история — в archive/bins ──
 
 [[bin]]
@@ -45,3 +57,9 @@ path = "src/bin/sardana_probe.rs"
 [[bin]]
 name = "grow-viz"
 path = "src/bin/grow_viz.rs"
+
+# ── Игра: смоук `--frames=N`; окно «dioma» ──
+
+[[bin]]
+name = "game"
+path = "src/bin/game.rs"

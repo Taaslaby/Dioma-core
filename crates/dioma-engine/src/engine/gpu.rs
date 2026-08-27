@@ -34,18 +34,19 @@ use pillars_wgpu::{WgpuContext, WgpuNetwork, WgpuPop};
 static ALPHA_LIF_FMA_WGSL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 fn alpha_lif_fma_wgsl() -> &'static str {
-    ALPHA_LIF_FMA_WGSL.get_or_init(|| {
-        let mut wgsl = ALPHA_LIF_WGSL_SOURCE.to_string();
-        wgsl = wgsl.replace(
-            "var v_new: f32 = (v + ((*P)[1] * integrand));",
-            "var v_new: f32 = fma((*P)[1], integrand, v);",
-        );
-        wgsl.replace(
-            "var g_new: f32 = ((g_old * (*P)[6]) + delayed);",
-            "var g_new: f32 = fma(g_old, (*P)[6], delayed);",
-        )
-    })
-    .as_str()
+    ALPHA_LIF_FMA_WGSL
+        .get_or_init(|| {
+            let mut wgsl = ALPHA_LIF_WGSL_SOURCE.to_string();
+            wgsl = wgsl.replace(
+                "var v_new: f32 = (v + ((*P)[1] * integrand));",
+                "var v_new: f32 = fma((*P)[1], integrand, v);",
+            );
+            wgsl.replace(
+                "var g_new: f32 = ((g_old * (*P)[6]) + delayed);",
+                "var g_new: f32 = fma(g_old, (*P)[6], delayed);",
+            )
+        })
+        .as_str()
 }
 
 /// Один спайковый подшаг динамики на GPU.
@@ -100,14 +101,7 @@ impl GpuDynamics {
                 tau_syn,
                 t_delay,
             } => (
-                *dt_ms,
-                *tau_ref,
-                *tau_m,
-                *v_rest,
-                *v_thresh,
-                *v_reset,
-                *tau_syn,
-                *t_delay,
+                *dt_ms, *tau_ref, *tau_m, *v_rest, *v_thresh, *v_reset, *tau_syn, *t_delay,
             ),
             _ => return Err("GpuDynamics: поддерживается только LifAlpha".into()),
         };
@@ -172,7 +166,13 @@ impl GpuDynamics {
         // тормозной — как `nt_sign` в run_lif_alpha (иначе тормозные пути
         // с положительными весами возбуждают пост-нейрон → судорога).
         let signs: Vec<f32> = (0..n)
-            .map(|i| if conn.nt_types.get(i).copied().unwrap_or(1.0) < 0.0 { -1.0 } else { 1.0 })
+            .map(|i| {
+                if conn.nt_types.get(i).copied().unwrap_or(1.0) < 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                }
+            })
             .collect();
         net.set_nt_signs(&signs)?;
 
@@ -216,7 +216,8 @@ impl GpuDynamics {
             return &self.spikes;
         }
         self.spikes.clear();
-        self.spikes.extend(self.spikes_u32.iter().map(|&s| s as i32));
+        self.spikes
+            .extend(self.spikes_u32.iter().map(|&s| s as i32));
         &self.spikes
     }
 
@@ -309,12 +310,14 @@ impl GpuDynamics {
         out
     }
 
-    /// DEBUG: скачать i_in (вход популяции после copy).
+    /// DEBUG: скачивает текущие входные токи после копирования на GPU.
+    /// Используется только диагностикой, не игровым hot path.
     pub fn debug_i_in(&self) -> Vec<f32> {
         self.net.debug_i_in()
     }
 
-    /// DEBUG: спайки последнего шага (u32 → Vec<i32>).
+    /// DEBUG: скачивает спайки последнего шага и переводит их в `i32`.
+    /// Синхронный readback здесь допустим только потому, что это debug API.
     pub fn debug_spikes(&self) -> Vec<i32> {
         let mut out = vec![0u32; self.conn.n_neurons];
         if self.net.download_spikes(&mut out).is_err() {
@@ -373,16 +376,7 @@ impl GpuDynamics {
         }
         self.net.inject_voltage(0, &self.indices, ext)?;
         self.net.step_many_learn(
-            n,
-            l.d_pre,
-            l.d_post,
-            l.d_e,
-            l.a_ltp,
-            l.a_ltd,
-            ml_lo,
-            ml_hi,
-            mr_lo,
-            mr_hi,
+            n, l.d_pre, l.d_post, l.d_e, l.a_ltp, l.a_ltd, ml_lo, ml_hi, mr_lo, mr_hi,
         )?;
         self.net.download_motor_sums()
     }
@@ -399,12 +393,14 @@ impl GpuDynamics {
         }
         self.net.inject_voltage(0, &self.indices, ext)?;
         // Один подшаг + eligibility в одном submit (батч n=1).
-        self.net.step_many_learn(1, l.d_pre, l.d_post, l.d_e, l.a_ltp, l.a_ltd, 0, 0, 0, 0)?;
+        self.net
+            .step_many_learn(1, l.d_pre, l.d_post, l.d_e, l.a_ltp, l.a_ltd, 0, 0, 0, 0)?;
         self.spikes.clear();
         self.spikes_u32.clear();
         self.spikes_u32.resize(self.conn.n_neurons, 0);
         self.net.download_spikes(&mut self.spikes_u32)?;
-        self.spikes.extend(self.spikes_u32.iter().map(|&s| s as i32));
+        self.spikes
+            .extend(self.spikes_u32.iter().map(|&s| s as i32));
         Ok(&self.spikes)
     }
 

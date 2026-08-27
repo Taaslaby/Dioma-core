@@ -265,8 +265,8 @@ impl DebugFont {
     /// квад ячейки 8×8, масштабированный на `scale`; шаг колонки (межглифовый
     /// интервал) — `8·scale·0.6` для читаемости. Квады центрируются на ячейке:
     /// `world_x = x − viewport.w/2 + col·advance + 4·scale`,
-    /// `world_y = y + 4·scale − viewport.h/2` (Y-флип: экранный Y вниз → мир
-    /// Y вверх), — рисуйте камерой `Camera::new(viewport)` (центр 0, зум 1).
+    /// `world_y = viewport.h/2 − y − 4·scale` (верх экрана = больший Y мира) —
+    /// рисуйте камерой `Camera::new(viewport)` (центр 0, зум 1).
     /// Пустые глифы (пробел) занимают шаг, но квад не создают; неизвестные
     /// символы — '?'.
     pub fn text_mesh(
@@ -289,7 +289,7 @@ impl DebugFont {
             }
             let center = [
                 x - viewport[0] * 0.5 + col as f32 * advance + 4.0 * scale,
-                y + 4.0 * scale - viewport[1] * 0.5,
+                viewport[1] * 0.5 - y - 4.0 * scale,
             ];
             let quad = Mesh::quad(center, [cell, cell], self.glyphs[gi], color);
             let base = mesh.vertices.len() as u32;

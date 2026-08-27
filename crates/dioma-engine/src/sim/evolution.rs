@@ -10,11 +10,11 @@
 //!              врождённым рефлексом охоты. Детерминированно по сиду.
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
+use super::{Arena, Critter};
 use crate::body::metabolism::chem;
 use crate::env::map::WorldMap;
 use crate::env::math::Vec2;
 use crate::env::AgentId;
-use super::{Arena, Critter};
 
 /// Голод новорождённого: свежий организм (HUNGER ≈ 30) начинает охоту
 /// только через сотни тиков распада глюкозы — новорождённый эволюционной
@@ -55,10 +55,12 @@ impl Default for EvolutionParams {
     fn default() -> Self {
         Self {
             population: 8,
-            generation_ticks: 1200,
+            // (÷2: тик 50 мс) — 600 тиков = 30 с, как 1200 тиков при 25 мс.
+            generation_ticks: 600,
             food_per_child: 6,
             max_children: 4,
-            berry_regrow: 40.0,
+            // (÷2: тик 50 мс) — 20 тиков = 1 с отрастания, как 40 при 25 мс.
+            berry_regrow: 20.0,
             target_berries: 8,
         }
     }
@@ -105,13 +107,7 @@ impl Evolution {
         let mut arena = Arena::new(seed ^ 0x517C_1B72_70DE_942A, map);
         arena.berry_regrow = params.berry_regrow;
         let pop = params.population.max(1);
-        let room_ca = arena
-            .world
-            .map
-            .rooms
-            .iter()
-            .map(|r| r.ca)
-            .collect();
+        let room_ca = arena.world.map.rooms.iter().map(|r| r.ca).collect();
         let mut evo = Evolution {
             arena,
             params,
@@ -208,10 +204,7 @@ impl Evolution {
             let instincts = &c.creature.genome.instincts;
             if !instincts.is_empty() {
                 with_instinct += 1;
-                let best = instincts
-                    .iter()
-                    .map(|i| i.dopamine)
-                    .fold(0.0f32, f32::max);
+                let best = instincts.iter().map(|i| i.dopamine).fold(0.0f32, f32::max);
                 dop_sum += best as f64;
             }
         }
@@ -250,10 +243,13 @@ impl Evolution {
         // (голодавшие не размножаются), добор — лучшим до потолка.
         let mut alloc: Vec<usize> = ranked.iter().map(|_| 0).collect();
         for (i, parent) in ranked.iter().enumerate() {
-            alloc[i] = (parent.creature.food_eaten() / fpc)
-                .min(self.params.max_children as u32) as usize;
+            alloc[i] =
+                (parent.creature.food_eaten() / fpc).min(self.params.max_children as u32) as usize;
         }
-        let mut need = self.params.population.saturating_sub(alloc.iter().sum::<usize>());
+        let mut need = self
+            .params
+            .population
+            .saturating_sub(alloc.iter().sum::<usize>());
         for (i, _) in ranked.iter().enumerate() {
             if need == 0 {
                 break;
@@ -299,20 +295,15 @@ impl Evolution {
             creature,
             wall_hits: 0,
             see_eat: false,
+            sleeping: false,
+            sleep_ticks: 0,
         });
         *child_idx += 1;
     }
 
     /// Позиция на стартовой сетке (та же, что у начальной популяции).
     fn grid_pos(&self, i: usize) -> Vec2 {
-        let Some(r) = self
-            .arena
-            .world
-            .map
-            .rooms
-            .first()
-            .map(|room| room.rect)
-        else {
+        let Some(r) = self.arena.world.map.rooms.first().map(|room| room.rect) else {
             return Vec2::new(0.0, 0.0);
         };
         let cols = (self.params.population as f32).sqrt().ceil().max(1.0) as usize;
@@ -333,7 +324,6 @@ impl Evolution {
             .wrapping_add(self.generation.wrapping_mul(0x517C_1B72))
             .wrapping_add(idx.wrapping_mul(0xB5A4_0E51))
     }
-
 }
 
 /// Детерминированный начальный курс из сида.
@@ -363,12 +353,14 @@ mod tests {
     fn probe_params() -> EvolutionParams {
         // Минимальный конфиг, где рост устойчив (проверен в debug и release
         // — числа совпадают): 2 существа, короткие поколения.
+        // (÷2: тик 50 мс — 400 тиков = 20 с, как 800 при 25 мс; отрастание
+        // 2.5 тика = 0.125 с, как 5 при 25 мс.)
         EvolutionParams {
             population: 2,
-            generation_ticks: 800,
+            generation_ticks: 400,
             food_per_child: 3,
             max_children: 3,
-            berry_regrow: 5.0,
+            berry_regrow: 2.5,
             target_berries: 16,
         }
     }
@@ -435,4 +427,3 @@ mod tests {
         assert_eq!(run(), run(), "один сид — одна эволюционная история");
     }
 }
-

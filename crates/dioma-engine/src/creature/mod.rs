@@ -1,14 +1,11 @@
-//! -------------------------------------------------------------------------
-//! Filename:    src/creature/mod.rs
-//! Class:       creature
-//! Purpose:     СУЩЕСТВО — мозг (engine::Brain) + кровь (body::Blood)
-//! Description: контроллер агента: сенсоры мира/тела → ток мозга → спайки
-//!               моторных пулов → поворот/драйв/еда. Существо НЕ скриптуется —
-//!               это обучаемый спикинг-мозг на реальном метаболизме.
-//!               Слой не знает о комнатах и еде (это world/sim): он получает
-//!               только Sense и возвращает Action.
-//! author: Atlasov anton
-//! -------------------------------------------------------------------------
+//! # Creature
+//!
+//! Игровое существо: обучаемый спайковый мозг плюс локальная физиология.
+//!
+//! Существо не читает карту и не ищет ягоды самостоятельно. Хост передаёт
+//! [`Sense`], существо исполняет мозг и тело, затем возвращает [`Action`].
+//! Координаты, столкновения, еда и социальное наблюдение принадлежат хосту
+//! (`crate::sim::Arena`).
 use crate::body::metabolism::{chem, locus, Blood};
 use crate::engine::grow::{avoidance_layout, grow, grow_gpu};
 use crate::engine::instincts::Instinct;
@@ -19,7 +16,7 @@ use crate::Grown;
 pub mod genome;
 pub mod memory;
 
-pub use genome::{CreatureGenome, MetabolismGene};
+pub use genome::{CreatureGenome, MetabolismGene, Sex};
 
 /// Регионы avoidance_layout (см. engine::grow::avoidance_layout).
 const REGION_SL: usize = 0; // запах слева
@@ -65,8 +62,7 @@ const LEARNED_POST_DRIVE: f32 = 8.0;
 /// Прямые рефлекторные пары «сенсор → мотор» (регионы avoidance_layout):
 /// только они сворачиваются в инстинкты. Тормозные пути через I не
 /// передаются — рефлекс это стимул→действие, а не тонкая настройка.
-const REFLEX_PAIRS: [(usize, usize); 4] =
-    [(0, 5), (1, 6), (2, 6), (3, 5)]; // SL→ML, SR→MR, WL→MR, WR→ML
+const REFLEX_PAIRS: [(usize, usize); 4] = [(0, 5), (1, 6), (2, 6), (3, 5)]; // SL→ML, SR→MR, WL→MR, WR→ML
 /// Масштаб «запах [0..1] → ток сенсорного региона».
 const SMELL_CURRENT: f32 = 4.0;
 /// Масштаб «стена [0..1] → ток региона стены».
@@ -81,7 +77,10 @@ const RELIEF_DOPAMINE: f32 = 0.4;
 /// достраивают их через STDP.
 const WALL_AVOID_GAIN: f32 = 2.0;
 /// Нормировка асимметрии моторных спайков → [-1..1] поворота.
-const STEER_SCALE: f32 = 0.5;
+/// (÷2: тик 50 мс — моторные суммы за тик удвоились (100 подшагов мозга
+/// вместо 50); делим steer, чтобы диапазон и поворот за секунду остались
+/// прежними: 0.25 × 0.6 рад/тик × 20 тик/с = 0.5 × 0.3 × 40.)
+const STEER_SCALE: f32 = 0.25;
 /// Моторный тон, при котором драйв = 1.0 (полный газ).
 const TONIC_DRIVE_NORM: f32 = 0.5;
 /// Порция еды за одно «съел» (хост списывает столько же у еды в мире).
@@ -105,7 +104,11 @@ const SLEEP_REINFORCE: f32 = 0.15;
 /// Доля слабого шума, отсекаемая во сне (вес тянется к снимку рождения).
 const SLEEP_PRUNE: f32 = 0.7;
 
-/// Взгляд существа на мир за тик. Заполняет хост (world/sim/арена).
+/// Набор сенсорных входов существа за один игровой тик.
+///
+/// Хост (`Arena` или другой симулятор) заполняет структуру до вызова
+/// [`Creature::tick`]. Значения направленных сенсоров нормированы к `0..=1`;
+/// `Creature` не читает карту напрямую.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Sense {
     /// 0..1 — запах еды слева (относительно курса).
@@ -130,7 +133,10 @@ pub struct Sense {
     pub see_eat: bool,
 }
 
-/// Действие существа, читаемое хостом.
+/// Решение существа, которое применяет игровой хост после `tick`.
+///
+/// `steer` задаёт направление поворота, `drive` — долю скорости, а `eat`
+/// открывает рот для ближайшего съедобного объекта.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Action {
     /// Поворот: -1 = влево, +1 = вправо.
@@ -168,10 +174,9 @@ pub struct Creature {
     pub genome: CreatureGenome,
     bounds: Bounds,
     /// Переиспользуемые буферы мозга (без аллокаций на тик / подшаг).
-    /// `ext` — внешний ток (сенсоры) на тик; `spikes` — спайки подшага;
-    /// `spike_hist` — пачка векторов спайков на тик (батч-путь мозга).
+    /// `ext` — внешний ток (сенсоры) на тик; `spike_hist` — пачка векторов
+    /// спайков на тик (батч-путь мозга).
     ext: Vec<f32>,
-    spikes: Vec<i32>,
     spike_hist: Vec<Vec<i32>>,
     /// Близость стены на прошлом тике — для сигнала облегчения (стена отошла).
     prev_wall: f32,
@@ -248,7 +253,10 @@ impl Creature {
         )
     }
 
-    /// Потомок: мутированный геном родителя + новый сид. **Проводка
+    /// Создаёт потомка из мутированного генома родителя и нового сида.
+    ///
+    /// Текущий обученный мозг не копируется напрямую; сильный опыт может
+    /// перейти в наследуемый инстинкт через эффект Болдуина. **Проводка
     /// наследуется**: топология коннектома родителя (рёбра/регионы/типы)
     /// пересаживается ребёнку целиком — никакого роста заново. Сид роста
     /// мутирует: веса синапсов получают детерминированную печать ребёнка
@@ -270,12 +278,16 @@ impl Creature {
         let mut rng = XorShift::new(child_seed ^ 0x9E37_79B9_7F4A_7C15);
         let mut genome = self.genome.mutate(&mut rng);
         genome.add_learned_instincts(self.learned_instincts(), &mut rng);
+        // Пол — случайно при наследовании, как в C3 (первый ген пола читается
+        // из случайного родителя): у нас «случайность» — детерминированный
+        // хэш сида потомка. Пол не мутирует (`CreatureGenome::mutate` его
+        // не трогает) — задаётся заново каждому ребёнку.
+        genome.sex = Sex::from_seed(child_seed);
         // Пересадка проводки: топология родителя наследуется как есть,
         // сид роста мутирует — каждый синапс получает печать ребёнка.
         let mut grown = self.grown.clone();
         for w in grown.edges.iter_mut() {
-            w.2 = (w.2 as f64 * (1.0 + rng.gauss() * INHERIT_WEIGHT_SIGMA))
-                .max(0.1) as f32;
+            w.2 = (w.2 as f64 * (1.0 + rng.gauss() * INHERIT_WEIGHT_SIGMA)).max(0.1) as f32;
         }
         Self::from_genome_grown(genome, child_seed, grown)
     }
@@ -298,12 +310,7 @@ impl Creature {
     /// свежий мозг (`burn_into` — стимул + дофамин + консолидация + снимок
     /// памяти). Выученные веса родителя НЕ наследуются (обнуляются рождением),
     /// но врождённые рефлексы родителей ребёнок получает с первого тика.
-    fn assemble(
-        grown: Grown,
-        genome: CreatureGenome,
-        seed: u64,
-        params: PlasticityParams,
-    ) -> Self {
+    fn assemble(grown: Grown, genome: CreatureGenome, seed: u64, params: PlasticityParams) -> Self {
         Self::assemble_impl(grown, genome, seed, params, false)
     }
 
@@ -329,6 +336,12 @@ impl Creature {
         params: PlasticityParams,
         gpu: bool,
     ) -> Self {
+        // Пол существа — из его сида (детерминированно, без ГСЧ). Единая
+        // точка для всех конструкторов: `Creature::new(seed)` и потомки
+        // `spawn_child` рождаются с полом `Sex::from_seed(сид)` — как в C3,
+        // где пол выбирается случайно при наследовании.
+        let mut genome = genome;
+        genome.sex = Sex::from_seed(seed);
         let gains = gains_from(
             7,
             &[
@@ -366,7 +379,6 @@ impl Creature {
             grown,
             bounds,
             ext: vec![BASAL_EXT; brain_n],
-            spikes: Vec::with_capacity(brain_n),
             spike_hist: Vec::with_capacity(BRAIN_STEPS_PER_TICK),
             prev_wall: 0.0,
             food_eaten: 0,
@@ -386,7 +398,10 @@ impl Creature {
         c
     }
 
-    /// Один тик: сенсоры → ток мозга → спайки → кровь → действия.
+    /// Исполняет один тик жизни: сенсоры → мозг → тело → действие.
+    ///
+    /// Вызов обновляет внутреннюю физиологию и пластичность. Хост отвечает
+    /// за применение возвращённого движения и за отправку событий мира.
     pub fn tick(&mut self, sense: &Sense) -> Action {
         // 0. Облегчение: стена отодвинулась за прошлый тик → поощрение побега.
         //    Дофамин кредитует именно тот отворот, который убрал стену из поля
@@ -421,14 +436,17 @@ impl Creature {
         // ридбек — только моторные суммы), пластичность — по каждому вектору
         // после (или на GPU, если обучение целиком на GPU).
         let spt = self.brain.steps_per_tick();
-        let (ml, mr) = self
-            .brain
-            .step_batch_motor(ext, spt, self.bounds.ml, self.bounds.mr, &mut self.spike_hist);
+        let (ml, mr) = self.brain.step_batch_motor(
+            ext,
+            spt,
+            self.bounds.ml,
+            self.bounds.mr,
+            &mut self.spike_hist,
+        );
 
         // 3. Тело: моторная активность, дефицит глюкозы и события — в кровь.
         self.blood.loci[locus::RATE_MOTOR] = (ml + mr) as f32;
-        self.blood.loci[locus::GLUCOSE_DEFICIT] =
-            (150.0 - self.blood.conc[chem::GLUCOSE]).max(0.0);
+        self.blood.loci[locus::GLUCOSE_DEFICIT] = (150.0 - self.blood.conc[chem::GLUCOSE]).max(0.0);
         if sense.wall {
             self.hit_wall();
         }
@@ -445,14 +463,19 @@ impl Creature {
 
         // 4. Награда за еду: обучение стоит глюкозы (метаболический бюджет).
         if eat && self.blood.pay_for_plasticity(EAT_DOPAMINE) {
-            self.brain.schedule_reward(EAT_DOPAMINE * self.blood.plasticity_budget());
+            self.brain
+                .schedule_reward(EAT_DOPAMINE * self.blood.plasticity_budget());
         }
         // Социальное обучение (зеркальный дофамин): видел соседа за едой —
         // то, что я делаю сейчас, ведёт к еде. Подкрепляет текущее поведение
         // (куда я рулю — туда еда), не требуя съесть самому. Слабее еды и
         // тоже стоит глюкозы — культура не бесплатна.
-        if sense.see_eat && self.blood.wants_food() && self.blood.pay_for_plasticity(MIRROR_DOPAMINE) {
-            self.brain.schedule_reward(MIRROR_DOPAMINE * self.blood.plasticity_budget());
+        if sense.see_eat
+            && self.blood.wants_food()
+            && self.blood.pay_for_plasticity(MIRROR_DOPAMINE)
+        {
+            self.brain
+                .schedule_reward(MIRROR_DOPAMINE * self.blood.plasticity_budget());
         }
         // Облегчение: успешный отворот от стены — положительный сигнал
         // (негативное подкрепление: стена отошла = «так и делай»).
@@ -462,8 +485,8 @@ impl Creature {
         self.prev_wall = prox;
 
         // 5. Действия: асимметрия моторов → поворот; моторный тон → драйв.
-        let mut steer = ((mr - ml) as f32 * STEER_SCALE * self.blood.turn_gain() as f32)
-            .clamp(-1.0, 1.0);
+        let mut steer =
+            ((mr - ml) as f32 * STEER_SCALE * self.blood.turn_gain() as f32).clamp(-1.0, 1.0);
         // Память места: запаха нет (градиента нет), но место знакомо и голод
         // есть — руль тянет выровнять курс на запомненное направление еды
         // (таксис выключен, память ведёт). В незнакомом месте или с запахом
@@ -494,7 +517,8 @@ impl Creature {
     pub fn sleep(&mut self) {
         self.brain.clear_eligibility();
         self.brain.sleep_consolidate(SLEEP_ANCHOR_ALPHA);
-        self.brain.consolidate_sleep(SLEEP_STRONG_MIN, SLEEP_REINFORCE, SLEEP_PRUNE);
+        self.brain
+            .consolidate_sleep(SLEEP_STRONG_MIN, SLEEP_REINFORCE, SLEEP_PRUNE);
         // Гиппокамп: слабые места забываются, воспоминания затухают.
         self.hippo.consolidate();
         self.blood.sleep();
@@ -531,6 +555,21 @@ impl Creature {
         self.blood.conc[chem::FATIGUE]
     }
 
+    /// Серотонин (настроение) — кровь.
+    pub fn serotonin(&self) -> f32 {
+        self.blood.conc[chem::SEROTONIN]
+    }
+
+    /// Кортизол (стресс).
+    pub fn cortisol(&self) -> f32 {
+        self.blood.conc[chem::CORTISOL]
+    }
+
+    /// Дофамин (REWARD-канал крови).
+    pub fn dopamine_level(&self) -> f32 {
+        self.blood.conc[chem::REWARD]
+    }
+
     /// Хочет ли есть (рецептор рта).
     pub fn wants_food(&self) -> bool {
         self.blood.wants_food()
@@ -539,6 +578,12 @@ impl Creature {
     /// Порций еды, съеденных за жизнь (мера успеха охоты).
     pub fn food_eaten(&self) -> u32 {
         self.food_eaten
+    }
+
+    /// Пол существа (самец/самка — как в C3, значения 1/2). Пока без
+    /// игровых эффектов: пол-связанные гены и размножение — транш 3.
+    pub fn sex(&self) -> Sex {
+        self.genome.sex
     }
 
     /// Сколько мест запомнено (память места — диагностика).
@@ -569,8 +614,7 @@ impl Creature {
                 let mut inputs = Vec::with_capacity((se - sb) + (me - mb));
                 inputs.extend((sb..se).map(|i| (i, LEARNED_PRE_DRIVE)));
                 inputs.extend((mb..me).map(|i| (i, LEARNED_POST_DRIVE)));
-                let dopamine =
-                    (gain / LEARNED_DOPAMINE_SCALE).clamp(0.2, 8.0);
+                let dopamine = (gain / LEARNED_DOPAMINE_SCALE).clamp(0.2, 8.0);
                 Instinct { inputs, dopamine }
             })
             .collect()
@@ -645,6 +689,32 @@ mod tests {
         );
     }
 
+    /// Геттеры настроения читают канал крови: серотонин/кортизол/дофамин —
+    /// именованный доступ для инспектора/игры. Еда отражается в REWARD-канале.
+    #[test]
+    fn mood_getters_report_blood_chems() {
+        let mut c = Creature::new(7);
+        // Геттеры = кровь (детерминированные начальные значения).
+        assert_eq!(c.serotonin(), c.blood.conc[chem::SEROTONIN]);
+        assert_eq!(c.cortisol(), c.blood.conc[chem::CORTISOL]);
+        assert_eq!(c.dopamine_level(), c.blood.conc[chem::REWARD]);
+        // Свежий организм: серотонин — фон, дофамин — ноль.
+        assert!(c.serotonin() > 0.0, "фоновый серотонин: {}", c.serotonin());
+        assert_eq!(c.dopamine_level(), 0.0, "дофамин до еды нулевой");
+
+        // Еда → дофамин в кровь (канал REWARD через EVENT_ATE) — геттер видит.
+        c.blood.conc[chem::HUNGER] = 200.0;
+        c.tick(&Sense {
+            food_near: true,
+            ..Default::default()
+        });
+        assert!(
+            c.dopamine_level() > 0.0,
+            "еда должна дать дофамин: {}",
+            c.dopamine_level()
+        );
+    }
+
     #[test]
     fn drive_positive_when_hungry() {
         let mut c = Creature::new(17);
@@ -681,14 +751,20 @@ mod tests {
         for seed in [1u64, 7, 13, 42] {
             let mut c = Creature::new(seed);
             c.blood.conc[chem::HUNGER] = 200.0;
-            let wall_l = avg_steer(&mut c, Sense {
-                wall_l: 1.0,
-                ..Default::default()
-            });
-            let wall_r = avg_steer(&mut c, Sense {
-                wall_r: 1.0,
-                ..Default::default()
-            });
+            let wall_l = avg_steer(
+                &mut c,
+                Sense {
+                    wall_l: 1.0,
+                    ..Default::default()
+                },
+            );
+            let wall_r = avg_steer(
+                &mut c,
+                Sense {
+                    wall_r: 1.0,
+                    ..Default::default()
+                },
+            );
             assert!(
                 wall_l > 0.2,
                 "стена слева → поворот вправо (seed {seed}): steer={wall_l}"
@@ -802,7 +878,47 @@ mod tests {
         let b = parent.spawn_child(77);
         assert_eq!(a.genome, b.genome);
         assert_eq!(total_weight(&a), total_weight(&b));
-        assert_eq!(a.blood.organ.cost_per_activity, b.blood.organ.cost_per_activity);
+        assert_eq!(
+            a.blood.organ.cost_per_activity,
+            b.blood.organ.cost_per_activity
+        );
+    }
+
+    /// Пол потомка — как у C3: случайно при наследовании, но детерминированно
+    /// (один сид потомка — один пол; по диапазону сидов встречаются оба пола).
+    /// Пол не мутирует — у ребёнка он заново выбран из его сида.
+    #[test]
+    fn child_sex_is_random_per_seed_but_deterministic() {
+        let parent = Creature::new(1);
+        let mut males = 0;
+        let mut seen: Vec<Sex> = Vec::new();
+        for child_seed in 0..64u64 {
+            let child = parent.spawn_child(child_seed);
+            let expected = Sex::from_seed(child_seed);
+            assert_eq!(
+                child.sex(),
+                expected,
+                "пол потомка = пол из его сида (seed {child_seed})"
+            );
+            if child.sex() == Sex::Male {
+                males += 1;
+            }
+            seen.push(child.sex());
+        }
+        assert!(
+            males > 0 && males < 64,
+            "по диапазону сидов должны быть оба пола: самцов {males}/64"
+        );
+        // Один сид — один пол (детерминированность).
+        assert_eq!(
+            parent.spawn_child(7).sex(),
+            parent.spawn_child(7).sex(),
+            "один сид потомка — один пол"
+        );
+        assert!(
+            seen.iter().any(|&s| s == Sex::Male) && seen.iter().any(|&s| s == Sex::Female),
+            "потомки бывают обоих полов"
+        );
     }
 
     /// Наследование инстинктов и генов метаболизма: ребёнок получает их из
@@ -825,7 +941,10 @@ mod tests {
         // Инстинкт унаследован (мутация дрейфует дофамин в [0.2, 8]).
         assert_eq!(child.genome.instincts.len(), 1, "инстинкт наследуется");
         let d = child.genome.instincts[0].dopamine;
-        assert!((0.2..=8.0).contains(&d), "дофамин инстинкта в границах: {d}");
+        assert!(
+            (0.2..=8.0).contains(&d),
+            "дофамин инстинкта в границах: {d}"
+        );
         assert!(
             (d - 2.5).abs() < 1.0,
             "дофамин дрейфует от родительского, а не прыгает: {d}"
@@ -1172,10 +1291,7 @@ mod tests {
         }
         let g_s = sleeper.brain.learned_gain(REGION_SL, REGION_ML);
         let g_a = awake.brain.learned_gain(REGION_SL, REGION_ML);
-        assert!(
-            g_s > 0.0,
-            "спящий сохранил выученный прирост пути: {g_s}"
-        );
+        assert!(g_s > 0.0, "спящий сохранил выученный прирост пути: {g_s}");
         assert!(
             g_s > g_a,
             "сон закрепляет выученное лучше бодрствования: sleeper={g_s} awake={g_a}"
