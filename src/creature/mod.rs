@@ -17,6 +17,7 @@ use crate::rng::XorShift;
 use crate::Grown;
 
 pub mod genome;
+pub mod memory;
 
 pub use genome::{CreatureGenome, MetabolismGene};
 
@@ -116,6 +117,11 @@ pub struct Sense {
     pub food_near: bool,
     /// true — удар о стену на этом тике.
     pub wall: bool,
+    /// Грубая клетка карты, где находится существо (для памяти места;
+    /// 0 = контекст не задан). Заполняет хост.
+    pub place: u32,
+    /// Курс существа в радианах (0 = +x, против часовой; для памяти места).
+    pub heading: f32,
 }
 
 /// Действие существа, читаемое хостом.
@@ -166,6 +172,9 @@ pub struct Creature {
     /// Порций еды, съеденных за жизнь (мера успеха охоты — для отбора
     /// и для наследственности: см. [`Self::learned_instincts`]).
     food_eaten: u32,
+    /// Память места: куда была еда в знакомых местах (гиппокампоподобный
+    /// слой). Учится на «съел», ведёт к еде, когда запаха нет.
+    hippo: memory::Hippocampus,
 }
 
 impl Creature {
@@ -355,6 +364,7 @@ impl Creature {
             spike_hist: Vec::with_capacity(BRAIN_STEPS_PER_TICK),
             prev_wall: 0.0,
             food_eaten: 0,
+            hippo: memory::Hippocampus::default(),
         };
         // «Первый сон» новорождённого: врождённые рефлексы прожигаются в
         // свежий мозг (стимул + награда + консолидация). Потолок клэмпа
@@ -420,6 +430,10 @@ impl Creature {
         if eat {
             self.blood.ingest_food(FOOD_PORTION);
             self.food_eaten += 1;
+            // Память места: еда была здесь, и я смотрел в этом направлении.
+            if sense.place != 0 {
+                self.hippo.remember(sense.place, sense.heading);
+            }
         }
         self.blood.update();
 
@@ -435,8 +449,21 @@ impl Creature {
         self.prev_wall = prox;
 
         // 5. Действия: асимметрия моторов → поворот; моторный тон → драйв.
-        let steer = ((mr - ml) as f32 * STEER_SCALE * self.blood.turn_gain() as f32)
+        let mut steer = ((mr - ml) as f32 * STEER_SCALE * self.blood.turn_gain() as f32)
             .clamp(-1.0, 1.0);
+        // Память места: запаха нет (градиента нет), но место знакомо и голод
+        // есть — руль тянет выровнять курс на запомненное направление еды
+        // (таксис выключен, память ведёт). В незнакомом месте или с запахом
+        // рулит обычный гоминг.
+        if (sense.smell_l - sense.smell_r).abs() < 0.02
+            && sense.place != 0
+            && self.blood.wants_food()
+        {
+            if let Some((target, strength)) = self.hippo.recall(sense.place) {
+                steer += memory::steer_toward(sense.heading, target) * strength;
+            }
+        }
+        steer = steer.clamp(-1.0, 1.0);
         let drive = (self.blood.motor_tonic() / TONIC_DRIVE_NORM).clamp(0.0, 1.0);
         Action { steer, drive, eat }
     }
@@ -455,6 +482,8 @@ impl Creature {
         self.brain.clear_eligibility();
         self.brain.sleep_consolidate(SLEEP_ANCHOR_ALPHA);
         self.brain.consolidate_sleep(SLEEP_STRONG_MIN, SLEEP_REINFORCE, SLEEP_PRUNE);
+        // Гиппокамп: слабые места забываются, воспоминания затухают.
+        self.hippo.consolidate();
         self.blood.sleep();
     }
 
@@ -497,6 +526,11 @@ impl Creature {
     /// Порций еды, съеденных за жизнь (мера успеха охоты).
     pub fn food_eaten(&self) -> u32 {
         self.food_eaten
+    }
+
+    /// Сколько мест запомнено (память места — диагностика).
+    pub fn places_remembered(&self) -> usize {
+        self.hippo.places_remembered()
     }
 
     /// Свернуть выученные пути в инстинкт-гены (эффект Болдуина): сильные
@@ -995,6 +1029,56 @@ mod tests {
         assert!(
             (total_weight(&child) - w1).abs() > 1.0,
             "потомок не копирует выученные веса родителя"
+        );
+    }
+
+    /// Память места: существо запоминает, в каком направлении была еда
+    /// в знакомом месте, и без запаха рулит туда по памяти (гоминг без
+    /// таксиса). В незнакомом месте памяти нет — руля нет.
+    #[test]
+    fn place_memory_guides_homing_without_smell() {
+        let mut c = Creature::new(7);
+        c.blood.conc[chem::HUNGER] = 200.0;
+        // Учим: в месте 5 еда была, когда смотрели на восток (heading 0).
+        let meal = Sense {
+            smell_l: 1.0,
+            food_near: true,
+            place: 5,
+            heading: 0.0,
+            ..Default::default()
+        };
+        for _ in 0..30 {
+            assert!(c.tick(&meal).eat, "должен есть и запоминать");
+        }
+        assert_eq!(c.places_remembered(), 1, "место 5 запомнено");
+
+        // Запаха нет, смотрим на север (π/2) в месте 5 → память тянет
+        // на восток: поворот вправо (steer > 0).
+        let mem = Sense {
+            place: 5,
+            heading: std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        };
+        let steer_known = avg_steer(&mut c, mem);
+        assert!(
+            steer_known > 0.2,
+            "память ведёт к еде на востоке: steer={steer_known}"
+        );
+
+        // Контроль: незнакомое место (99) без памяти — руля нет.
+        let other = Sense {
+            place: 99,
+            heading: std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        };
+        let steer_unknown = avg_steer(&mut c, other);
+        assert!(
+            steer_unknown.abs() < 0.1,
+            "в незнакомом месте памяти нет: steer={steer_unknown}"
+        );
+        assert!(
+            steer_known > steer_unknown + 0.2,
+            "память должна заметно отличаться от пустоты: {steer_known} vs {steer_unknown}"
         );
     }
 

@@ -25,6 +25,8 @@ pub const EAT_RADIUS: f32 = 2.0;
 pub const MAX_TURN: f32 = 0.3;
 /// Затухание запаха с дистанцией: 60/(60+d).
 const SMELL_FALLOFF: f32 = 60.0;
+/// Размер клетки памяти места (грубая привязка «где была еда»).
+const PLACE_CELL: f32 = 8.0;
 /// Дальность ощущения стены (юнитов) и шаг пробы.
 const WALL_LOOKAHEAD: f32 = 8.0;
 const WALL_PROBE_STEP: f32 = 1.0;
@@ -289,6 +291,10 @@ impl Arena {
         let wall_l = self.wall_probe(pos, left).max(self.wall_probe(pos, ahead_l));
         let wall_r = self.wall_probe(pos, right).max(self.wall_probe(pos, ahead_r));
 
+        // Память места: грубая клетка карты (квадрат PLACE_CELL) + курс.
+        let cx = (pos.x / PLACE_CELL).floor() as i64;
+        let cy = (pos.y / PLACE_CELL).floor() as i64;
+        let place = (cx.wrapping_mul(7349) ^ cy.wrapping_mul(7919)) as u32;
         Sense {
             smell_l: l.min(1.0),
             smell_r: r.min(1.0),
@@ -296,6 +302,8 @@ impl Arena {
             wall_r,
             food_near: near,
             wall: false,
+            place,
+            heading,
         }
     }
 
