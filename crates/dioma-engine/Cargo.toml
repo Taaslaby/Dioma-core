@@ -13,3 +13,12 @@ pollster = "0.3"
 taas-format = { path = "../SiMuse/crates/taas-format" }
 rayon = "1"
 wide = "0.7"
+
+[dev-dependencies]
+# Научная станция (examples/sci.rs): окно + egui. Ядро движка от окна не зависит.
+winit = "0.30"
+wgpu = { version = "22", features = ["wgsl"] }
+egui = "0.29"
+egui-wgpu = "0.29"
+egui-winit = "0.29"
+pollster = "0.3"

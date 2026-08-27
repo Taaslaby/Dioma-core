@@ -11,6 +11,8 @@
 
 /// Химические вещества.
 use std::collections::VecDeque;
+use wide::f32x8;
+
 pub mod chem {
     pub const GLUCOSE: usize = 0; // питание
     pub const FOOD: usize = 1; // содержимое желудка (еда → глюкоза)
@@ -459,9 +461,34 @@ impl Blood {
             }
         }
 
-        // 2. Распады (полураспады).
-        for (c, d) in self.conc.iter_mut().zip(&self.decay) {
-            *c = (*c * d).clamp(0.0, 255.0);
+        // 2. Распады (полураспады) с SIMD оптимизацией.
+        // Обрабатываем первые 8 элементов через f32x8, последний скалярно.
+        debug_assert_eq!(self.conc.len(), chem::N);
+        debug_assert_eq!(self.decay.len(), chem::N);
+        
+        if self.conc.len() >= 8 {
+            // SIMD путь для первых 8 элементов
+            let conc_simd = f32x8::new([
+                self.conc[0], self.conc[1], self.conc[2], self.conc[3],
+                self.conc[4], self.conc[5], self.conc[6], self.conc[7],
+            ]);
+            let decay_simd = f32x8::new([
+                self.decay[0], self.decay[1], self.decay[2], self.decay[3],
+                self.decay[4], self.decay[5], self.decay[6], self.decay[7],
+            ]);
+            let result = (conc_simd * decay_simd).max(f32x8::splat(0.0)).min(f32x8::splat(255.0));
+            let arr = result.to_array();
+            self.conc[0..8].copy_from_slice(&arr);
+            
+            // Скалярная обработка оставшихся элементов
+            for i in 8..self.conc.len() {
+                self.conc[i] = (self.conc[i] * self.decay[i]).clamp(0.0, 255.0);
+            }
+        } else {
+            // Fallback для маленьких массивов
+            for (c, d) in self.conc.iter_mut().zip(&self.decay) {
+                *c = (*c * d).clamp(0.0, 255.0);
+            }
         }
 
         // 3. Эмиттеры: локус → химия.
@@ -494,18 +521,24 @@ impl Blood {
         for &(l, v) in &drive_loci {
             self.loci[l] = v;
         }
+        // Batch обновление рецепторов: группируем эффекты по локусам
+        let mut locus_effects: [f32; locus::N] = [0.0; locus::N];
+        
         for r in &self.receptors {
             let signal = (self.conc[r.chem] - r.threshold).max(0.0);
             let effect = if r.digital {
-                if signal > 0.0 {
-                    r.gain
-                } else {
-                    0.0
-                }
+                if signal > 0.0 { r.gain } else { 0.0 }
             } else {
                 r.gain * signal / 255.0
             };
-            self.loci[r.locus] += if r.reduce { -effect } else { effect };
+            locus_effects[r.locus] += if r.reduce { -effect } else { effect };
+        }
+        
+        // Применяем накопленные эффекты одним проходом
+        for (locus_idx, &effect) in locus_effects.iter().enumerate() {
+            if effect != 0.0 {
+                self.loci[locus_idx] += effect;
+            }
         }
 
         // 5. Орган «мозг»: активность стоит глюкозы; голод калечит,

@@ -13,3 +13,9 @@ png = "0.17"
 [dev-dependencies]
 pollster = "0.3"
 winit = "0.30"
+# UI-оверлей для примеров (меню/HUD). Версия egui подобрана под wgpu 22 + winit 0.30:
+# egui-wgpu 0.29 тянет wgpu ^22.1, egui-winit 0.29 — winit ^0.30.5. В крейт-ядро
+# (библиотека dioma-render) egui не входит — только в dev-dependencies.
+egui = "0.29"
+egui-wgpu = "0.29"
+egui-winit = "0.29"

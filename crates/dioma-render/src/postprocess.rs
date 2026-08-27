@@ -1,8 +1,14 @@
-//! Пост-обработка: полноэкранные проходы (виньетка + зерно, размытие).
+//! Пост-обработка: полноэкранные проходы (виньетка + зерно, размытие,
+//! тьма/ночь).
 //!
 //! Мир рендерится НЕ в поверхность, а в промежуточную текстуру
 //! ([`PostProcess::scene_view`]); затем [`PostProcess::apply`] копирует её
 //! в целевую поверхность одним полноэкранным квадом с эффектом.
+//!
+//! Порядок кадра при ночи ([`PostFx::Darkness`]): спрайты/меши/частицы →
+//! `scene_view` → [`PostProcess::apply`] → и уже ПОСЛЕ него аддитивные
+//! источники света ([`crate::Renderer::render_lights`]) на итоговую цель:
+//! свет рисуется поверх тьмы и «пробивает» её собой.
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -21,6 +27,16 @@ pub enum PostFx {
     },
     /// 9-точечный box blur. `radius` — в пикселях; 0 — выключено.
     Blur { radius: f32 },
+    /// Тьма/ночь: умножение RGB сцены на цвет + сила эффекта.
+    ///
+    /// * `tint` — множитель цвета (например, ночь `[0.30, 0.34, 0.55]`,
+    ///   закат `[0.9, 0.7, 0.55]`);
+    /// * `strength` — смешение исходного и затемнённого цвета, 0..1
+    ///   (клампится: 0 — день, 1 — полная тьма).
+    ///
+    /// Аддитивные источники света рисуйте ПОСЛЕ этого эффекта — см. доки
+    /// модуля.
+    Darkness { tint: [f32; 3], strength: f32 },
 }
 
 /// Uniform пост-проходов: `vec4(u_time, vignette, grain, blur_radius)`.
@@ -58,6 +74,8 @@ pub struct PostProcess {
     uniform_buffer: wgpu::Buffer,
     pipeline_vignette: wgpu::RenderPipeline,
     pipeline_blur: wgpu::RenderPipeline,
+    /// Пайплайн тьмы/ночи (`post/darkness.wgsl`) — uniform vec4(tint, strength).
+    pipeline_darkness: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     format: wgpu::TextureFormat,
     width: u32,
@@ -135,10 +153,27 @@ impl PostProcess {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let pipeline_vignette =
-            Self::build_pipeline(device, &layout, format, include_str!("shaders/post/vignette_grain.wgsl"), "dioma-render vignette_grain pipeline");
-        let pipeline_blur =
-            Self::build_pipeline(device, &layout, format, include_str!("shaders/post/blur.wgsl"), "dioma-render blur pipeline");
+        let pipeline_vignette = Self::build_pipeline(
+            device,
+            &layout,
+            format,
+            include_str!("shaders/post/vignette_grain.wgsl"),
+            "dioma-render vignette_grain pipeline",
+        );
+        let pipeline_blur = Self::build_pipeline(
+            device,
+            &layout,
+            format,
+            include_str!("shaders/post/blur.wgsl"),
+            "dioma-render blur pipeline",
+        );
+        let pipeline_darkness = Self::build_pipeline(
+            device,
+            &layout,
+            format,
+            include_str!("shaders/post/darkness.wgsl"),
+            "dioma-render darkness pipeline",
+        );
 
         // Текстура сцены 1×1; реальный размер — через resize().
         let (texture, view, bind_group) =
@@ -153,6 +188,7 @@ impl PostProcess {
             uniform_buffer,
             pipeline_vignette,
             pipeline_blur,
+            pipeline_darkness,
             vertex_buffer,
             format,
             width: 1,
@@ -200,19 +236,24 @@ impl PostProcess {
         fx: PostFx,
         time: f32,
     ) {
-        let (vignette, grain, blur_radius) = match fx {
-            PostFx::None => (0.0, 0.0, 0.0),
-            PostFx::VignetteGrain { vignette, grain } => (vignette, grain, 0.0),
-            PostFx::Blur { radius } => (0.0, 0.0, radius),
+        // darkness.wgsl читает uniform иначе: vec4(tint.rgb, strength).
+        let uniform_data: [f32; 4] = match fx {
+            PostFx::None => [time, 0.0, 0.0, 0.0],
+            PostFx::VignetteGrain { vignette, grain } => [time, vignette, grain, 0.0],
+            PostFx::Blur { radius } => [time, 0.0, 0.0, radius],
+            PostFx::Darkness { tint, strength } => {
+                [tint[0], tint[1], tint[2], strength.clamp(0.0, 1.0)]
+            }
         };
         queue.write_buffer(
             &self.uniform_buffer,
             0,
-            bytemuck::bytes_of(&PostUniform { data: [time, vignette, grain, blur_radius] }),
+            bytemuck::bytes_of(&PostUniform { data: uniform_data }),
         );
 
         let pipeline = match fx {
             PostFx::Blur { .. } => &self.pipeline_blur,
+            PostFx::Darkness { .. } => &self.pipeline_darkness,
             _ => &self.pipeline_vignette,
         };
 
@@ -250,7 +291,11 @@ impl PostProcess {
     ) -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("dioma-render post scene texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -263,9 +308,18 @@ impl PostProcess {
             label: Some("dioma-render post scene bind group"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
         });
         (texture, view, bind_group)

@@ -39,8 +39,10 @@ use winit::window::{Window, WindowId};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --frames=N: смоук-режим — прогнать N кадров и выйти самому
     // (для проверки, что демо живёт без ручного закрытия окна).
-    let smoke_frames = std::env::args()
-        .find_map(|a| a.strip_prefix("--frames=").and_then(|s| s.parse::<u32>().ok()));
+    let smoke_frames = std::env::args().find_map(|a| {
+        a.strip_prefix("--frames=")
+            .and_then(|s| s.parse::<u32>().ok())
+    });
     if let Some(n) = smoke_frames {
         println!("смоук-режим: отрисую {n} кадров и выйду");
     }
@@ -56,7 +58,10 @@ struct Rng(u64);
 
 impl Rng {
     fn next(&mut self) -> f64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((self.0 >> 11) as f64) / (1u64 << 53) as f64
     }
 
@@ -120,10 +125,16 @@ impl Creature {
     /// Базовый эффект настроения (без учёта выделения/растворения).
     fn base_fx(&self) -> SpriteFx {
         match self.mood {
-            Mood::Happy => {
-                SpriteFx::Glow { radius: 9.0, intensity: 0.5, color: [1.0, 0.95, 0.4, 1.0] }
-            }
-            Mood::Sick => SpriteFx::Wobble { amplitude: 2.4, frequency: 0.9, speed: 6.0 },
+            Mood::Happy => SpriteFx::Glow {
+                radius: 9.0,
+                intensity: 0.5,
+                color: [1.0, 0.95, 0.4, 1.0],
+            },
+            Mood::Sick => SpriteFx::Wobble {
+                amplitude: 2.4,
+                frequency: 0.9,
+                speed: 6.0,
+            },
             Mood::Calm => SpriteFx::None,
         }
     }
@@ -137,7 +148,10 @@ impl Creature {
                 edge_color: [1.0, 0.55, 0.15, 1.0],
             }
         } else if self.selected {
-            SpriteFx::Outline { width: 3.0, color: [0.4, 1.0, 0.6, 1.0] }
+            SpriteFx::Outline {
+                width: 3.0,
+                color: [0.4, 1.0, 0.6, 1.0],
+            }
         } else {
             self.base_fx()
         }
@@ -243,9 +257,15 @@ impl Demo {
     /// Один кадр: обновления → мир → свет → частицы → (пост) → оверлей.
     fn frame(&mut self) {
         let now = Instant::now();
-        let dt = self.last_frame.map(|t| (now - t).as_secs_f32()).unwrap_or(1.0 / 60.0);
+        let dt = self
+            .last_frame
+            .map(|t| (now - t).as_secs_f32())
+            .unwrap_or(1.0 / 60.0);
         self.last_frame = Some(now);
-        let t = self.started.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
+        let t = self
+            .started
+            .map(|s| s.elapsed().as_secs_f32())
+            .unwrap_or(0.0);
 
         self.update_creatures(dt);
         self.spawn_pollen(dt);
@@ -255,15 +275,29 @@ impl Demo {
         let Some(surface) = &self.surface else { return };
         let Some(config) = &self.config else { return };
         let Some(atlas) = &self.atlas else { return };
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
         let Some(batch) = &mut self.batch else { return };
-        let Some(mesh_batch) = &mut self.mesh_batch else { return };
-        let Some(lights) = &mut self.lights else { return };
-        let Some(particles) = &mut self.particles else { return };
+        let Some(mesh_batch) = &mut self.mesh_batch else {
+            return;
+        };
+        let Some(lights) = &mut self.lights else {
+            return;
+        };
+        let Some(particles) = &mut self.particles else {
+            return;
+        };
         let Some(post) = &mut self.post else { return };
-        let Some(tile_batch) = &self.tile_batch else { return };
-        let Some(parallax_far) = &mut self.parallax_far else { return };
-        let Some(parallax_mid) = &mut self.parallax_mid else { return };
+        let Some(tile_batch) = &self.tile_batch else {
+            return;
+        };
+        let Some(parallax_far) = &mut self.parallax_far else {
+            return;
+        };
+        let Some(parallax_mid) = &mut self.parallax_mid else {
+            return;
+        };
 
         renderer.begin_frame(dt);
         renderer.set_time(t);
@@ -273,7 +307,8 @@ impl Demo {
         // параллакса (до Y≈260) в кадре: центр X ∈ [100, 540] (комната 0..640
         // почти целиком), центр Y ∈ [−60, 220] — при желании поменяйте границы.
         let speed = 300.0 * dt;
-        self.camera.pan([self.pan_dir[0] * speed, self.pan_dir[1] * speed]);
+        self.camera
+            .pan([self.pan_dir[0] * speed, self.pan_dir[1] * speed]);
         self.camera.center[0] = self.camera.center[0].clamp(100.0, 540.0);
         self.camera.center[1] = self.camera.center[1].clamp(-60.0, 220.0);
 
@@ -325,7 +360,12 @@ impl Demo {
         // ── «Блоб»: деформируемый 2D-меш (CPU-деформация каждый кадр) ──
         // Стоит справа от комнаты, на уровне её пола.
         mesh_batch.clear();
-        mesh_batch.push(&blob_mesh([660.0, 60.0], 48.0, t, atlas.region("sun").unwrap()));
+        mesh_batch.push(&blob_mesh(
+            [660.0, 60.0],
+            48.0,
+            t,
+            atlas.region("sun").unwrap(),
+        ));
         mesh_batch.upload(queue);
 
         // ── Радиальные источники света ──
@@ -367,18 +407,45 @@ impl Demo {
         });
 
         // Мир → текстура сцены (пост включён) или сразу поверхность (пост выкл).
-        let scene_target = if self.post_enabled { post.scene_view() } else { &view };
-        renderer.render(queue, &mut encoder, scene_target, atlas, batch, &self.camera);
+        let scene_target = if self.post_enabled {
+            post.scene_view()
+        } else {
+            &view
+        };
+        renderer.render(
+            queue,
+            &mut encoder,
+            scene_target,
+            atlas,
+            batch,
+            &self.camera,
+        );
         // Параллакс-слои: поверх очищенного кадра (Load), камера со сдвинутым
         // центром. Рисуются ПОСЛЕ render(): render() — единственный проход с
         // очисткой, поэтому слой позади сцены читался бы только в свободной
         // от комнаты области экрана; солнце/кольцо/ягоды стоят в мировых
         // Y ≈ 150..260 — на экране это небо НАД комнатой (Y вверх).
         renderer
-            .render_parallax(&mut encoder, queue, scene_target, atlas, parallax_far, &self.camera, 0.4)
+            .render_parallax(
+                &mut encoder,
+                queue,
+                scene_target,
+                atlas,
+                parallax_far,
+                &self.camera,
+                0.4,
+            )
             .expect("factor 0.4 в диапазоне 0.0..=1.0");
         renderer
-            .render_parallax(&mut encoder, queue, scene_target, atlas, parallax_mid, &self.camera, 0.7)
+            .render_parallax(
+                &mut encoder,
+                queue,
+                scene_target,
+                atlas,
+                parallax_mid,
+                &self.camera,
+                0.7,
+            )
             .expect("factor 0.7 в диапазоне 0.0..=1.0");
         renderer.render_meshes(
             &mut encoder,
@@ -405,7 +472,10 @@ impl Demo {
                     format!("FPS {:.1}  кадр {:.2} ms", s.fps, s.frame_ms),
                     format!("draw calls {}", s.draw_calls),
                     format!("спрайты {} (fx {})", s.sprites, s.fx_sprites),
-                    format!("меши {} (верш {} / инд {})", s.meshes, s.mesh_vertices, s.mesh_indices),
+                    format!(
+                        "меши {} (верш {} / инд {})",
+                        s.meshes, s.mesh_vertices, s.mesh_indices
+                    ),
                     format!("свет {}  частицы {}", s.lights, s.particles),
                     format!(
                         "проходы: спр{} fx{} меш{} св{} част{} пост{}",
@@ -421,11 +491,13 @@ impl Demo {
                 if let Some(info) = atlas.region_info("png-critter") {
                     lines.push(format!(
                         "PNG: загружен + обрезан (offset {}, {})",
-                        info.offset[0] as u32,
-                        info.offset[1] as u32,
+                        info.offset[0] as u32, info.offset[1] as u32,
                     ));
                 }
-                lines.push(format!("Tilemap: {} тайлов | Parallax: 2 слоя", tile_batch.len()));
+                lines.push(format!(
+                    "Tilemap: {} тайлов | Parallax: 2 слоя",
+                    tile_batch.len()
+                ));
                 renderer.render_debug_overlay(
                     &mut encoder,
                     queue,
@@ -472,7 +544,9 @@ impl Demo {
             return;
         }
         self.pollen_timer = 0.04;
-        let Some(particles) = &mut self.particles else { return };
+        let Some(particles) = &mut self.particles else {
+            return;
+        };
         if particles.len() >= 200 {
             return;
         }
@@ -512,12 +586,19 @@ impl Demo {
         }
     }
 
-    /// Цикл пост-эффектов: None → VignetteGrain → Blur → None.
+    /// Цикл пост-эффектов: None → VignetteGrain → Blur → Darkness → None.
     fn cycle_post_fx(&mut self) {
         self.post_fx = match self.post_fx {
-            PostFx::None => PostFx::VignetteGrain { vignette: 0.35, grain: 0.06 },
+            PostFx::None => PostFx::VignetteGrain {
+                vignette: 0.35,
+                grain: 0.06,
+            },
             PostFx::VignetteGrain { .. } => PostFx::Blur { radius: 2.0 },
-            PostFx::Blur { .. } => PostFx::None,
+            PostFx::Blur { .. } => PostFx::Darkness {
+                tint: [0.30, 0.34, 0.55],
+                strength: 1.0,
+            },
+            PostFx::Darkness { .. } => PostFx::None,
         };
         self.update_title();
     }
@@ -599,14 +680,24 @@ impl Demo {
 fn blob_mesh(center: [f32; 2], base_radius: f32, t: f32, uv_rect: [f32; 4]) -> Mesh {
     const SEGMENTS: u32 = 20;
     let color = [1.0, 0.6, 0.3, 1.0]; // тёплый оранжевый
-    let uv_center = [(uv_rect[0] + uv_rect[2]) * 0.5, (uv_rect[1] + uv_rect[3]) * 0.5];
-    let uv_half = [(uv_rect[2] - uv_rect[0]) * 0.5, (uv_rect[3] - uv_rect[1]) * 0.5];
+    let uv_center = [
+        (uv_rect[0] + uv_rect[2]) * 0.5,
+        (uv_rect[1] + uv_rect[3]) * 0.5,
+    ];
+    let uv_half = [
+        (uv_rect[2] - uv_rect[0]) * 0.5,
+        (uv_rect[3] - uv_rect[1]) * 0.5,
+    ];
 
     let mut mesh = Mesh {
         vertices: Vec::with_capacity(SEGMENTS as usize + 1),
         indices: Vec::with_capacity(SEGMENTS as usize * 3),
     };
-    mesh.vertices.push(MeshVertex { position: center, uv: uv_center, color });
+    mesh.vertices.push(MeshVertex {
+        position: center,
+        uv: uv_center,
+        color,
+    });
     for i in 0..SEGMENTS {
         let ang = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
         // Три «лепестка»: радиус пульсирует с углом и временем.
@@ -614,7 +705,10 @@ fn blob_mesh(center: [f32; 2], base_radius: f32, t: f32, uv_rect: [f32; 4]) -> M
         let dir = [ang.cos(), ang.sin()];
         mesh.vertices.push(MeshVertex {
             position: [center[0] + dir[0] * radius, center[1] + dir[1] * radius],
-            uv: [uv_center[0] + dir[0] * uv_half[0], uv_center[1] + dir[1] * uv_half[1]],
+            uv: [
+                uv_center[0] + dir[0] * uv_half[0],
+                uv_center[1] + dir[1] * uv_half[1],
+            ],
             color,
         });
     }
@@ -648,10 +742,28 @@ fn critter_frame_rgba(phase: u32) -> (u32, u32, Vec<u8>) {
     blit(&mut img, S, S, &rp, S, S, 0, 0);
     // Тело — мягкий круг поверх ног (перекрывает верх ног): центр (18, 16).
     let (bw, bh, body_px) = atlas::soft_circle_rgba(10, body);
-    blit(&mut img, S, S, &body_px, bw, bh, 18 - bw as i32 / 2, 16 - bh as i32 / 2);
+    blit(
+        &mut img,
+        S,
+        S,
+        &body_px,
+        bw,
+        bh,
+        18 - bw as i32 / 2,
+        16 - bh as i32 / 2,
+    );
     // Глаз.
     let (ew, eh, eye_px) = atlas::circle_rgba(2, [40, 45, 65, 255]);
-    blit(&mut img, S, S, &eye_px, ew, eh, 20 - ew as i32 / 2, 13 - eh as i32 / 2);
+    blit(
+        &mut img,
+        S,
+        S,
+        &eye_px,
+        ew,
+        eh,
+        20 - ew as i32 / 2,
+        13 - eh as i32 / 2,
+    );
     (S, S, img)
 }
 
@@ -672,10 +784,28 @@ fn critter_png_rgba() -> (u32, u32, Vec<u8>) {
     blit(&mut img, S, S, &rp, S, S, 0, 0);
     // Тело — мягкий круг в центре кадра (24, 24), радиус 14.
     let (bw, bh, body_px) = atlas::soft_circle_rgba(14, body);
-    blit(&mut img, S, S, &body_px, bw, bh, 24 - bw as i32 / 2, 24 - bh as i32 / 2);
+    blit(
+        &mut img,
+        S,
+        S,
+        &body_px,
+        bw,
+        bh,
+        24 - bw as i32 / 2,
+        24 - bh as i32 / 2,
+    );
     // Глаз — тёмный кружок со смещением вправо-вверх.
     let (ew, eh, eye_px) = atlas::circle_rgba(3, eye);
-    blit(&mut img, S, S, &eye_px, ew, eh, 29 - ew as i32 / 2, 16 - eh as i32 / 2);
+    blit(
+        &mut img,
+        S,
+        S,
+        &eye_px,
+        ew,
+        eh,
+        29 - ew as i32 / 2,
+        16 - eh as i32 / 2,
+    );
     // Хохолок: вертикальная линия до верхнего поля (касается y=6).
     let (_, _, tuft_px) = atlas::line_rgba(S, S, 24.0, 9.0, 24.0, 7.0, 2.0, leg);
     blit(&mut img, S, S, &tuft_px, S, S, 0, 0);
@@ -705,18 +835,37 @@ fn tileset_rgba() -> (u32, u32, Vec<u8>) {
                 (0, 0) => {
                     // Трава: зелёная база + крапинки-перепады оттенка по хэшу.
                     let n = hash(x, y, 11);
-                    [34 + (n % 28) as u8, 128 + (n % 36) as u8, 42 + (n % 20) as u8, 255]
+                    [
+                        34 + (n % 28) as u8,
+                        128 + (n % 36) as u8,
+                        42 + (n % 20) as u8,
+                        255,
+                    ]
                 }
                 (1, 0) => {
                     // Земля: коричневая с тёмными вкраплениями.
                     let n = hash(x, y, 23);
-                    [124 + (n % 32) as u8, 82 + (n % 24) as u8, 44 + (n % 14) as u8, 255]
+                    [
+                        124 + (n % 32) as u8,
+                        82 + (n % 24) as u8,
+                        44 + (n % 14) as u8,
+                        255,
+                    ]
                 }
                 (0, 1) => {
                     // Вода: синяя + светлая линия волны на ly == 5.
-                    let wave = if ly == 5 && (lx == 1 || lx == 4) { 190 } else { 0 };
+                    let wave = if ly == 5 && (lx == 1 || lx == 4) {
+                        190
+                    } else {
+                        0
+                    };
                     // (186 + wave) в u8 переполняется ДО .min() — считаем в u16.
-                    [26 + wave / 4, 88 + wave / 4, (186 + u16::from(wave)).min(255) as u8, 255]
+                    [
+                        26 + wave / 4,
+                        88 + wave / 4,
+                        (186 + u16::from(wave)).min(255) as u8,
+                        255,
+                    ]
                 }
                 _ => {
                     // Стена: тёмный камень со швами по краям ячейки.
@@ -737,11 +886,16 @@ fn tileset_rgba() -> (u32, u32, Vec<u8>) {
 /// `world_pos − (offset / img_size) · sprite_size` — offset в пикселях
 /// исходного изображения (48×48), поэтому до масштабирования делим на img_size.
 fn build_png_critter(batch: &mut SpriteBatch, atlas: &SpriteAtlas, t: f32) {
-    let Some(info) = atlas.region_info("png-critter") else { return };
+    let Some(info) = atlas.region_info("png-critter") else {
+        return;
+    };
     let img_size = 48.0; // исходный размер PNG до обрезки
     let sprite_size = 44.0;
     // Ходьба по полу: X колеблется по комнате, ноги на FLOOR_Y.
-    let world_pos = [WALK_CENTER_X + 230.0 * (t * 0.35).sin(), FLOOR_Y + sprite_size * 0.5];
+    let world_pos = [
+        WALK_CENTER_X + 230.0 * (t * 0.35).sin(),
+        FLOOR_Y + sprite_size * 0.5,
+    ];
     let shift = [
         info.offset[0] / img_size * sprite_size,
         info.offset[1] / img_size * sprite_size,
@@ -818,10 +972,14 @@ fn build_world(batch: &mut SpriteBatch, atlas: &SpriteAtlas, creatures: &[Creatu
         let pos = c.pos();
         let layer = 0.2 + i as f32 * 0.01;
 
-        let mut body = Sprite::new(pos, [c.size, c.size], atlas.region("creature-body").unwrap())
-            .with_tint(c.tint)
-            .with_fx(c.frame_fx())
-            .with_rotation(c.orbit_angle);
+        let mut body = Sprite::new(
+            pos,
+            [c.size, c.size],
+            atlas.region("creature-body").unwrap(),
+        )
+        .with_tint(c.tint)
+        .with_fx(c.frame_fx())
+        .with_rotation(c.orbit_angle);
         body.layer = layer;
         if c.mood == Mood::Happy {
             body = body.with_pulse(0.92, 1.08, 2.5, c.orbit_angle * 2.0);
@@ -834,17 +992,28 @@ fn build_world(batch: &mut SpriteBatch, atlas: &SpriteAtlas, creatures: &[Creatu
             pos[0] + look[0] * c.size * 0.28,
             pos[1] + look[1] * c.size * 0.28,
         ];
-        let mut eye =
-            Sprite::new(eye_pos, [c.size * 0.22, c.size * 0.22], atlas.region("creature-eye").unwrap())
-                .with_rotation(c.orbit_angle);
+        let mut eye = Sprite::new(
+            eye_pos,
+            [c.size * 0.22, c.size * 0.22],
+            atlas.region("creature-eye").unwrap(),
+        )
+        .with_rotation(c.orbit_angle);
         eye.layer = layer + 0.001;
         batch.push(eye);
 
         // Полоса состояния над выбранным существом (UV-клип показывает долю).
         if c.selected {
-            let health = if c.dissolving { (1.0 - c.dissolve_progress).max(0.0) } else { 1.0 };
+            let health = if c.dissolving {
+                (1.0 - c.dissolve_progress).max(0.0)
+            } else {
+                1.0
+            };
             let bar_y = pos[1] + c.size * 0.75;
-            let mut bg = Sprite::new([pos[0], bar_y], [44.0, 7.0], atlas.region("bar-bg").unwrap());
+            let mut bg = Sprite::new(
+                [pos[0], bar_y],
+                [44.0, 7.0],
+                atlas.region("bar-bg").unwrap(),
+            );
             bg.layer = layer + 0.002;
             batch.push(bg);
 
@@ -938,7 +1107,10 @@ impl ApplicationHandler for Demo {
         atlas.add_rgba(&queue, "sun", w, h, &px).unwrap();
         let (w, h, px) = atlas::ring_rgba(56, 5.0, [80, 200, 190, 255]);
         atlas.add_rgba(&queue, "ring", w, h, &px).unwrap();
-        for (i, name) in ["berry-a", "berry-b", "berry-c", "berry-d"].iter().enumerate() {
+        for (i, name) in ["berry-a", "berry-b", "berry-c", "berry-d"]
+            .iter()
+            .enumerate()
+        {
             let (w, h, px) = atlas::berry_rgba(i as f32 * 1.7, [200 + i as u8 * 12, 60, 90, 255]);
             atlas.add_rgba(&queue, name, w, h, &px).unwrap();
         }
@@ -952,7 +1124,9 @@ impl ApplicationHandler for Demo {
         atlas.add_rgba(&queue, "bar-fill", w, h, &px).unwrap();
         for i in 0..4u32 {
             let (w, h, px) = critter_frame_rgba(i);
-            atlas.add_rgba(&queue, &format!("critter_{}", i), w, h, &px).unwrap();
+            atlas
+                .add_rgba(&queue, &format!("critter_{}", i), w, h, &px)
+                .unwrap();
         }
 
         // ── Тайлсет 2×2 (16×16): трава, земля, вода, стена ──
@@ -988,12 +1162,18 @@ impl ApplicationHandler for Demo {
             .expect("загрузить PNG-криттера в атлас");
 
         // Флипбук походки: 4 кадра, 8 fps, зациклен.
-        let critter_frames: Vec<[f32; 4]> =
-            (0..4).map(|i| atlas.region(&format!("critter_{}", i)).unwrap()).collect();
+        let critter_frames: Vec<[f32; 4]> = (0..4)
+            .map(|i| atlas.region(&format!("critter_{}", i)).unwrap())
+            .collect();
         let critter_flipbook = Flipbook::new(critter_frames, 8.0, true);
 
         let mut renderer = Renderer::new(&device, format);
-        renderer.set_clear_color(wgpu::Color { r: 0.015, g: 0.02, b: 0.06, a: 1.0 });
+        renderer.set_clear_color(wgpu::Color {
+            r: 0.015,
+            g: 0.02,
+            b: 0.06,
+            a: 1.0,
+        });
 
         let mut post = PostProcess::new(&device, format);
         post.resize(&device, size.width.max(1), size.height.max(1));

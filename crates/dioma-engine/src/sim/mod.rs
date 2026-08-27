@@ -16,7 +16,10 @@ use crate::env::{AgentId, Season, Substance, TimeOfDay, WorldClock};
 use crate::world::{Cls, World, SLOT_EAT};
 use std::f32::consts::TAU;
 
+pub mod berry;
 pub mod evolution;
+
+pub use berry::{BerryInfo, BerryState};
 pub use evolution::{Evolution, EvolutionParams, GenerationStats};
 
 /// Радиус «рта»: на этом расстоянии еда считается съедобной.
@@ -669,6 +672,86 @@ mod tests {
             a.critters[0].pos = Vec2::new(5.0, 5.0);
             a.critters[0].heading = 0.0;
         }
+    }
+
+    /// Регрессионный сторож поведенческой эквивалентности биохимии.
+    ///
+    /// Фиксированный сценарий: детур-карта, сид 42, спавн (5,5)/0.0 (сид 1),
+    /// голод 255, ягода (55,15) — триал 1 теста `detour_hunt_*` без сброса
+    /// крови и без перезапуска. Константы сняты с ИСПРАВЛЕННОЙ реализации
+    /// (SIMD-распады + batch-рецепторы, полный пересчёт сенсоров) и побайтно
+    /// совпадают с чекпойнтом 2550cae (эталон до оптимизаций).
+    ///
+    /// Эталон после починки SIMD-распадов: «инкрементальные сенсоры»
+    /// (дельты от prev_sense) давали систематический дрейф ext — мозг получал
+    /// искажённый запах/стену, и HUNGER/PAIN на тике 200 уходили на десятки
+    /// единиц (эталон 53.46/47.50). Любое будущее переупорядочивание шагов
+    /// биохимии (распады/реакции/рецепторы) или сенсорного входа, меняющее
+    /// поведение, ломает этот тест громко, а не тихим срывом охоты.
+    #[test]
+    fn biochemistry_trace_is_stable() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 20.0, 20.0);
+        map.add_room(20.0, 10.0, 60.0, 20.0);
+        let mut a = Arena::new(42, map);
+        a.spawn(Vec2::new(5.0, 5.0), 0.0, 1);
+        a.critters[0].creature.blood = crate::body::metabolism::Blood::creature(false);
+        a.critters[0].creature.blood.conc[chem::HUNGER] = 255.0;
+        a.add_berry(Vec2::new(55.0, 15.0));
+
+        for _ in 0..200 {
+            a.step();
+        }
+        let conc = &a.critters[0].creature.blood.conc;
+        let close = |got: f32, want: f32| (got - want).abs() <= 1e-4;
+
+        // Тик 200 (после еды): глюкоза/голод/боль/усталость/серотонин/внимание.
+        assert!(
+            close(conc[chem::GLUCOSE], 254.876998901),
+            "GLUCOSE@200: {} ≠ 254.876998901", conc[chem::GLUCOSE]
+        );
+        assert!(
+            close(conc[chem::HUNGER], 53.462142944),
+            "HUNGER@200: {} ≠ 53.462142944", conc[chem::HUNGER]
+        );
+        assert!(
+            close(conc[chem::PAIN], 47.501640320),
+            "PAIN@200: {} ≠ 47.501640320", conc[chem::PAIN]
+        );
+        assert!(
+            close(conc[chem::FATIGUE], 100.503349304),
+            "FATIGUE@200: {} ≠ 100.503349304", conc[chem::FATIGUE]
+        );
+        assert!(
+            close(conc[chem::SEROTONIN], 36.399509430),
+            "SEROTONIN@200: {} ≠ 36.399509430", conc[chem::SEROTONIN]
+        );
+        assert!(
+            close(conc[chem::ACETYLCHOLINE], 16.076913834),
+            "ACETYLCHOLINE@200: {} ≠ 16.076913834", conc[chem::ACETYLCHOLINE]
+        );
+        // Тик 300: голод догорает, фон благополучия растёт.
+        for _ in 200..300 {
+            a.step();
+        }
+        let conc = &a.critters[0].creature.blood.conc;
+        assert!(
+            close(conc[chem::HUNGER], 18.559843063),
+            "HUNGER@300: {} ≠ 18.559843063", conc[chem::HUNGER]
+        );
+        assert!(
+            close(conc[chem::SEROTONIN], 42.114841461),
+            "SEROTONIN@300: {} ≠ 42.114841461", conc[chem::SEROTONIN]
+        );
+        assert!(
+            close(conc[chem::ACETYLCHOLINE], 15.032350540),
+            "ACETYLCHOLINE@300: {} ≠ 15.032350540", conc[chem::ACETYLCHOLINE]
+        );
+        // Траектория эталона: без ударов о стену (сенсорный вход не искажён).
+        assert_eq!(
+            a.critters[0].wall_hits, 0,
+            "эталонная охота без ударов: {} ударов", a.critters[0].wall_hits
+        );
     }
 
     /// Сквозная проводка «стена → боль → мозг»: существо в углу упирается

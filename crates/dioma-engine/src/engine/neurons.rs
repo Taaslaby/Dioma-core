@@ -447,7 +447,7 @@ impl Brain {
             syn_scale,
             pending_reward: Vec::new(),
             step_count: 0,
-            haap_cache: Vec::new(),
+            haap_cache: if model == BrainModel::Haap { vec![0.0; n_neurons] } else { Vec::new() },
             norm_sums: Vec::new(),
             frozen_keep: Vec::new(),
             memory_lt: vv.clone(),
@@ -683,9 +683,7 @@ impl Brain {
         // чтобы ниже можно было взять `&mut self.plast`.
         debug_assert_eq!(ext.len(), self.n, "выход мозга != n");
         if self.model == BrainModel::Haap {
-            if self.haap_cache.len() != ext.len() {
-                self.haap_cache.resize(ext.len(), 0.0);
-            }
+            debug_assert_eq!(self.haap_cache.len(), ext.len(), "haap_cache size mismatch");
             for (dst, &x) in self.haap_cache.iter_mut().zip(ext.iter()) {
                 *dst = x * HAAP_INPUT_SCALE + HAAP_INPUT_BIAS;
             }
@@ -742,9 +740,7 @@ impl Brain {
         }
         // HAAP-вход масштабируем один раз на пачку (вход внутри тика один и тот же).
         if self.model == BrainModel::Haap {
-            if self.haap_cache.len() != ext.len() {
-                self.haap_cache.resize(ext.len(), 0.0);
-            }
+            debug_assert_eq!(self.haap_cache.len(), ext.len(), "haap_cache size mismatch");
             for (dst, &x) in self.haap_cache.iter_mut().zip(ext.iter()) {
                 *dst = x * HAAP_INPUT_SCALE + HAAP_INPUT_BIAS;
             }
@@ -898,6 +894,16 @@ impl Brain {
     pub fn reward_now(&mut self, dopamine: f32) {
         self.apply_dopamine(dopamine);
         self.normalize();
+    }
+
+    /// Возвращает текущий счётчик шагов мозга.
+    pub fn step_count(&self) -> usize {
+        self.step_count
+    }
+
+    /// Возвращает текущие параметры пластичности.
+    pub fn plasticity_params(&self) -> &PlasticityParams {
+        &self.params
     }
 
     /// Применить дофамин немедленно с явным потолком клэмпа весов

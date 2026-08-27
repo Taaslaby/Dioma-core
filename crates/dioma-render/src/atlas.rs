@@ -9,6 +9,15 @@ use std::sync::Arc;
 /// возвращает ошибку «атлас переполнен».
 const MAX_ATLAS_SIZE: u32 = 8192;
 
+/// Гуттер (рамка) вокруг региона при включённых мипмапах: texels, по которым
+/// усредняются ТОЛЬКО цвета самого региона (края реплицируются в рамку),
+/// а не соседей по атласу.
+const MIP_GUTTER: u32 = 4;
+
+/// Максимум мип-уровней атласа (включая нулевой): 4 уровня — до 1/16 стороны,
+/// дальше мерцание уже не мешает, а подтекание цветов растёт.
+const MIP_MAX_LEVELS: u32 = 4;
+
 /// Информация о регионе атласа: UV-прямоугольник, смещение обрезки и размер
 /// в пикселях. Смещение > 0 означает, что прозрачная рамка исходного
 /// изображения была обрезана при загрузке (см. [`SpriteAtlas::add_png`]).
@@ -43,6 +52,9 @@ pub struct SpriteAtlas {
     bind_group: wgpu::BindGroup,
     width: u32,
     height: u32,
+    /// Число мип-уровней текстуры атласа. 1 — без мипмапов (по умолчанию);
+    /// включается до первого добавления региона через [`Self::enable_mipmaps`].
+    mip_levels: u32,
     next_x: u32,
     next_y: u32,
     row_height: u32,
@@ -85,6 +97,7 @@ impl SpriteAtlas {
             bind_group,
             width: size,
             height: size,
+            mip_levels: 1,
             next_x: 0,
             next_y: 0,
             row_height: 0,
@@ -146,15 +159,26 @@ impl SpriteAtlas {
             }
             self.grow(queue, next_size)?;
         };
+        let p = self.pad_texels();
 
-        upload_rgba(queue, &self.texture, x, y, w, h, pixels);
+        upload_region(
+            queue,
+            &self.texture,
+            (x - p, y - p),
+            w,
+            h,
+            pixels,
+            p,
+            self.mip_levels,
+        );
 
         let u0 = x as f32 / self.width as f32;
         let v0 = y as f32 / self.height as f32;
         let u1 = (x + w) as f32 / self.width as f32;
         let v1 = (y + h) as f32 / self.height as f32;
         self.regions.insert(name.to_string(), [u0, v0, u1, v1]);
-        self.pixels.insert(name.to_string(), (w, h, pixels.to_vec()));
+        self.pixels
+            .insert(name.to_string(), (w, h, pixels.to_vec()));
         self.offsets.insert(name.to_string(), offset);
         self.order.push(name.to_string());
         Ok(())
@@ -263,6 +287,63 @@ impl SpriteAtlas {
         self.regions.is_empty()
     }
 
+    /// Включает мипмапы для атласа — НЕ РИСКУЕТ ПОСЛЕ первого добавления
+    /// региона (ошибка), и только если атлас может расти (`device` сохранён).
+    ///
+    /// Пересоздаёт текстуру с цепочкой уровней (до [`MIP_MAX_LEVELS`]) и
+    /// включает гуттер [`MIP_GUTTER`] texels вокруг каждого региона: на уровнях
+    /// выше нулевого усредняются только собственные пиксели региона, цвета
+    /// соседей не подтекают (края реплицируются в гуттер). UV-прямоугольники
+    /// ([`Self::region`]) остаются интерьерными — визуально картинка не меняется;
+    /// нога от гуттера на укладке даёт чуть меньшую полезную площадь, чем раньше,
+    /// поэтому большой регион может упереться в лимит размера чуть раньше.
+    ///
+    /// Вызов повторно — no-op.
+    pub fn enable_mipmaps(&mut self) -> Result<(), String> {
+        if !self.regions.is_empty() {
+            return Err("мипмапы включаются ДО первого добавления региона (существующие пиксели переупаковывать некорректно)".to_string());
+        }
+        let Some(device) = &self.device else {
+            return Err(
+                "атлас не может расти: устройство не сохранено (атлас собран из готовой текстуры)"
+                    .to_string(),
+            );
+        };
+        if self.mip_levels > 1 {
+            return Ok(()); // уже включены
+        }
+        let levels = level_count(self.width);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("dioma-render sprite atlas"),
+            size: wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let (sampler, bind_group) = make_sampler_and_bind_group(device, &texture);
+        self.texture = texture;
+        self.sampler = sampler;
+        self.bind_group = bind_group;
+        self.mip_levels = levels;
+        Ok(())
+    }
+
+    /// Сколько texels гуттера резервировать вокруг региона (0 без мипмапов).
+    fn pad_texels(&self) -> u32 {
+        if self.mip_levels > 1 {
+            MIP_GUTTER
+        } else {
+            0
+        }
+    }
+
     /// Собирает атлас вокруг УЖЕ созданной текстуры `w`×`h` (регионы пусты).
     ///
     /// Нужен [`crate::debug::DebugFont`], который создаёт текстуру с данными
@@ -284,6 +365,7 @@ impl SpriteAtlas {
             bind_group,
             width,
             height,
+            mip_levels: 1,
             next_x: 0,
             next_y: 0,
             row_height: 0,
@@ -301,23 +383,30 @@ impl SpriteAtlas {
     }
 
     /// Простая shelf-укладка: ряды слева-направо, высота ряда — максимум по ряду.
+    ///
+    /// Резервирует место под регион ВМЕСТЕ с гуттером (`w+2p × h+2p`) и
+    /// возвращает координаты ИНТЕРЬЕРНОГО угла региона; соседние регионы
+    /// гарантированно отделены `2p`-texel-ной пустотой.
     fn place(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
-        // Регион крупнее атласа не влезет ни при каком раскладе (и не должен
-        // «уезжать» за границы текстуры при записи).
-        if w > self.width || h > self.height {
+        let p = self.pad_texels();
+        let fw = w + 2 * p;
+        let fh = h + 2 * p;
+        // Регион с гуттером крупнее атласа не влезет ни при каком раскладе
+        // (и не должен «уезжать» за границы текстуры при записи).
+        if fw > self.width || fh > self.height {
             return None;
         }
-        if self.next_x + w > self.width {
+        if self.next_x + fw > self.width {
             self.next_x = 0;
             self.next_y += self.row_height;
             self.row_height = 0;
         }
-        if self.next_y + h > self.height {
+        if self.next_y + fh > self.height {
             return None;
         }
-        let pos = (self.next_x, self.next_y);
-        self.next_x += w;
-        self.row_height = self.row_height.max(h);
+        let pos = (self.next_x + p, self.next_y + p);
+        self.next_x += fw;
+        self.row_height = self.row_height.max(fh);
         Some(pos)
     }
 
@@ -331,8 +420,8 @@ impl SpriteAtlas {
             .map_err(|e| format!("не удалось прочитать папку '{dir}': {e}"))?;
         let mut files: Vec<(String, String)> = Vec::new(); // (имя региона, путь)
         for entry in entries {
-            let entry = entry
-                .map_err(|e| format!("не удалось прочитать элемент папки '{dir}': {e}"))?;
+            let entry =
+                entry.map_err(|e| format!("не удалось прочитать элемент папки '{dir}': {e}"))?;
             let path = entry.path();
             let is_png = path
                 .extension()
@@ -384,6 +473,12 @@ impl SpriteAtlas {
                     .to_string(),
             );
         };
+        // Мип-цепь вычисляется от нового размера — только если она включена.
+        let levels = if self.mip_levels > 1 {
+            level_count(new_size)
+        } else {
+            1
+        };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("dioma-render sprite atlas"),
             size: wgpu::Extent3d {
@@ -391,7 +486,7 @@ impl SpriteAtlas {
                 height: new_size,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count: levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -415,8 +510,18 @@ impl SpriteAtlas {
             let Some((w, h, px)) = self.pixels.get(&name).cloned() else {
                 continue;
             };
+            let p = self.pad_texels();
             let (x, y) = self.place(w, h).expect("после роста регион обязан влезть");
-            upload_rgba(queue, &self.texture, x, y, w, h, &px);
+            upload_region(
+                queue,
+                &self.texture,
+                (x - p, y - p),
+                w,
+                h,
+                &px,
+                p,
+                self.mip_levels,
+            );
             let uv = [
                 x as f32 / self.width as f32,
                 y as f32 / self.height as f32,
@@ -429,19 +534,23 @@ impl SpriteAtlas {
     }
 }
 
-/// Пишет RGBA8-буфер `w`×`h` в текстуру атласа со смещением (x, y).
+/// Пишет RGBA8-блок `w`×`h` на уровень `mip` текстуры атласа со смещением
+/// `(x, y)`; буфер обязан быть ровно `w·h·4` байт.
 ///
 /// `write_texture` требует bytes_per_row, кратный 256 (COPY_BYTES_PER_ROW_ALIGNMENT) —
 /// подкладываем строки до ближайшего кратного, если нужно.
-fn upload_rgba(
+#[allow(clippy::too_many_arguments)] // 8 параметров: адресуемый блок + данные
+fn write_block(
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
+    mip: u32,
     x: u32,
     y: u32,
     w: u32,
     h: u32,
     pixels: &[u8],
 ) {
+    debug_assert_eq!(pixels.len(), (w as usize) * (h as usize) * 4);
     let row_pitch = align_256(w * 4);
     let extent = wgpu::Extent3d {
         width: w,
@@ -450,7 +559,7 @@ fn upload_rgba(
     };
     let copy_view = wgpu::ImageCopyTexture {
         texture,
-        mip_level: 0,
+        mip_level: mip,
         origin: wgpu::Origin3d { x, y, z: 0 },
         aspect: wgpu::TextureAspect::All,
     };
@@ -468,7 +577,8 @@ fn upload_rgba(
     } else {
         let mut padded = vec![0u8; row_pitch as usize * h as usize];
         for row in 0..h {
-            let src = &pixels[(row as usize) * (w as usize) * 4..(row as usize + 1) * (w as usize) * 4];
+            let src =
+                &pixels[(row as usize) * (w as usize) * 4..(row as usize + 1) * (w as usize) * 4];
             let dst = &mut padded[(row as usize) * row_pitch as usize
                 ..(row as usize) * row_pitch as usize + (w as usize) * 4];
             dst.copy_from_slice(src);
@@ -486,6 +596,116 @@ fn upload_rgba(
     }
 }
 
+/// Заливает регион интерьерными пикселями (`w × h`) в ячейку с верхним левым
+/// углом `(cx, cy)` — сюда входит и гуттер `pad` texels по каждой стороне:
+/// уровень 0 пишется как регион+гуттер (края реплицируются), уровни выше
+/// получаются box-filter усреднением предыдущего уровня (тоже со своим
+/// подтянутым рамками краем). Без гуттера (`pad = 0`) блок пишется 1:1.
+#[allow(clippy::too_many_arguments)] // 8 параметров: ячейка + данные + конфиг мипов
+fn upload_region(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    cell: (u32, u32),
+    w: u32,
+    h: u32,
+    pixels: &[u8],
+    pad: u32,
+    levels: u32,
+) {
+    debug_assert_eq!(pixels.len(), (w as usize) * (h as usize) * 4);
+    let level0 = if pad == 0 {
+        pixels.to_vec()
+    } else {
+        replicate_pad(w, h, pad, pixels)
+    };
+    let pw = w + 2 * pad;
+    let ph = h + 2 * pad;
+    write_block(queue, texture, 0, cell.0, cell.1, pw, ph, &level0);
+
+    let mut cur = level0;
+    let mut cw = pw;
+    let mut ch = ph;
+    for lvl in 1..levels as usize {
+        let next = downsample(cw, ch, &cur);
+        let nw = (cw / 2).max(1);
+        let nh = (ch / 2).max(1);
+        // Подпрямоугольник этой ячейки на уровне l — целочисленный сдвиг ячейки.
+        write_block(
+            queue,
+            texture,
+            lvl as u32,
+            cell.0 >> lvl,
+            cell.1 >> lvl,
+            nw,
+            nh,
+            &next,
+        );
+        cur = next;
+        cw = nw;
+        ch = nh;
+    }
+}
+
+/// Расширяет RGBA8-изображение `w×h` рамкой из реплицированных краёв шириной
+/// `pad`: по контуру копируются ближайшие пиксели региона — усреднение мипов
+/// не подтягивает цвета соседей из атласа.
+fn replicate_pad(w: u32, h: u32, pad: u32, pixels: &[u8]) -> Vec<u8> {
+    let pw = (w + 2 * pad) as usize;
+    let ph = (h + 2 * pad) as usize;
+    let p = pad as i64;
+    let wi = w as i64;
+    let hi = h as i64;
+    let mut out = vec![0u8; pw * ph * 4];
+    for py in 0..ph as i64 {
+        for px in 0..pw as i64 {
+            // Кламп индексов к области региона.
+            let sx = (px - p).clamp(0, wi - 1);
+            let sy = (py - p).clamp(0, hi - 1);
+            let src = ((sy * wi + sx) * 4) as usize;
+            let dst = ((py * pw as i64 + px) * 4) as usize;
+            out[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+        }
+    }
+    out
+}
+
+/// Box-filter усреднение RGBA8-изображения `w×h` вдвое (нечётные края клампятся:
+/// крайний ткмль суммируется один раз). Возвращает изображение `(w/2 max 1, h/2 max 1)`.
+fn downsample(w: u32, h: u32, data: &[u8]) -> Vec<u8> {
+    let nw = (w / 2).max(1);
+    let nh = (h / 2).max(1);
+    let mut out = vec![0u8; (nw * nh * 4) as usize];
+    for dy in 0..nh {
+        for dx in 0..nw {
+            let mut acc = [0u32; 4];
+            for oy in 0..2u32 {
+                for ox in 0..2u32 {
+                    let sx = (dx * 2 + ox).min(w - 1);
+                    let sy = (dy * 2 + oy).min(h - 1);
+                    let src = ((sy * w + sx) * 4) as usize;
+                    for c in 0..4 {
+                        acc[c] += data[src + c] as u32;
+                    }
+                }
+            }
+            let dst = ((dy * nw + dx) * 4) as usize;
+            for c in 0..4 {
+                out[dst + c] = (acc[c] / 4) as u8;
+            }
+        }
+    }
+    out
+}
+
+/// Число мип-уровней для стороны pow2 размера `size`: log2(size)+1,
+/// ограниченное [`MIP_MAX_LEVELS`] снизу единицей.
+fn level_count(size: u32) -> u32 {
+    if size == 0 {
+        return 1;
+    }
+    ((31 - size.leading_zeros()) + 1).clamp(1, MIP_MAX_LEVELS)
+}
+
 /// Приводит декодированный кадр к RGBA8: добавляет недостающие каналы
 /// (rgb → альфа 255, gray → серый + альфа 255, gray+alpha → серый×3 + альфа).
 /// С `Transformations::EXPAND` кадр приходит в исходном числе каналов —
@@ -494,7 +714,10 @@ fn to_rgba8(color_type: png::ColorType, data: &[u8]) -> Vec<u8> {
     use png::ColorType::*;
     match color_type {
         Rgba => data.to_vec(),
-        Rgb => data.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        Rgb => data
+            .chunks_exact(3)
+            .flat_map(|c| [c[0], c[1], c[2], 255])
+            .collect(),
         GrayscaleAlpha => data
             .chunks_exact(2)
             .flat_map(|c| [c[0], c[0], c[0], c[1]])
@@ -688,10 +911,7 @@ pub fn berry_rgba(phase: f32, color: [u8; 4]) -> (u32, u32, Vec<u8>) {
     let mut pixels = vec![0u8; (SIZE * SIZE * 4) as usize];
     let center = (SIZE as f32 * 0.5, SIZE as f32 * 0.5);
     let body_r = 28.0;
-    let highlight = (
-        center.0 + 14.0 * phase.cos(),
-        center.1 + 14.0 * phase.sin(),
-    );
+    let highlight = (center.0 + 14.0 * phase.cos(), center.1 + 14.0 * phase.sin());
     let highlight_r = 6.0;
     for y in 0..SIZE {
         for x in 0..SIZE {
@@ -724,7 +944,13 @@ pub fn berry_rgba(phase: f32, color: [u8; 4]) -> (u32, u32, Vec<u8>) {
 /// Горизонтальная полоса состояния (status bar): заливка слева, прогресс 0..1.
 ///
 /// 1px рамка по краю — цветом `background`. Возвращает `(ширина, высота, RGBA8)`.
-pub fn bar_rgba(width: u32, height: u32, fill: [u8; 4], background: [u8; 4], progress: f32) -> (u32, u32, Vec<u8>) {
+pub fn bar_rgba(
+    width: u32,
+    height: u32,
+    fill: [u8; 4],
+    background: [u8; 4],
+    progress: f32,
+) -> (u32, u32, Vec<u8>) {
     let w = width.max(2);
     let h = height.max(2);
     let p = progress.clamp(0.0, 1.0);
@@ -734,7 +960,11 @@ pub fn bar_rgba(width: u32, height: u32, fill: [u8; 4], background: [u8; 4], pro
     for y in 0..h {
         for x in 0..w {
             let border = x == 0 || y == 0 || x == w - 1 || y == h - 1;
-            let c = if border || (x as f32) >= fill_edge { background } else { fill };
+            let c = if border || (x as f32) >= fill_edge {
+                background
+            } else {
+                fill
+            };
             let i = ((y * w + x) * 4) as usize;
             pixels[i..i + 4].copy_from_slice(&c);
         }

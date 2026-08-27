@@ -67,6 +67,13 @@ impl From<&Sprite> for InstanceData {
 /// который сортирует спрайты по слою и заливает инстанс-данные на GPU.
 pub struct SpriteBatch {
     sprites: Vec<Sprite>,
+    /// Спрайты, реально ушедшие на GPU после последнего [`Self::upload`]
+    /// с активным прямоугольником отсечения ([`Self::set_cull_rect`]).
+    /// Пуст при отключённом отсечении — тогда рисуется весь `sprites`.
+    visible: Vec<Sprite>,
+    /// Мировой прямоугольник отсечения `[min_x, min_y, max_x, max_y]`
+    /// (`None` — без отсечения).
+    cull_rect: Option<[f32; 4]>,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
@@ -97,6 +104,8 @@ impl SpriteBatch {
         });
         Self {
             sprites: Vec::with_capacity(capacity),
+            visible: Vec::new(),
+            cull_rect: None,
             vertex_buffer,
             index_buffer,
             instance_buffer,
@@ -141,6 +150,37 @@ impl SpriteBatch {
         &self.sprites
     }
 
+    /// Количество спрайтов, уходящих на GPU ([`Self::upload`] с активным
+    /// прямоугольником отсечения может рисовать меньше, чем пушнуто).
+    pub fn len_drawn(&self) -> usize {
+        self.drawn().len()
+    }
+
+    /// Устанавливает мировой прямоугольник отсечения
+    /// `[min_x, min_y, max_x, max_y]`: при следующем [`Self::upload`] на GPU
+    /// уйдут только спрайты с центром внутри него (границы включены).
+    ///
+    /// Проходит без ценой пересборки батча: полный список сохраняется,
+    /// фильтрация происходит при заливке инстансов. `None` — вернуть полное
+    /// рисование (по умолчанию). Готовый прямоугольник экрана камеры даёт
+    /// [`crate::Camera::visible_world_rect`].
+    pub fn set_cull_rect(&mut self, rect: Option<[f32; 4]>) {
+        if self.cull_rect != rect {
+            self.cull_rect = rect;
+            self.dirty = true;
+        }
+    }
+
+    /// Список спрайтов, который рисует проход: отфильтрованный при активном
+    /// отсечении или полный список иначе.
+    fn drawn(&self) -> &[Sprite] {
+        if self.cull_rect.is_some() {
+            &self.visible
+        } else {
+            &self.sprites
+        }
+    }
+
     /// Группы подряд идущих спрайтов с одинаковым id эффекта:
     /// `(fx_id, диапазон индексов)` — по одному draw call на группу.
     ///
@@ -148,14 +188,15 @@ impl SpriteBatch {
     /// поэтому спрайты одного слоя/глубины остаются подряд, а группировка
     /// по fx_id даёт минимум переключений пайплайна.
     pub fn iter_fx_groups(&self) -> impl Iterator<Item = (u32, Range<usize>)> + '_ {
+        let sprites = self.drawn();
         let mut i = 0;
         std::iter::from_fn(move || {
-            if i >= self.sprites.len() {
+            if i >= sprites.len() {
                 return None;
             }
-            let id = self.sprites[i].fx.id();
+            let id = sprites[i].fx.id();
             let start = i;
-            while i < self.sprites.len() && self.sprites[i].fx.id() == id {
+            while i < sprites.len() && sprites[i].fx.id() == id {
                 i += 1;
             }
             Some((id, start..i))
@@ -169,7 +210,28 @@ impl SpriteBatch {
             return;
         }
         Sprite::sort_for_draw(&mut self.sprites);
-        let data: Vec<InstanceData> = self.sprites.iter().map(InstanceData::from).collect();
+        // Отсечение: раздельные заимствования полей — одна аллокация не нужна.
+        let Self {
+            sprites,
+            visible,
+            cull_rect,
+            ..
+        } = self;
+        if let Some(rect) = *cull_rect {
+            visible.clear();
+            visible.extend(
+                sprites
+                    .iter()
+                    .filter(|s| {
+                        s.position[0] >= rect[0]
+                            && s.position[0] <= rect[2]
+                            && s.position[1] >= rect[1]
+                            && s.position[1] <= rect[3]
+                    })
+                    .copied(),
+            );
+        }
+        let data: Vec<InstanceData> = self.drawn().iter().map(InstanceData::from).collect();
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&data));
         self.dirty = false;
     }
@@ -267,9 +329,21 @@ impl SpriteBatch {
 /// 4 вершины единичного квада (corner_pos ∈ [-0.5, 0.5]) с UV 0..1.
 pub(crate) fn unit_quad_vertices() -> [QuadVertex; 4] {
     [
-        QuadVertex { corner_pos: [-0.5, -0.5], corner_uv: [0.0, 0.0] },
-        QuadVertex { corner_pos: [0.5, -0.5], corner_uv: [1.0, 0.0] },
-        QuadVertex { corner_pos: [-0.5, 0.5], corner_uv: [0.0, 1.0] },
-        QuadVertex { corner_pos: [0.5, 0.5], corner_uv: [1.0, 1.0] },
+        QuadVertex {
+            corner_pos: [-0.5, -0.5],
+            corner_uv: [0.0, 0.0],
+        },
+        QuadVertex {
+            corner_pos: [0.5, -0.5],
+            corner_uv: [1.0, 0.0],
+        },
+        QuadVertex {
+            corner_pos: [-0.5, 0.5],
+            corner_uv: [0.0, 1.0],
+        },
+        QuadVertex {
+            corner_pos: [0.5, 0.5],
+            corner_uv: [1.0, 1.0],
+        },
     ]
 }

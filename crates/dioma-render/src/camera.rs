@@ -58,6 +58,16 @@ impl Camera {
         ]
     }
 
+    /// Мировые координаты → экранные пиксели (Y вниз, origin — верхний левый
+    /// угол) — обратное [`Self::screen_to_world`] с точностью до округления
+    /// f32. Для HUD поверх отрендеренной сцены и позиционирования UI по миру.
+    pub fn world_to_screen(&self, world: [f32; 2]) -> [f32; 2] {
+        [
+            self.viewport[0] * 0.5 + (world[0] - self.center[0]) * self.zoom,
+            self.viewport[1] * 0.5 - (world[1] - self.center[1]) * self.zoom,
+        ]
+    }
+
     /// Мировые координаты → NDC (то же преобразование, что в вершинном
     /// шейдере): Y вверх = верх экрана. CPU-сторона для пикинга.
     pub fn world_to_ndc(&self, world: [f32; 2]) -> [f32; 2] {
@@ -66,6 +76,22 @@ impl Camera {
         [
             (world[0] - self.center[0]) / half_w,
             (world[1] - self.center[1]) / half_h,
+        ]
+    }
+
+    /// Прямоугольник видимой области мира `[min_x, min_y, max_x, max_y]`.
+    ///
+    /// Удобно для отсечения спрайтов/тайлов ([`crate::SpriteBatch::set_cull_rect`])
+    /// и для рамки подгрузки контента. Вне этой области камера ничего не
+    /// рисует.
+    pub fn visible_world_rect(&self) -> [f32; 4] {
+        let half_w = self.viewport[0] * 0.5 / self.zoom;
+        let half_h = self.viewport[1] * 0.5 / self.zoom;
+        [
+            self.center[0] - half_w,
+            self.center[1] - half_h,
+            self.center[0] + half_w,
+            self.center[1] + half_h,
         ]
     }
 

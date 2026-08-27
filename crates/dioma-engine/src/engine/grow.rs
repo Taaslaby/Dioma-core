@@ -426,6 +426,47 @@ mod tests {
             assert!(pre < layout.n() && post < layout.n(), "ребро вне границ");
         }
     }
+
+    /// Стадия B: 300 нейронов (ядро 120 + VL 30 + VR 30 + ASSOC_E 90 +
+    /// ASSOC_I 30); регионы идут блоками — 0..6 ядро `avoidance_layout()`
+    /// БЕЗ изменений, 7=VL, 8=VR, 9=ASSOC_E, 10=ASSOC_I.
+    #[test]
+    fn stage_b_layout_neuron_counts() {
+        let l = stage_b_layout();
+        let counts: Vec<usize> = l.regions.iter().map(|r| r.count).collect();
+        assert_eq!(
+            counts,
+            [20, 20, 12, 12, 16, 20, 20, 30, 30, 90, 30],
+            "состав регионов стадии B"
+        );
+        assert_eq!(l.n(), 300, "120 ядро + 30 VL + 30 VR + 90 ASSOC_E + 30 ASSOC_I");
+        // Ядро — дословная копия avoidance_layout() (чужие тесты не ломаем).
+        let base = avoidance_layout();
+        assert_eq!(l.regions.len(), base.regions.len() + 4);
+        for (i, r) in base.regions.iter().enumerate() {
+            assert_eq!(l.regions[i].tag, r.tag, "регион {i}");
+            assert_eq!(l.regions[i].count, r.count, "count региона {i}");
+        }
+        assert_eq!(l.regions[7].tag, "VL");
+        assert_eq!(l.regions[8].tag, "VR");
+        assert_eq!(l.regions[9].tag, "ASSOC_E");
+        assert_eq!(l.regions[10].tag, "ASSOC_I");
+        assert!(l.regions[10].inhibitory, "ASSOC_I — тормозной регион");
+        assert!(
+            l.regions[9]
+                .axons
+                .iter()
+                .any(|a| a.target == "ASSOC_E"),
+            "ASSOC_E рекуррентен на себя (самоаксонная петля)"
+        );
+        assert!(
+            l.regions[9]
+                .axons
+                .iter()
+                .any(|a| a.target == "ASSOC_I"),
+            "ASSOC_E замыкает тормозной контур через ASSOC_I"
+        );
+    }
 }
 
 // ─── Пресеты схем ───────────────────────────────────────────────────────────
@@ -629,6 +670,95 @@ pub fn avoidance_layout() -> Layout {
             ("I".into(), "MR".into()),
         ],
     }
+}
+
+/// Стадия B (транш 3): `avoidance_layout()` целиком + зрение и ассоциативный
+/// слой, всего 300 нейронов.
+///
+/// - **VL/VR** (по 30): сенсорные «глаз-бины» — аксоны к ASSOC_E (короткие,
+///   слабо направленные) и напрямую к обоим моторам (ML/MR): «зрение → руль»
+///   без ассоциативного слоя;
+/// - **ASSOC_E** (90): возбуждающий рекуррентный хаб — самоаксонная петля
+///   внутрь региона (средняя дальность 60 мкм), тормозной контур через
+///   ASSOC_I и выход к моторам;
+/// - **ASSOC_I** (30): тормозной — ингибирует ASSOC_E (и моторы).
+///
+/// Регионы: 0..6 = ядро `avoidance_layout()` (SL/SR/WL/WR/I/ML/MR), 7 = VL,
+/// 8 = VR, 9 = ASSOC_E, 10 = ASSOC_I.
+///
+/// Стадия B: НЕ подключено к существам — переключение популяции отдельным
+/// траншем после перетюна тестов.
+pub fn stage_b_layout() -> Layout {
+    let mut l = avoidance_layout();
+    // Зрительный конус — впереди (сенсоры арены стоят в -Y, моторы в +Y).
+    l.regions.push(RegionSpec {
+        tag: "VL",
+        center: [-45.0, -90.0, 0.0],
+        radius: 14.0,
+        count: 30,
+        inhibitory: false,
+        secrete: None,
+        axons: vec![axon("ASSOC_E", 130.0), axon("ML", 170.0), axon("MR", 170.0)],
+    });
+    l.regions.push(RegionSpec {
+        tag: "VR",
+        center: [45.0, -90.0, 0.0],
+        radius: 14.0,
+        count: 30,
+        inhibitory: false,
+        secrete: None,
+        axons: vec![axon("ASSOC_E", 130.0), axon("ML", 170.0), axon("MR", 170.0)],
+    });
+    // Ассоциативный слой — центральный хаб между сенсорами и моторами:
+    // рекуррентность на себя (аксон на собственный морфоген), тормозной
+    // контур через ASSOC_I, выход на моторы.
+    l.regions.push(RegionSpec {
+        tag: "ASSOC_E",
+        center: [0.0, 0.0, 0.0],
+        radius: 26.0,
+        count: 90,
+        inhibitory: false,
+        secrete: Some("ASSOC_E".into()),
+        axons: vec![
+            axon("ASSOC_E", 60.0),
+            axon("ASSOC_I", 80.0),
+            axon("ML", 150.0),
+            axon("MR", 150.0),
+        ],
+    });
+    l.regions.push(RegionSpec {
+        tag: "ASSOC_I",
+        center: [0.0, -35.0, 24.0],
+        radius: 14.0,
+        count: 30,
+        inhibitory: true,
+        secrete: None,
+        axons: vec![axon("ASSOC_E", 80.0), axon("ML", 120.0), axon("MR", 120.0)],
+    });
+    l.allowed_pairs.extend(
+        [
+            ("VL", "VL"),
+            ("VL", "ASSOC_E"),
+            ("VL", "ML"),
+            ("VL", "MR"),
+            ("VR", "VR"),
+            ("VR", "ASSOC_E"),
+            ("VR", "ML"),
+            ("VR", "MR"),
+            ("ASSOC_E", "ASSOC_E"),
+            ("ASSOC_E", "ASSOC_I"),
+            ("ASSOC_E", "I"),
+            ("ASSOC_E", "ML"),
+            ("ASSOC_E", "MR"),
+            ("ASSOC_I", "ASSOC_E"),
+            ("ASSOC_I", "ML"),
+            ("ASSOC_I", "MR"),
+            ("ASSOC_I", "I"),
+        ]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string())),
+    );
+    l
 }
 
 /// Когнитивный агент: + WS_L/WS_R (workspace) и WM_L/WM_R (память).

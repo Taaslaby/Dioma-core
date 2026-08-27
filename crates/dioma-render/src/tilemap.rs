@@ -46,7 +46,11 @@ impl TilesetUv {
             "TilesetUv::new: сетка {cols}×{rows} = {} ячеек больше 65535 — индексы тайлов u16 не влезут",
             (cols as u64) * (rows as u64)
         );
-        Self { region, cols: cols.max(1), rows: rows.max(1) }
+        Self {
+            region,
+            cols: cols.max(1),
+            rows: rows.max(1),
+        }
     }
 
     /// UV-прямоугольник ячейки `index` в атласе.
@@ -105,7 +109,12 @@ pub struct Tilemap {
 impl Tilemap {
     /// Пустая карта `cols`×`rows` (все клетки = 0).
     pub fn new(cols: u32, rows: u32, tile_size: f32) -> Self {
-        Self { cols, rows, tile_size, tiles: vec![0; (cols * rows) as usize] }
+        Self {
+            cols,
+            rows,
+            tile_size,
+            tiles: vec![0; (cols * rows) as usize],
+        }
     }
 
     /// Карта из строк одинаковой длины; `cols` берётся из первой строки.
@@ -129,7 +138,12 @@ impl Tilemap {
         for r in rows_data {
             tiles.extend_from_slice(r);
         }
-        Self { cols, rows, tile_size, tiles }
+        Self {
+            cols,
+            rows,
+            tile_size,
+            tiles,
+        }
     }
 
     /// Ставит тайл в клетку `(x, y)`. Паникует (русское сообщение) при выходе
@@ -191,7 +205,10 @@ impl Tilemap {
 
     /// Размер карты в мировых пикселях: `[cols·tile_size, rows·tile_size]`.
     pub fn world_size(&self) -> [f32; 2] {
-        [self.cols as f32 * self.tile_size, self.rows as f32 * self.tile_size]
+        [
+            self.cols as f32 * self.tile_size,
+            self.rows as f32 * self.tile_size,
+        ]
     }
 }
 
@@ -218,11 +235,13 @@ impl Tilemap {
 /// естественно, а существа на слое 1.0+ рисуются поверх.
 ///
 /// Вместимость батча = `cols·rows` (максимум непустых тайлов), поэтому
-/// `push` в [`SpriteBatch`] не паникует. Все непустые тайлы рисуются даже
-/// вне экрана: отсечение по вьюпорту — будущая оптимизация (здесь не
-/// реализована).
+/// `push` в [`SpriteBatch`] не паникует. Для больших карт используйте
+/// [`Self::upload_visible`] — на GPU уйдут только тайлы в кадре.
 pub struct TileBatch {
     sprites: SpriteBatch,
+    /// Размер стороны тайла в мировых пикселях (для расширения прямоугольника
+    /// отсечения на полтайла в [`Self::upload_visible`]).
+    tile_size: f32,
     /// Флаг перестройки: после [`Self::rebuild`] нужен новый upload.
     dirty: bool,
 }
@@ -231,7 +250,11 @@ impl TileBatch {
     /// Строит батч из карты и тайлсета (все непустые тайлы → спрайты).
     /// Для изменения карты перестройте батч через [`Self::rebuild`].
     pub fn new(device: &wgpu::Device, tilemap: &Tilemap, tileset: &TilesetUv) -> Self {
-        let mut b = Self { sprites: SpriteBatch::new(device, 1), dirty: true };
+        let mut b = Self {
+            sprites: SpriteBatch::new(device, 1),
+            tile_size: tilemap.tile_size,
+            dirty: true,
+        };
         b.rebuild(device, tilemap, tileset);
         b
     }
@@ -241,6 +264,7 @@ impl TileBatch {
     /// пересоздаётся с вместимостью `cols·rows`).
     pub fn rebuild(&mut self, device: &wgpu::Device, tilemap: &Tilemap, tileset: &TilesetUv) {
         let capacity = ((tilemap.cols * tilemap.rows) as usize).max(1);
+        self.tile_size = tilemap.tile_size;
         self.sprites = SpriteBatch::new(device, capacity);
         let size = [tilemap.tile_size, tilemap.tile_size];
         for y in 0..tilemap.rows {
@@ -273,6 +297,32 @@ impl TileBatch {
             self.sprites.upload(queue);
             self.dirty = false;
         }
+    }
+
+    /// Заливает на GPU только тайлы, пересекающие `view_rect`
+    /// (`[min_x, min_y, max_x, max_y]` в мировых пикселях; границы включены).
+    ///
+    /// Прямоугольник расширяется на полтайла по каждой стороне, чтобы
+    /// краевые тайлы, лишь касающиеся экрана, не пропали. Готовый прямоугольник
+    /// экрана даёт [`crate::Camera::visible_world_rect`]. Вызывайте каждый кадр:
+    /// смена прямоугольника сама помечает батч к перезаливке; если камера
+    /// не двигалась — заливки не будет.
+    pub fn upload_visible(&mut self, queue: &wgpu::Queue, view_rect: [f32; 4]) {
+        let half = self.tile_size * 0.5;
+        self.sprites.set_cull_rect(Some([
+            view_rect[0] - half,
+            view_rect[1] - half,
+            view_rect[2] + half,
+            view_rect[3] + half,
+        ]));
+        self.sprites.upload(queue);
+    }
+
+    /// Количество тайлов, уходящих на GPU после последнего
+    /// [`Self::upload_visible`] (или всех непустых — после обычного
+    /// [`Self::upload`]).
+    pub fn len_visible(&self) -> usize {
+        self.sprites.len_drawn()
     }
 
     /// Внутренний батч для [`crate::Renderer::render`]

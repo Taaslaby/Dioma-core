@@ -11,11 +11,13 @@
 //!
 //! - [`grow`] строит или восстанавливает проводку;
 //! - [`neurons`] исполняет динамику и пластичность;
+//! - [`baked`] грузит запечённые веса DBW1 и исполняет MLP/GRU-инференс;
 //! - [`behavior`] и [`biovm`] исполняют программы клеточного поведения;
 //! - [`graph`] меняет живую топологию по активности;
 //! - [`gpu`] содержит GPU-специфичный путь, сохраняя CPU fallback;
 //! - [`instincts`] и [`rules`] описывают наследуемые поведенческие правила.
 pub mod behavior;
+pub mod baked;
 pub mod biocell;
 pub mod biovm;
 pub mod genome;
@@ -34,6 +36,9 @@ pub(crate) mod vm;
 
 pub use biocell::BioCellRuntime;
 pub use biovm::{BioEvent, BioEventKind, BioPopulation, BioProgram, SubstanceId};
+/// Запечённые веса DBW1 и инференс-раннеры (см. `docs/BRAIN_ROADMAP.md`,
+/// раздел «Пайплайн обучения»): Python учит → `.dbw` → игра исполняет.
+pub use baked::{BakedGru, BakedMlp, BakedTensors, DBW_MAGIC};
 /// Ключевые типы ядра на один импорт.
 pub use genome::Grown;
 pub use instincts::Instinct;

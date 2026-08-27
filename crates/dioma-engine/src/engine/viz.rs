@@ -33,7 +33,7 @@
 //! сенсорные токи, что в `Creature::assemble`) под смешанным стимульным
 //! паттерном: затишье → запах слева → запах справа → стена слева → стена
 //! справа → оба запаха, по циклу.
-use crate::engine::grow::{axon, avoidance_layout, Layout, RegionSpec};
+use crate::engine::grow::{axon, Layout, RegionSpec};
 use crate::engine::neurons::{gains_from, Brain, PlasticityParams};
 use crate::rng::XorShift;
 use crate::Grown;
@@ -169,91 +169,19 @@ pub struct VizMeta {
     pub note: String,
 }
 
-/// Плановая схема мозга транша 3: `avoidance_layout()` + зрительный конус
-/// (VL/VR — левое/правое поле зрения) + ассоциативный слой (ASSOC_E —
+/// Плановая схема мозга транша 3 (стадия B): `avoidance_layout()` + зрительный
+/// конус (VL/VR — левое/правое поле зрения) + ассоциативный слой (ASSOC_E —
 /// возбуждающий, ASSOC_I — тормозной) с внутренней рекуррентностью.
 ///
-/// Аксоны и пары правдоподобны, но ПРОИЗВОЛЬНЫ — это концепт, а не игровая
-/// схема (транш 3 не реализован в движке):
-///
-/// - VL/VR: зрение → ассоциативный слой и прямое «зрение → руль» (ML/MR);
-/// - ASSOC_E: рекуррентность на себя, тормозной контур через ASSOC_I и
-///   выход к моторам (и к интернейронам I);
-/// - ASSOC_I: тормозит ассоциативный слой и моторы.
+/// ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ — [`crate::engine::grow::stage_b_layout`]: эта
+/// функция — тонкая алиас-обёртка для визуализаторов (та же схема, тот же
+/// порядок регионов). Числа/метки сверяются тестом `stage_b_layout_matches_viz_tables`.
 ///
 /// Схема не выращивается: визуализация отвечает на вопрос «какие регионы
 /// появятся и как будут выглядеть» (регионы от `AVOIDANCE_BASE_REGIONS`
 /// помечаются ghost).
 pub fn avoidance_layout_future() -> Layout {
-    let mut l = avoidance_layout();
-    // Зрительный конус — впереди (сенсоры арены стоят в -Y, моторы в +Y).
-    l.regions.push(RegionSpec {
-        tag: "VL",
-        center: [-45.0, -90.0, 0.0],
-        radius: 14.0,
-        count: 30,
-        inhibitory: false,
-        secrete: None,
-        axons: vec![axon("ASSOC_E", 130.0), axon("ML", 170.0), axon("MR", 170.0)],
-    });
-    l.regions.push(RegionSpec {
-        tag: "VR",
-        center: [45.0, -90.0, 0.0],
-        radius: 14.0,
-        count: 30,
-        inhibitory: false,
-        secrete: None,
-        axons: vec![axon("ASSOC_E", 130.0), axon("ML", 170.0), axon("MR", 170.0)],
-    });
-    // Ассоциативный слой — центральный хаб между сенсорами и моторами.
-    l.regions.push(RegionSpec {
-        tag: "ASSOC_E",
-        center: [0.0, 0.0, 0.0],
-        radius: 26.0,
-        count: 90,
-        inhibitory: false,
-        secrete: Some("ASSOC_E".into()),
-        axons: vec![
-            axon("ASSOC_E", 60.0),
-            axon("ASSOC_I", 80.0),
-            axon("ML", 150.0),
-            axon("MR", 150.0),
-        ],
-    });
-    l.regions.push(RegionSpec {
-        tag: "ASSOC_I",
-        center: [0.0, -35.0, 24.0],
-        radius: 14.0,
-        count: 30,
-        inhibitory: true,
-        secrete: None,
-        axons: vec![axon("ASSOC_E", 80.0), axon("ML", 120.0), axon("MR", 120.0)],
-    });
-    // Пары — документация концепта (рост не запускается, пары не исполняются).
-    l.allowed_pairs.extend(
-        [
-            ("VL", "VL"),
-            ("VL", "ASSOC_E"),
-            ("VL", "ML"),
-            ("VL", "MR"),
-            ("VR", "VR"),
-            ("VR", "ASSOC_E"),
-            ("VR", "ML"),
-            ("VR", "MR"),
-            ("ASSOC_E", "ASSOC_E"),
-            ("ASSOC_E", "ASSOC_I"),
-            ("ASSOC_E", "I"),
-            ("ASSOC_E", "ML"),
-            ("ASSOC_E", "MR"),
-            ("ASSOC_I", "ASSOC_E"),
-            ("ASSOC_I", "ML"),
-            ("ASSOC_I", "MR"),
-            ("ASSOC_I", "I"),
-        ]
-        .iter()
-        .map(|(a, b)| (a.to_string(), b.to_string())),
-    );
-    l
+    crate::engine::grow::stage_b_layout()
 }
 
 // ─── Концепт зон (стадия C): чистый дизайн гибридного мозга ────────────────
@@ -1199,7 +1127,7 @@ fn bool01(b: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::grow::{grow, Steering};
+    use crate::engine::grow::{avoidance_layout, grow, Steering};
 
     /// Схема + коннектом для тестов (короткий рост — быстрый, топология есть).
     fn fixture() -> (Layout, Grown) {
@@ -1485,6 +1413,50 @@ mod tests {
         assert!(j.contains("\"zones\":["));
         for label in ["Ядро рефлексов", "Зрение (сырые бины)", "Ассоциативный хаб"] {
             assert!(j.contains(&format!("\"label\":\"{label}\"")), "зона {label} в JSON");
+        }
+    }
+
+    #[test]
+    fn stage_b_layout_matches_viz_tables() {
+        // Единый источник правды — grow::stage_b_layout(); визный датасет
+        // стадии B ходит через avoidance_layout_future (алиас). Сверяем
+        // НЕЗАВИСИМЫЕ константы виза (метки/классы/база) с фактической схемой:
+        // рассинхрон чисел или меток упадёт здесь.
+        let l = crate::engine::grow::stage_b_layout();
+        let future = avoidance_layout_future();
+        assert_eq!(l.regions.len(), AVOIDANCE_BASE_REGIONS + FUTURE_EXTRA_LABELS.len());
+        assert_eq!(future.regions.len(), l.regions.len(), "алиас возвращает ту же схему");
+        // Метки хвоста схемы == таблица транша 3 (порядок VL/VR/ASSOC_E/ASSOC_I).
+        let tail: Vec<&str> = l.regions.iter().skip(AVOIDANCE_BASE_REGIONS).map(|r| r.tag).collect();
+        assert_eq!(tail, FUTURE_EXTRA_LABELS, "метки хвоста стадии B");
+        // Числа нейронов: ядро 120 + 30 + 30 + 90 + 30 = 300 (суммы виза и схемы).
+        let sum_viz: usize = FUTURE_EXTRA_LABELS
+            .iter()
+            .map(|t| {
+                l.regions
+                    .iter()
+                    .find(|r| r.tag == *t)
+                    .map_or(0, |r| r.count)
+            })
+            .sum();
+        assert_eq!(sum_viz, 180, "добавка транша 3: 30+30+90+30");
+        assert_eq!(l.n(), 300, "120 ядро + 180 транш 3");
+        assert_eq!(future.n(), 300);
+        // Классы транша 3: зрение = sensor, ассоциации = assoc.
+        assert_eq!(FUTURE_EXTRA_KINDS, &["sensor", "sensor", "assoc", "assoc"]);
+        for (t, kind) in tail.iter().zip(FUTURE_EXTRA_KINDS) {
+            let r = l.regions.iter().find(|r| &r.tag == t).unwrap();
+            let expected_kind = match *kind {
+                "sensor" => !r.inhibitory,
+                "assoc" => true,
+                _ => false,
+            };
+            assert!(expected_kind, "регион {t}: класс {kind}");
+        }
+        // Алиас и источник — одна схема (тот же порядок и размеры регионов).
+        for (a, b) in future.regions.iter().zip(l.regions.iter()) {
+            assert_eq!(a.tag, b.tag);
+            assert_eq!(a.count, b.count);
         }
     }
 

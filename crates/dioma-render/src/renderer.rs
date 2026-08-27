@@ -7,7 +7,7 @@ use crate::batch::SpriteBatch;
 use crate::camera::Camera;
 use crate::debug::{DebugFont, RenderDebug};
 use crate::light::LightBatch;
-use crate::mesh::{Mesh, MeshBatch, MeshBlend};
+use crate::mesh::{Mesh, MeshBatch, MeshBlend, MeshVertex};
 use crate::particles::ParticleSystem;
 use crate::profiler::RenderStats;
 
@@ -48,7 +48,7 @@ const MESH_ADDITIVE_BLENDING: wgpu::BlendState = wgpu::BlendState {
 /// прохода со СВОЕЙ камерой должен быть СВОЙ буфер. Кольцо из 4 слотов
 /// покрывает типичные 2-3 параллакс-слоя; больше 4 проходов
 /// [`Renderer::render_parallax`] с разными камерами за один кадр —
-/// не поддерживается (слоты начнут перекрываться).
+/// не поддерживается: лишний вызов вернёт ошибку, а не перекроет слоты.
 const PARALLAX_RING: usize = 4;
 
 /// Какую пару (униформ-буфер камеры, bind group) использует спрайтовый проход.
@@ -63,6 +63,34 @@ const PARALLAX_RING: usize = 4;
 enum CameraSlot {
     Main,
     Parallax(usize),
+}
+
+/// Прямоугольник отсечения отрисовки в ЭКРАННЫХ пикселях цели
+/// ([`wgpu::RenderPass::set_scissor_rect`]; origin — верхний левый угол).
+///
+/// Всё, что рисуется вне прямоугольника, отбрасывается на этапе растеризации.
+/// Для сплит-скрина/миникарты комбинируйте с камерой, чей `viewport` равен
+/// размеру региона, — тогда сцена уместится целиком:
+///
+/// ```no_run
+/// # let mut renderer: dioma_render::Renderer = unimplemented!();
+/// # let queue: &wgpu::Queue = unimplemented!();
+/// # let mut encoder: wgpu::CommandEncoder = unimplemented!();
+/// # let view: &wgpu::TextureView = unimplemented!();
+/// # let atlas: &dioma_render::SpriteAtlas = unimplemented!();
+/// # let batch: &dioma_render::SpriteBatch = unimplemented!();
+/// use dioma_render::{Camera, ScissorRect};
+/// // Миникарта 128×128 в правом верхнем углу поверхности 800×600.
+/// let cam = Camera::new([128.0, 128.0]);
+/// renderer.render_with_clip(&queue, &mut encoder, view, atlas, batch, &cam,
+///     Some(ScissorRect { x: 800 - 128, y: 0, width: 128, height: 128 }));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScissorRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Рендерер инстансированных спрайтов, 2D-мешей, радиальных источников света
@@ -85,6 +113,12 @@ pub struct Renderer {
     /// Внутренний батч для [`Self::render_debug_overlay`] (8192 вершин /
     /// 16384 индексов).
     debug_mesh_batch: MeshBatch,
+    /// Пайплайн debug-шейпов: контурная геометрия в мировых координатах без
+    /// текстуры (`shaders/debug/shape.wgsl`).
+    debug_shape_pipeline: wgpu::RenderPipeline,
+    /// Накопитель debug-шейпов: заполняется методами [`Self::debug_*`],
+    /// рисуется и сбрасывается в [`Self::render_debug_shapes`].
+    pending_debug: Mesh,
     light_pipeline: wgpu::RenderPipeline,
     particle_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
@@ -93,8 +127,9 @@ pub struct Renderer {
     /// (см. [`PARALLAX_RING`] — почему не один буфер).
     parallax_uniforms: Vec<wgpu::Buffer>,
     parallax_bind_groups: Vec<wgpu::BindGroup>,
-    /// Индекс следующего свободного слота кольца (растёт без сброса — >4
-    /// параллакс-проходов за кадр перекрываются).
+    /// Индекс следующего свободного слота кольца. Сбрасывается в
+    /// [`Self::begin_frame`] каждый кадр; если проходов больше,
+    /// чем `PARALLAX_RING`, [`Self::render_parallax`] вернёт ошибку.
     parallax_ring_index: usize,
     /// Свой униформ-буфер камеры у debug-оверлея: он рисует identity-камерой,
     /// и его запись не должна перетирать мировую камеру основного прохода.
@@ -110,8 +145,6 @@ pub struct Renderer {
     smooth_fps: f32,
     /// EMA-сглаженное время кадра в миллисекундах.
     smooth_ms: f32,
-    /// Длительность предыдущего кадра в секундах (0.0 — кадр ещё не был).
-    _prev_frame_time: f32,
 }
 
 impl Renderer {
@@ -306,12 +339,32 @@ impl Renderer {
         let mut parallax_uniforms = Vec::with_capacity(PARALLAX_RING);
         let mut parallax_bind_groups = Vec::with_capacity(PARALLAX_RING);
         for i in 0..PARALLAX_RING {
-            let (buffer, bg) = make_camera_pair(&format!("dioma-render parallax {i} camera uniform"));
+            let (buffer, bg) =
+                make_camera_pair(&format!("dioma-render parallax {i} camera uniform"));
             parallax_uniforms.push(buffer);
             parallax_bind_groups.push(bg);
         }
 
         let debug_mesh_batch = MeshBatch::new(device, 8192, 16384);
+
+        // Debug-шейпы: тот же layout вершин, что у мешей, но свой шейдер без
+        // текстуры (фрагмент красит per-vertex цветом) — и СВОЙ layout: только
+        // камера, wgpu требует выставить ВСЕ bind group'ы layout'а.
+        let debug_shape_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("dioma-render debug shape pipeline layout"),
+            bind_group_layouts: &[&camera_layout],
+            push_constant_ranges: &[],
+        });
+        let debug_shape_pipeline = build_pipeline(
+            device,
+            &debug_shape_layout,
+            format,
+            include_str!("shaders/debug/shape.wgsl"),
+            "dioma-render debug shape pipeline",
+            std::slice::from_ref(&MeshBatch::vertex_layout()),
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
+        );
 
         Renderer {
             pipeline,
@@ -320,6 +373,11 @@ impl Renderer {
             mesh_additive_pipeline,
             mesh_wireframe_pipeline,
             debug_mesh_batch,
+            debug_shape_pipeline,
+            pending_debug: Mesh {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            },
             light_pipeline,
             particle_pipeline,
             uniform_buffer,
@@ -335,7 +393,6 @@ impl Renderer {
             stats: RenderStats::default(),
             smooth_fps: 0.0,
             smooth_ms: 0.0,
-            _prev_frame_time: 0.0,
         }
     }
 
@@ -354,6 +411,7 @@ impl Renderer {
     ///
     /// Вызывайте один раз в начале кадра, ДО проходов рендера. Первый кадр
     /// (`smooth_fps == 0`) инициализируется напрямую, без EMA-разогрева.
+    /// Здесь же сбрасывается слот кольца параллакс-буферов ([`PARALLAX_RING`]).
     pub fn begin_frame(&mut self, dt: f32) {
         let dt = dt.max(0.0);
         let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
@@ -365,7 +423,8 @@ impl Renderer {
             self.smooth_fps = self.smooth_fps * 0.9 + fps * 0.1;
             self.smooth_ms = self.smooth_ms * 0.9 + frame_ms * 0.1;
         }
-        self._prev_frame_time = dt;
+        // Кольцо параллакс-буферов живёт один кадр: начинаем со свободного слота.
+        self.parallax_ring_index = 0;
         self.stats.fps = self.smooth_fps;
         self.stats.frame_ms = self.smooth_ms;
         self.stats.draw_calls = 0;
@@ -409,7 +468,39 @@ impl Renderer {
         batch: &SpriteBatch,
         camera: &Camera,
     ) {
-        self.draw_sprite_pass(queue, encoder, view, atlas, batch, camera, CameraSlot::Main, true, true);
+        self.render_with_clip(queue, encoder, view, atlas, batch, camera, None);
+    }
+
+    /// [`Self::render`] с опциональным прямоугольником отсечения
+    /// ([`ScissorRect`]): рисует ТОЛЬКО внутрь области цели — сплит-скрин,
+    /// миникарта, инспектор. Камера независима от прямоугольника: чтобы сценa
+    /// легла в регион целиком, задайте камере `viewport` размером региона.
+    ///
+    /// Остальные проходы (`render_meshes`/`render_lights`/`render_particles`)
+    /// отсечения не знают и рисуют всю цель — поверх региона они бесполезны.
+    #[allow(clippy::too_many_arguments)] // 8 параметров: как у остальных render_*
+    pub fn render_with_clip(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        atlas: &SpriteAtlas,
+        batch: &SpriteBatch,
+        camera: &Camera,
+        clip: Option<ScissorRect>,
+    ) {
+        self.draw_sprite_pass(
+            queue,
+            encoder,
+            view,
+            atlas,
+            batch,
+            camera,
+            CameraSlot::Main,
+            true,
+            true,
+            clip,
+        );
     }
 
     /// Рисует батч спрайтов со сдвинутой камерой — параллакс-слой фона.
@@ -435,7 +526,8 @@ impl Renderer {
     ///
     /// Каждый вызов берёт свой слот кольца униформ-буферов (см.
     /// [`PARALLAX_RING`]) — не более 4 параллакс-проходов с разными камерами
-    /// за один кадр.
+    /// за один кадр, иначе возвращается ошибка (кольцо сбрасывается
+    /// в [`Self::begin_frame`]).
     pub fn render_parallax(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -455,7 +547,12 @@ impl Renderer {
             center: [camera.center[0] * factor, camera.center[1] * factor],
             ..*camera
         };
-        let slot = self.parallax_ring_index % PARALLAX_RING;
+        if self.parallax_ring_index >= PARALLAX_RING {
+            return Err(format!(
+                "render_parallax: больше {PARALLAX_RING} параллакс-проходов за один кадр не поддерживается — кольцо униформ-буферов исчерпано"
+            ));
+        }
+        let slot = self.parallax_ring_index;
         self.parallax_ring_index += 1;
         self.draw_sprite_pass(
             queue,
@@ -467,6 +564,7 @@ impl Renderer {
             CameraSlot::Parallax(slot),
             false,
             false,
+            None,
         );
         Ok(())
     }
@@ -606,7 +704,10 @@ impl Renderer {
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_vertex_buffer(0, particles.vertex_buffer().slice(..));
         pass.set_vertex_buffer(1, particles.instance_buffer().slice(..));
-        pass.set_index_buffer(particles.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
+        pass.set_index_buffer(
+            particles.index_buffer().slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
         pass.draw_indexed(0..6, 0, 0..particles.count() as u32);
         self.stats.draw_calls += 1;
         self.stats.particles += particles.count() as u32;
@@ -639,7 +740,10 @@ impl Renderer {
         const SCALE: f32 = 1.0;
         const LINE_HEIGHT: f32 = 10.0;
         const MARGIN: f32 = 8.0;
-        let mut mesh = Mesh { vertices: Vec::new(), indices: Vec::new() };
+        let mut mesh = Mesh {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        };
         for (i, line) in lines.iter().enumerate() {
             let line_mesh = font.text_mesh(
                 line,
@@ -651,7 +755,8 @@ impl Renderer {
             );
             let base = mesh.vertices.len() as u32;
             mesh.vertices.extend_from_slice(&line_mesh.vertices);
-            mesh.indices.extend(line_mesh.indices.iter().map(|i| i + base));
+            mesh.indices
+                .extend(line_mesh.indices.iter().map(|i| i + base));
         }
         self.debug_mesh_batch.clear();
         self.debug_mesh_batch.push(&mesh);
@@ -687,13 +792,144 @@ impl Renderer {
         self.debug_mesh_batch.clear();
     }
 
+    // ── Debug-шейпы ───────────────────────────────────────────────────────────
+
+    /// Очищает накопитель debug-шейпов.
+    pub fn debug_clear(&mut self) {
+        self.pending_debug.clear();
+    }
+
+    /// Контурный круг в мировых координатах (`segments` ≥ 3). Ширина линии —
+    /// [`DEBUG_LINE_WIDTH`] мировых пикселей; вызывайте [`Self::debug_line`]
+    /// вручную для другой толщины.
+    pub fn debug_circle(&mut self, center: [f32; 2], radius: f32, segments: u32, color: [f32; 4]) {
+        let segments = segments.max(3);
+        let mut prev = [0.0f32; 2];
+        for i in 0..=segments {
+            let ang = i as f32 / segments as f32 * std::f32::consts::TAU;
+            let p = [
+                center[0] + ang.cos() * radius,
+                center[1] + ang.sin() * radius,
+            ];
+            if i > 0 {
+                push_thick_line(&mut self.pending_debug, prev, p, DEBUG_LINE_WIDTH, color);
+            }
+            prev = p;
+        }
+    }
+
+    /// Контурный прямоугольник (ось-выровненный) с центром `center` и размером
+    /// `size` в мировых координатах. Удобно для хитбоксов и рамок UI.
+    pub fn debug_rect(&mut self, center: [f32; 2], size: [f32; 2], color: [f32; 4]) {
+        let hw = (size[0] * 0.5).abs().max(0.0);
+        let hh = (size[1] * 0.5).abs().max(0.0);
+        let c = [
+            [center[0] - hw, center[1] - hh],
+            [center[0] + hw, center[1] - hh],
+            [center[0] + hw, center[1] + hh],
+            [center[0] - hw, center[1] + hh],
+        ];
+        for i in 0..4 {
+            push_thick_line(
+                &mut self.pending_debug,
+                c[i],
+                c[(i + 1) % 4],
+                DEBUG_LINE_WIDTH,
+                color,
+            );
+        }
+    }
+
+    /// Толстая линия `a→b` (ширина `thickness` в мировых пикселях).
+    pub fn debug_line(&mut self, a: [f32; 2], b: [f32; 2], thickness: f32, color: [f32; 4]) {
+        push_thick_line(&mut self.pending_debug, a, b, thickness.max(0.01), color);
+    }
+
+    /// Стрелка `from→to`: линия + наконечник из двух линий под ±25°.
+    /// Например, направление движения существа или связь в коннектоме.
+    pub fn debug_arrow(&mut self, from: [f32; 2], to: [f32; 2], color: [f32; 4]) {
+        push_thick_line(&mut self.pending_debug, from, to, DEBUG_LINE_WIDTH, color);
+        const HEAD_ANGLE: f32 = 25.0_f32.to_radians();
+        let dx = to[0] - from[0];
+        let dy = to[1] - from[1];
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < f32::EPSILON {
+            return;
+        }
+        let back = [dx / len, dy / len];
+        let head_len = (DEBUG_LINE_WIDTH * 4.0).min(len * 0.35);
+        for sign in [-1.0f32, 1.0] {
+            let ca = (-HEAD_ANGLE * sign).cos();
+            let sa = (-HEAD_ANGLE * sign).sin();
+            // Поворот back-вектора на ∓25°: tip → плечо наконечника.
+            let bx = back[0] * ca - back[1] * sa;
+            let by = back[0] * sa + back[1] * ca;
+            push_thick_line(
+                &mut self.pending_debug,
+                to,
+                [to[0] + bx * head_len, to[1] + by * head_len],
+                DEBUG_LINE_WIDTH,
+                color,
+            );
+        }
+    }
+
+    /// Рисует накопленные [`Self::debug_*`]-шейпы поверх уже нарисованной
+    /// сцены (pass с Load, альфа-блендинг; камера `camera`, счётчик
+    /// `draw_calls` увеличивается) и очищает накопитель.
+    ///
+    /// Использует внутренний меш-батч рендерера — НЕ вызывайте одновременно
+    /// с [`Self::render_debug_overlay`] между этими двумя проходами: каждый
+    /// загружает свой меш прямо перед отрисовкой. Пустой накопитель — no-op.
+    pub fn render_debug_shapes(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        camera: &Camera,
+    ) {
+        if self.pending_debug.indices.is_empty() {
+            return;
+        }
+        let mesh = std::mem::take(&mut self.pending_debug);
+        self.debug_mesh_batch.clear();
+        self.debug_mesh_batch.push(&mesh);
+        self.debug_mesh_batch.upload(queue);
+
+        self.write_camera_uniform(queue, &self.uniform_buffer, camera);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("dioma-render debug shapes pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.debug_shape_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.debug_mesh_batch.vertex_buffer().slice(..));
+            pass.set_index_buffer(
+                self.debug_mesh_batch.index_buffer().slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..self.debug_mesh_batch.drawn_index_count(), 0, 0..1);
+        }
+        self.stats.draw_calls += 1;
+        self.debug_mesh_batch.clear();
+    }
+
     /// Пара (униформ-буфер камеры, bind group) для слота [`CameraSlot`].
     fn camera_pair(&self, slot: CameraSlot) -> (&wgpu::Buffer, &wgpu::BindGroup) {
         match slot {
             CameraSlot::Main => (&self.uniform_buffer, &self.camera_bind_group),
-            CameraSlot::Parallax(i) => {
-                (&self.parallax_uniforms[i], &self.parallax_bind_groups[i])
-            }
+            CameraSlot::Parallax(i) => (&self.parallax_uniforms[i], &self.parallax_bind_groups[i]),
         }
     }
 
@@ -702,12 +938,7 @@ impl Renderer {
     /// Пишет в `buffer` — буфер камеры ИМЕННО этого прохода (см.
     /// [`PARALLAX_RING`]: write_buffer применяется до исполнения всех pass'ов
     /// submit'а, последняя запись в буфер побеждает).
-    fn write_camera_uniform(
-        &self,
-        queue: &wgpu::Queue,
-        buffer: &wgpu::Buffer,
-        camera: &Camera,
-    ) {
+    fn write_camera_uniform(&self, queue: &wgpu::Queue, buffer: &wgpu::Buffer, camera: &Camera) {
         let u = camera.uniform_data();
         let packed: [f32; 8] = [u[0], u[1], u[2], self.time, u[3], u[4], 0.0, 0.0];
         queue.write_buffer(buffer, 0, bytemuck::cast_slice(&packed));
@@ -722,6 +953,7 @@ impl Renderer {
     /// кадра, `false` — поверх уже нарисованного, `LoadOp::Load`).
     /// `allow_fx` — включать ли fx-пайплайны (`false` для параллакса: только
     /// базовый шейдер, fx-группы пропускаются).
+    #[allow(clippy::too_many_arguments)] // 11 параметров: внутренний общий проход
     fn draw_sprite_pass(
         &mut self,
         queue: &wgpu::Queue,
@@ -733,6 +965,7 @@ impl Renderer {
         camera_slot: CameraSlot,
         clear: bool,
         allow_fx: bool,
+        clip: Option<ScissorRect>,
     ) {
         let (uniform_buffer, camera_bind_group) = self.camera_pair(camera_slot);
         self.write_camera_uniform(queue, uniform_buffer, camera);
@@ -755,6 +988,9 @@ impl Renderer {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+        if let Some(c) = clip {
+            pass.set_scissor_rect(c.x, c.y, c.width, c.height);
+        }
         pass.set_bind_group(0, camera_bind_group, &[]);
         pass.set_bind_group(1, atlas.bind_group(), &[]);
         pass.set_vertex_buffer(0, batch.vertex_buffer().slice(..));
@@ -789,6 +1025,45 @@ impl Renderer {
         }
         // pass падает здесь, encoder готов к finish()/дальнейшим командам.
     }
+}
+
+/// Толщина линий debug-шейпов по умолчанию ([`Renderer::debug_circle`],
+/// [`Renderer::debug_rect`], [`Renderer::debug_arrow`]) в мировых пикселях;
+/// [`Renderer::debug_line`] принимает свою толщину явно.
+pub(crate) const DEBUG_LINE_WIDTH: f32 = 1.5;
+
+/// Добавляет толстый отрезок `a→b` (ширина `thickness`) как два треугольника
+/// (квад, ориентированный по перпендикуляру к направлению) в `out`. Вырожденный
+/// отрезок (нулевой длины) пропускается. UV-атрибут заполнен нулями — шейдер
+/// debug-шейпов его игнорирует.
+fn push_thick_line(out: &mut Mesh, a: [f32; 2], b: [f32; 2], thickness: f32, color: [f32; 4]) {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < f32::EPSILON || !len_sq.is_finite() {
+        return;
+    }
+    let half = thickness.max(0.001) * 0.5;
+    let inv = half / len_sq.sqrt();
+    // Перпендикуляр единичной длины × полуширина.
+    let nx = -dy * inv;
+    let ny = dx * inv;
+    let base = out.vertices.len() as u32;
+    let corners = [
+        [a[0] + nx, a[1] + ny],
+        [b[0] + nx, b[1] + ny],
+        [a[0] - nx, a[1] - ny],
+        [b[0] - nx, b[1] - ny],
+    ];
+    for p in corners {
+        out.vertices.push(MeshVertex {
+            position: p,
+            uv: [0.0, 0.0],
+            color,
+        });
+    }
+    out.indices
+        .extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
 }
 
 /// Спрайтовый пайплайн: layout `[камера, атлас]`, вершины — [`SpriteBatch::vertex_layouts`].

@@ -13,19 +13,25 @@ use crate::engine::neurons::{gains_from, Brain, PlasticityParams, BRAIN_STEPS_PE
 use crate::rng::XorShift;
 use crate::Grown;
 
+pub mod builder;
 pub mod genome;
 pub mod memory;
+pub mod metrics;
 
+pub use builder::CreatureBuilder;
 pub use genome::{CreatureGenome, MetabolismGene, Sex};
+pub use metrics::{BloodState, BrainStats, CreatureEvent, CreatureMetrics};
 
 /// Регионы avoidance_layout (см. engine::grow::avoidance_layout).
-const REGION_SL: usize = 0; // запах слева
-const REGION_SR: usize = 1; // запах справа
-const REGION_WL: usize = 2; // стена слева
-const REGION_WR: usize = 3; // стена справа
-const REGION_I: usize = 4; // тормозной интернейрон
-const REGION_ML: usize = 5; // мотор слева (поворот влево)
-const REGION_MR: usize = 6; // мотор справа (поворот вправо)
+/// Индексы регионов мозга в layout'е избегания (см. [`crate::engine::grow::avoidance_layout`]).
+/// Публичные: научные тулзы ([`crate::sci`]) и оверлеи группируют нейроны по регионам.
+pub const REGION_SL: usize = 0; // запах слева
+pub const REGION_SR: usize = 1; // запах справа
+pub const REGION_WL: usize = 2; // стена слева
+pub const REGION_WR: usize = 3; // стена справа
+pub const REGION_I: usize = 4; // тормозной интернейрон
+pub const REGION_ML: usize = 5; // мотор слева (поворот влево)
+pub const REGION_MR: usize = 6; // мотор справа (поворот вправо)
 
 /// Базовый фоновый ток мозга (тонус нейронов).
 const BASAL_EXT: f32 = 0.12;
@@ -178,6 +184,10 @@ pub struct Creature {
     /// спайков на тик (батч-путь мозга).
     ext: Vec<f32>,
     spike_hist: Vec<Vec<i32>>,
+    /// Эксперимент «сердце»: нейроны-пейсмейкеры (индексы) + тонический ток.
+    /// `None` — выключено (поведение ровно прежнее). Включение — аддитивное:
+    /// только добавка тока к выбранным нейронам (см. [`Self::enable_pacemaker`]).
+    pacemaker: Option<(Vec<usize>, f32)>,
     /// Близость стены на прошлом тике — для сигнала облегчения (стена отошла).
     prev_wall: f32,
     /// Порций еды, съеденных за жизнь (мера успеха охоты — для отбора
@@ -380,6 +390,7 @@ impl Creature {
             bounds,
             ext: vec![BASAL_EXT; brain_n],
             spike_hist: Vec::with_capacity(BRAIN_STEPS_PER_TICK),
+            pacemaker: None,
             prev_wall: 0.0,
             food_eaten: 0,
             hippo: memory::Hippocampus::default(),
@@ -398,6 +409,46 @@ impl Creature {
         c
     }
 
+    /// Пачка векторов спайков последнего тика: по одному вектору на подшаг
+    /// мозга (`BRAIN_STEPS_PER_TICK` элементов), каждый — спайки нейронов
+    /// подшага. Питает спайк-растр научных тулзов ([`crate::sci`]).
+    pub fn spike_hist(&self) -> &[Vec<i32>] {
+        &self.spike_hist
+    }
+
+    /// Эксперимент «сердце»: первые `n` нейронов тормозного региона I получают
+    /// постоянный тонический ток `tonic` в дополнение к фоновому `BASAL_EXT`.
+    ///
+    /// LIF с током выше реобазы генерирует ритмические burst'ы сам по себе
+    /// (заряд → порог → спайк → рефрактерность → сброс), как синоатриальный
+    /// узел. Спайки пейсмейкера видно в научной станции как периодические
+    /// полосы растра и ЧСС/ЭКГ. Вызывать ДО первого `tick`; детерминированно
+    /// от сида. Тонический ток инкрементальный логикой сенсоров не трогается
+    /// (регион I сенсорами не управляется).
+    pub fn enable_pacemaker(&mut self, n: usize, tonic: f32) {
+        let (start, end) = self.brain.region_bounds(REGION_I);
+        let count = n.min(end - start);
+        let indices: Vec<usize> = (start..start + count).collect();
+        for &i in &indices {
+            self.ext[i] += tonic;
+        }
+        self.pacemaker = Some((indices, tonic));
+    }
+
+    /// Нейроны-пейсмейкеры и их тонический ток (`None` — выключено).
+    /// Научные тулзы считают ЧСС и подсвечивают эти нейроны в растре.
+    pub fn pacemaker(&self) -> Option<(&[usize], f32)> {
+        self.pacemaker.as_ref().map(|(i, t)| (i.as_slice(), *t))
+    }
+
+    /// Выключить пейсмейкер: ток больше не прикладывается, нейроны региона I
+    /// возвращаются к обычному поведению. Повторный `enable_pacemaker`
+    /// включит заново. (Тонический ток прикладывается каждый тик из
+    /// `self.pacemaker`, поэтому выключение — просто `None`.)
+    pub fn disable_pacemaker(&mut self) {
+        self.pacemaker = None;
+    }
+
     /// Исполняет один тик жизни: сенсоры → мозг → тело → действие.
     ///
     /// Вызов обновляет внутреннюю физиологию и пластичность. Хост отвечает
@@ -411,7 +462,17 @@ impl Creature {
 
         // 1. Сенсоры мира + чувствительность тела → внешний ток мозга.
         // Переиспользуемый `self.ext`: бафф на месте (нет аллокации на тик).
+        // Полный пересчёт на каждом тике (эталон 2550cae): попытка
+        // «инкрементального» обновления дельтами от prev_sense давала
+        // систематический дрейф — дельта `(s_t - s_{t-1})·g_t` вычитала
+        // старое значение, посчитанное с ПРЕЖНИМ гейном `g_{t-1}`, и ошибка
+        // `s·Δg` накапливалась, когда сенсорный гейн двигался (голод/урон/
+        // глюкоза). Мозг получал искажённый запах/стену → охота ломалась
+        // (детур-тест: 141 удар о стену, голод до нуля).
         let gain = self.blood.sensor_gain();
+        // Пейсмейкер берётся заранее: `ext` — mutable-займ `self.ext`, а
+        // `self.pacemaker` — отдельное поле, disjoint borrow (без клона на тик).
+        let pm = self.pacemaker.as_ref().map(|(i, t)| (i.as_slice(), *t));
         let ext = &mut self.ext;
         ext.fill(BASAL_EXT);
         let l_current = sense.smell_l * gain * SMELL_CURRENT;
@@ -429,6 +490,15 @@ impl Creature {
         }
         for e in &mut ext[self.bounds.wr.0..self.bounds.wr.1] {
             *e += wr_current;
+        }
+        // Пейсмейкер «сердце»: тонический ток прикладывается каждый тик
+        // (ext пересчитывается целиком — иначе `fill` выше затёр бы ток,
+        // и «сердце» билось бы один тик). Регион I сенсорами не управляется,
+        // так что ток — чистый ритм-генератор, как синоатриальный узел.
+        if let Some((idx, tonic)) = pm {
+            for &i in idx {
+                ext[i] += tonic;
+            }
         }
 
         // 2. Мозг: подшаги тика, сумма спайков моторных пулов. Батч-путь:
@@ -630,6 +700,46 @@ impl Creature {
 mod tests {
     use super::*;
     use crate::engine::instincts::Instinct;
+
+    #[test]
+    fn pacemaker_fires_rhythmically() {
+        let mut c = Creature::new(7);
+        // Эксперимент «сердце»: без пейсмейкера регион I молчит, с током —
+        // спайкает. Детерминированно от сида.
+        assert!(c.pacemaker().is_none(), "по умолчанию пейсмейкер выключен");
+
+        // Ток 0.06 — чуть выше реобазы (свип: 0.04 молчит, 0.06 → 86/200,
+        // 0.08 → 200/200): LIF успевает разрядиться между спайками — ритм.
+        c.enable_pacemaker(3, 0.06);
+        let pm: Vec<usize> = c
+            .pacemaker()
+            .expect("пейсмейкер включён")
+            .0
+            .to_vec();
+        assert!(!pm.is_empty());
+
+        // Сенсоры молчат: если спайки есть — это пейсмейкер, а не драйв.
+        let sense = Sense::default();
+        let mut total = 0i64;
+        let mut ticks_fired = 0u32;
+        for _ in 0..200u64 {
+            c.tick(&sense);
+            let fired_this_tick: i64 = c
+                .spike_hist()
+                .iter()
+                .map(|col| pm.iter().map(|&i| col[i] as i64).sum::<i64>())
+                .sum();
+            if fired_this_tick > 0 {
+                ticks_fired += 1;
+            }
+            total += fired_this_tick;
+        }
+        assert!(total > 0, "пейсмейкер должен спайкать: {total} спайков за 200 тиков");
+        assert!(
+            ticks_fired > 10 && ticks_fired < 200,
+            "ритм: пейсмейкер спайкает периодически, а не постоянно: {ticks_fired}/200"
+        );
+    }
 
     #[test]
     fn smell_turns_toward_food() {

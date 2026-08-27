@@ -41,6 +41,6 @@ pub use mesh::{Mesh, MeshBatch, MeshBlend, MeshVertex};
 pub use particles::{Particle, ParticleSystem};
 pub use postprocess::{PostFx, PostProcess};
 pub use profiler::RenderStats;
-pub use renderer::Renderer;
+pub use renderer::{Renderer, ScissorRect};
 pub use sprite::{Sprite, SpriteFx};
 pub use tilemap::{TileBatch, Tilemap, TilesetUv};
