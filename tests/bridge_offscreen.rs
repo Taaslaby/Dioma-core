@@ -57,9 +57,15 @@ fn snapshot_captures_arena() {
         dioma_engine::creature::Sex::from_seed(7),
         "пол существа = пол из сида 7"
     );
-    // Свежее существо: глюкоза 128/255 ≈ 0.5, голод/усталость ≈ 0.
+    // Свежее существо: глюкоза 128/255 ≈ 0.5; голод 120/255 ≈ 0.47 —
+    // новорождённый арены голоден с рождения (ARENA_NEWBORN_HUNGER=120,
+    // см. sim::spawn_creature — замкнутый круг новичка); усталость ≈ 0.
     assert!((0.4..0.6).contains(&c.glucose), "глюкоза {} вне 0.4..0.6", c.glucose);
-    assert!(c.hunger < 0.1, "голод свежего существа {} должен быть ~0", c.hunger);
+    assert!(
+        (0.4..0.6).contains(&c.hunger),
+        "голод новорождённого {} вне 0.4..0.6 (≈120/255)",
+        c.hunger
+    );
     assert!(c.fatigue < 0.1, "усталость свежего существа {} должна быть ~0", c.fatigue);
 
     // Мировые часы: тик 0 — рассвет, день 1 весны, фаза в начале.
@@ -113,9 +119,12 @@ fn presenter_builds_scene() {
     // Тинт тела теплеет (не зелёный «сытый»).
     assert_ne!(scene.bodies[0].tint, [0.42, 0.92, 0.52, 1.0], "тинт тела должен теплеть");
 
-    // Спокойное существо — контроль: лицо «спокойное».
-    let calm = SimView::capture(&test_arena(false));
-    let scene_calm = presenter.build(&calm);
+    // Спокойное существо — контроль: лицо «спокойное». Новорождённый арены
+    // голоден с рождения (ARENA_NEWBORN_HUNGER=120 > wants_food 40) — контроль
+    // «сытого» лица получаем явным обнулением голода.
+    let mut calm_arena = test_arena(false);
+    calm_arena.critters[0].creature.blood.conc[chem::HUNGER] = 0.0;
+    let scene_calm = presenter.build(&SimView::capture(&calm_arena));
     assert_eq!(scene_calm.faces[0].uv_rect, calm_uv, "сытое → лицо «спокойное»");
 }
 

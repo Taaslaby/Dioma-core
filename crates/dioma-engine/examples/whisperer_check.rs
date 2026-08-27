@@ -59,12 +59,6 @@ impl J {
             _ => None,
         }
     }
-    fn as_str(&self) -> Option<&str> {
-        match self {
-            J::Str(s) => Some(s),
-            _ => None,
-        }
-    }
     fn as_arr(&self) -> Option<&Vec<J>> {
         match self {
             J::Arr(a) => Some(a),
