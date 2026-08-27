@@ -199,3 +199,51 @@ python ../../tools/train_whisperer.py --data ../../tools/whisperer_data.json --e
 # 3) паритет python↔rust + качество на hold-out
 cargo run --release --example whisperer_check -- --data ../../tools/whisperer_data.json --dbw ../../tools/whisperer.dbw --golden ../../tools/whisperer_golden.json
 ```
+
+## Глаза: прототип ANN-энкодера ретины (этап 0 пайплайна, дистилляция)
+
+Сегодня vis_l/vis_r считает геометрия в `Arena::sense`. Глаза будущего —
+энкодер «сырая сетчатка → сигналы»: ретина (16 лучей по конусу ±75°,
+канал = ягодность/стенность/соседность) богаче бинов, ANN сжимает её в
+полезный вектор. ПРОТОТИП учится дистилляцией: цель = аналитические
+сигналы глаза (vis_l/vis_r/wall_ahead из `Arena::last_sense` + пеленг/
+дистанция на ближайшую съедобную ягоду в поле зрения). Потом (Стадия C)
+ретина заменит бины, а запечённые глаза встанут как энкодер перед VL/VR.
+
+- **Данные**: `tools/eye_data.json` — 8 особей × 1500 тиков, сэмпл =
+  ретина 48 f32 (16 лучей × [ягодность, стенность, соседность]) + 6 целей.
+  Рекордер `crates/dioma-engine/examples/eye_data.rs`; 6 особей train
+  (сиды 2000..2005), 2 hold-out (2006, 2007). Отклонения от «голой» спеки
+  (в шапке рекордера): стены непрозрачны и для ретины (иначе цель
+  vis_l/vis_r не выводима); 2-й «статичный» криттер-наблюдатель (якорь +
+  возврат позиции каждый тик) — чтобы канал соседности был живым;
+  спящий криттер = «глаза закрыты» (ретина и цели нулевые). Случайный мозг
+  спит ~75% тиков — это настоящая дистрибуция, а не шум.
+- **Модель**: `tools/train_eye.py` — MLP 48→24 (tanh)→6 (линейный), MSE,
+  Adam (lr 0.01, батч 128), 40 эпох, сид 123. Экспорт DBW1
+  (`layer0.w/b`, `layer1.w/b`) → `BakedMlp`.
+- **Метрики** (rust совпадает с python до 4 знака; отчёт
+  `tools/eye_report.txt`), hold-out, все сэмплы / «бодрые»:
+  - vis_l: r=+0.993 / +0.983, vis_r: r=+0.992 / +0.980 — ОРИЕНТИР ТЗ
+    (r>0.9) взят;
+  - food_bearing_cos r=+0.945 / +0.740, food_dist_norm r=+0.945 / +0.574,
+    wall_ahead r=+0.967 / +0.881;
+  - food_bearing_sin r=+0.572 / +0.556 — слабее всех: sin антисимметричен
+    (знак = лево/право, нуль на курсе), бины грубые (11.25°) — сеть
+    смазывает знак пеленга на незнакомых особях.
+- **Паритет**: `crates/dioma-engine/examples/eye_check.rs` — 5 золотых
+  сэмплов (seed 123, ненулевая ретина): max|Δ|=3.4e-7 ≤ 1e-4.
+- **Артефакты**: `tools/eye.dbw` (5382 байта, 4 тензора, 1326 весов),
+  `tools/eye_golden.json`.
+
+Как перезапустить (из корня репозитория; engine — отдельный пакет, не член
+воркспейса — команды cargo через `--manifest-path`):
+
+```text
+# 1) запись датасета
+cargo run --manifest-path crates/dioma-engine/Cargo.toml --release --example eye_data -- --creatures 8 --ticks 1500 --seed0 2000 --out tools/eye_data.json
+# 2) обучение + запекание весов (numpy; сид 123 — детерминированно)
+python tools/train_eye.py --data tools/eye_data.json --epochs 40
+# 3) паритет python↔rust + качество на hold-out
+cargo run --manifest-path crates/dioma-engine/Cargo.toml --release --example eye_check -- --data tools/eye_data.json --dbw tools/eye.dbw --golden tools/eye_golden.json
+```
