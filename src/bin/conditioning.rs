@@ -8,7 +8,7 @@
 //!              Неправильное действие → болевой сигнал → избегание.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma::rng::XorShift;
+use dioma_engine::rng::XorShift;
 use pillars_connectome::{BrainConfig, BrainRunner, ConnectomeData};
 
 fn main() {

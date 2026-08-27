@@ -1,0 +1,15 @@
+[package]
+name = "dioma-engine"
+version = "0.2.0"
+edition = "2021"
+description = "Runtime движка Dioma: существа, биохимия, мир и симуляция"
+
+[dependencies]
+pillars = { path = "../SiMuse/crates/pillars" }
+pillars-connectome = { path = "../SiMuse/crates/pillars-connectome" }
+pillars-wgpu = { path = "../SiMuse/crates/pillars-wgpu" }
+prometheus-grow = { path = "../SiMuse/crates/prometheus-grow", features = ["gpu"] }
+pollster = "0.3"
+taas-format = { path = "../SiMuse/crates/taas-format" }
+rayon = "1"
+wide = "0.7"

@@ -232,6 +232,18 @@ dependencies = [
 name = "dioma"
 version = "0.2.0"
 dependencies = [
+ "dioma-engine",
+ "pillars",
+ "pillars-connectome",
+ "pollster",
+ "prometheus-grow",
+ "taas-format",
+]
+
+[[package]]
+name = "dioma-engine"
+version = "0.2.0"
+dependencies = [
  "pillars",
  "pillars-connectome",
  "pillars-wgpu",

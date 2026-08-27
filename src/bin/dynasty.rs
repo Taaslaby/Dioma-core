@@ -8,10 +8,10 @@
 //!              существо ещё решает, куда двигаться.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma::engine::grow;
-use dioma::engine::neurons::{gains_from, Brain, PlasticityParams};
-use dioma::engine::rules::{compete, PythiaUnit, RuleGene};
-use dioma::rng::XorShift;
+use dioma_engine::engine::grow;
+use dioma_engine::engine::neurons::{gains_from, Brain, PlasticityParams};
+use dioma_engine::engine::rules::{compete, PythiaUnit, RuleGene};
+use dioma_engine::rng::XorShift;
 
 const SL: usize = 0;
 const SR: usize = 1;

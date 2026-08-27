@@ -13,14 +13,12 @@ edition = "2021"
 description = "Игра о выращиваемых спикинг-агентах поверх движка taas-checkmate"
 
 [dependencies]
+dioma-engine = { path = "crates/dioma-engine" }
 pillars = { path = "crates/SiMuse/crates/pillars" }
 pillars-connectome = { path = "crates/SiMuse/crates/pillars-connectome" }
-pillars-wgpu = { path = "crates/SiMuse/crates/pillars-wgpu" }
 prometheus-grow = { path = "crates/SiMuse/crates/prometheus-grow", features = ["gpu"] }
 pollster = "0.3"
 taas-format = { path = "crates/SiMuse/crates/taas-format" }
-rayon = "1"
-wide = "0.7"
 
 # ── Активные бины (протоколы); история — в archive/bins ──
 

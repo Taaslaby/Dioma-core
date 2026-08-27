@@ -7,8 +7,8 @@
 //!              сомы буквами региона, аксоны точками, конусы роста '@'.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma::engine::grow::{agent_layout, Steering};
-use dioma::rng::XorShift;
+use dioma_engine::engine::grow::{agent_layout, Steering};
+use dioma_engine::rng::XorShift;
 use prometheus_grow::{
     ArtificialGradient, Bounds, CellType, ChemoAttraction, Grid, Secretor, Substance, World,
 };
