@@ -96,6 +96,8 @@ fn main() {
         let sense = Sense {
             smell_l: if t % 3 == 0 { 0.6 } else { 0.1 },
             smell_r: if t % 5 == 0 { 0.6 } else { 0.1 },
+            vis_l: 0.0,
+            vis_r: 0.0,
             wall_l: if t % 7 == 0 { 0.9 } else { 0.0 },
             wall_r: 0.0,
             food_near: t == 11 || t <= 2,

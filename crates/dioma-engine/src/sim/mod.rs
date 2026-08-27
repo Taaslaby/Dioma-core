@@ -34,6 +34,16 @@ pub const MAX_TURN: f32 = 0.6;
 const MOVE_STEP_PER_TICK: f32 = 2.0;
 /// Затухание запаха с дистанцией: 60/(60+d).
 const SMELL_FALLOFF: f32 = 60.0;
+/// Дальность зрения (мировых юнитов): вклад = (1 − d/VISION_RANGE), на краю
+/// диапазона — 0. На игровой карте комнаты 40×14: зрение «достаёт» почти
+/// до дальней стены комнаты, где запаховый градиент уже не различает стороны
+/// (зрение длиннее обоняния и ловит ягоду, которую несёт ветер мимо носа;
+/// стены и комнаты по-прежнему непрозрачны — та же проверка комнаты, что
+/// у запаха).
+const VISION_RANGE: f32 = 40.0;
+/// Половина поля зрения (рад): ±75°. Ягода вне конуса не видна, даже если
+/// близко.
+const VISION_HALF_FOV: f32 = 75.0 * std::f32::consts::PI / 180.0;
 /// Размер клетки памяти места (грубая привязка «где была еда»).
 const PLACE_CELL: f32 = 8.0;
 /// Размер клетки климата (тепло/свет/питание диффундируют по сетке).
@@ -130,6 +140,11 @@ pub struct Critter {
     pub sleeping: bool,
     /// Оставшиеся тики сна (тикает вниз в `Arena::step`; 0 = бодрствует).
     pub sleep_ticks: u32,
+    /// Зрение прошлого такта (0..1, левый/правый глаз-бин): копия
+    /// `Sense::{vis_l, vis_r}` для оверлеев и интеграционных тестов
+    /// (проводка зрения жива). У спящего — 0.
+    pub vis_l: f32,
+    pub vis_r: f32,
 }
 
 /// Арена: мир объектов (ягоды, карта) + существа. Детерминирована по сиду.
@@ -176,6 +191,8 @@ impl Arena {
             see_eat: false,
             sleeping: false,
             sleep_ticks: 0,
+            vis_l: 0.0,
+            vis_r: 0.0,
         });
         id
     }
@@ -303,8 +320,18 @@ impl Arena {
         }
         let mut actions: Vec<(usize, Action)> = Vec::with_capacity(self.critters.len());
         for (i, c) in self.critters.iter_mut().enumerate() {
-            if let Some(sense) = &senses[i] {
-                actions.push((i, c.creature.tick(sense)));
+            match &senses[i] {
+                Some(sense) => {
+                    // Снимок зрения для оверлеев/тестов (поля Critter.vis_*).
+                    c.vis_l = sense.vis_l;
+                    c.vis_r = sense.vis_r;
+                    actions.push((i, c.creature.tick(sense)));
+                }
+                None => {
+                    // Спящий не видит: снимок обнуляется, мозг не вызывается.
+                    c.vis_l = 0.0;
+                    c.vis_r = 0.0;
+                }
             }
         }
 
@@ -434,17 +461,27 @@ impl Arena {
         }
     }
 
-    /// Обоняние + направленное ощущение стен: запах ягод и близость стены
-    /// слева/справа относительно курса + «еда у рта».
-    /// Сенсоры существа: запах ягод (живые), стены, еда у рта, память места
-    /// и зеркальный сигнал `see_eat` (видел соседа за едой на прошлом такте).
+    /// Обоняние + зрение + направленное ощущение стен: запах ягод, зрительный
+    /// конус и близость стены слева/справа относительно курса + «еда у рта».
+    /// Сенсоры существа: запах ягод (живые), зрение (съедобные в конусе,
+    /// VISION_RANGE), стены, еда у рта, память места и зеркальный сигнал
+    /// `see_eat` (видел соседа за едой на прошлом такте).
+    ///
+    /// Зрение длиннее обоняния и ловит ягоду, которую несёт ветер мимо носа:
+    /// запах рулит градиентом (сила × sin пеленга — вперёд по курсу его
+    /// почти нет), зрение — честным конусом ±VISION_HALF_FOV с линейным
+    /// затуханием до VISION_RANGE. Стены и комнаты по-прежнему непрозрачны:
+    /// ягода в другой комнате не видна (та же проверка комнаты, что у запаха).
     fn sense(&self, pos: Vec2, heading: f32, see_eat: bool) -> Sense {
-        // Комната существа: запах не проходит сквозь стены — ягода пахнет
-        // только из той же комнаты; двери — пока нет (транш 2). На невалидной
-        // карте (точка вне комнат) фильтр не включается — старое поведение.
+        // Комната существа: запах и зрение не проходят сквозь стены — ягода
+        // видна/пахнет только из той же комнаты; двери — пока нет (транш 2).
+        // На невалидной карте (точка вне комнат) фильтр не включается —
+        // старое поведение.
         let my_room = self.world.map.room_at(pos);
         let mut l = 0.0f32;
         let mut r = 0.0f32;
+        let mut lv = 0.0f32;
+        let mut rv = 0.0f32;
         let mut near = false;
         for &id in self.world.all_ids() {
             let Some(ag) = self.world.agent(id) else { continue };
@@ -453,8 +490,9 @@ impl Arena {
             if !Self::berry_edible(ag) {
                 continue;
             }
-            // Ягода за стеной (в другой комнате) не пахнет — проверка комнаты
-            // дешевле дистанции/atan2 и отсекает сквозные запахи сразу.
+            // Ягода за стеной (в другой комнате) не пахнет и не видна —
+            // проверка комнаты дешевле дистанции/atan2 и отсекает сквозные
+            // сигналы сразу.
             if let Some(room) = my_room {
                 if self.world.map.room_at(ag.pos) != Some(room) {
                     continue;
@@ -472,6 +510,17 @@ impl Arena {
                 l += strength * (-rel.sin()).max(0.0);
             } else {
                 r += strength * rel.sin().max(0.0);
+            }
+            // Зрение: та же ягода, но честный конус (|пеленг| ≤ VISION_HALF_FOV)
+            // и линейное затухание по дистанции. Пеленг ровно по курсу (0)
+            // уходит в правый бин — как у запаха (rel < 0 → левый).
+            if rel.abs() <= VISION_HALF_FOV {
+                let vis = (1.0 - dist / VISION_RANGE).clamp(0.0, 1.0);
+                if rel < 0.0 {
+                    lv += vis;
+                } else {
+                    rv += vis;
+                }
             }
         }
 
@@ -498,6 +547,8 @@ impl Arena {
         Sense {
             smell_l: l.min(1.0),
             smell_r: r.min(1.0),
+            vis_l: lv.min(1.0),
+            vis_r: rv.min(1.0),
             wall_l,
             wall_r,
             food_near: near,
@@ -650,8 +701,15 @@ mod tests {
             let berry = a.add_berry(Vec2::new(55.0, 15.0));
             let h0 = a.critters[0].wall_hits;
             let mut ate = false;
+            let mut saw_vision = false;
             for _ in 0..800 {
                 a.step();
+                // Стадия B: проводка зрения жива — снимок виз. сигнала арены
+                // (ягода видна в той же комнате в конусе курса). Если бы
+                // зрение не было подключено к существам, флаг остался бы 0.
+                if a.critters[0].vis_l > 0.0 || a.critters[0].vis_r > 0.0 {
+                    saw_vision = true;
+                }
                 // Съедена = отрастает (vars[1] > 0).
                 if a
                     .world
@@ -664,6 +722,10 @@ mod tests {
                 }
             }
             assert!(ate, "существо должно объехать стену и съесть ягоду");
+            assert!(
+                saw_vision,
+                "в ходе объезда зрение должно видеть ягоду (стадия B подключена)"
+            );
             assert!(
                 a.critters[0].wall_hits - h0 <= 5,
                 "объезд почти без ударов: {} ударов",
@@ -688,6 +750,13 @@ mod tests {
     /// единиц (эталон 53.46/47.50). Любое будущее переупорядочивание шагов
     /// биохимии (распады/реакции/рецепторы) или сенсорного входа, меняющее
     /// поведение, ломает этот тест громко, а не тихим срывом охоты.
+    ///
+    /// СТАДИЯ B (переякорено): мозг 300 нейронов (зрение + ассоциативный хаб)
+    /// изменил моторный драйв — существо ест раньше/прямее: GLUCOSE@200 упирается
+    /// в потолок 255 (было 254.877), HUNGER@200 58.27 (было 53.46), PAIN@200 40.0
+    /// (было 47.50), wall_hits по-прежнему 0. Эталон переснят с подключённой
+    /// стадии B (см. переменную DIOMA_RECORD_TRACE в тесте) — сторож остаётся
+    /// чувствительным: любые изменения шагов биохимии/сенсоров сдвинут значения.
     #[test]
     fn biochemistry_trace_is_stable() {
         let mut map = WorldMap::default();
@@ -699,6 +768,21 @@ mod tests {
         a.critters[0].creature.blood.conc[chem::HUNGER] = 255.0;
         a.add_berry(Vec2::new(55.0, 15.0));
 
+        // ВРЕМЕННО: печать новых эталонных значений стадии B.
+        if std::env::var("DIOMA_RECORD_TRACE").is_ok() {
+            for _ in 0..200 {
+                a.step();
+            }
+            let conc = &a.critters[0].creature.blood.conc;
+            println!("TRACE@200 GLUCOSE={:.9} HUNGER={:.9} PAIN={:.9} FATIGUE={:.9} SEROTONIN={:.9} ACETYLCHOLINE={:.9} wall_hits={}", conc[chem::GLUCOSE], conc[chem::HUNGER], conc[chem::PAIN], conc[chem::FATIGUE], conc[chem::SEROTONIN], conc[chem::ACETYLCHOLINE], a.critters[0].wall_hits);
+            for _ in 200..300 {
+                a.step();
+            }
+            let conc = &a.critters[0].creature.blood.conc;
+            println!("TRACE@300 HUNGER={:.9} SEROTONIN={:.9} ACETYLCHOLINE={:.9} wall_hits={}", conc[chem::HUNGER], conc[chem::SEROTONIN], conc[chem::ACETYLCHOLINE], a.critters[0].wall_hits);
+            return;
+        }
+
         for _ in 0..200 {
             a.step();
         }
@@ -707,28 +791,28 @@ mod tests {
 
         // Тик 200 (после еды): глюкоза/голод/боль/усталость/серотонин/внимание.
         assert!(
-            close(conc[chem::GLUCOSE], 254.876998901),
-            "GLUCOSE@200: {} ≠ 254.876998901", conc[chem::GLUCOSE]
+            close(conc[chem::GLUCOSE], 255.000000000),
+            "GLUCOSE@200: {} ≠ 255.000000000", conc[chem::GLUCOSE]
         );
         assert!(
-            close(conc[chem::HUNGER], 53.462142944),
-            "HUNGER@200: {} ≠ 53.462142944", conc[chem::HUNGER]
+            close(conc[chem::HUNGER], 58.274890900),
+            "HUNGER@200: {} ≠ 58.274890900", conc[chem::HUNGER]
         );
         assert!(
-            close(conc[chem::PAIN], 47.501640320),
-            "PAIN@200: {} ≠ 47.501640320", conc[chem::PAIN]
+            close(conc[chem::PAIN], 40.000000000),
+            "PAIN@200: {} ≠ 40.000000000", conc[chem::PAIN]
         );
         assert!(
-            close(conc[chem::FATIGUE], 100.503349304),
-            "FATIGUE@200: {} ≠ 100.503349304", conc[chem::FATIGUE]
+            close(conc[chem::FATIGUE], 60.740604401),
+            "FATIGUE@200: {} ≠ 60.740604401", conc[chem::FATIGUE]
         );
         assert!(
-            close(conc[chem::SEROTONIN], 36.399509430),
-            "SEROTONIN@200: {} ≠ 36.399509430", conc[chem::SEROTONIN]
+            close(conc[chem::SEROTONIN], 36.129989624),
+            "SEROTONIN@200: {} ≠ 36.129989624", conc[chem::SEROTONIN]
         );
         assert!(
-            close(conc[chem::ACETYLCHOLINE], 16.076913834),
-            "ACETYLCHOLINE@200: {} ≠ 16.076913834", conc[chem::ACETYLCHOLINE]
+            close(conc[chem::ACETYLCHOLINE], 15.111289024),
+            "ACETYLCHOLINE@200: {} ≠ 15.111289024", conc[chem::ACETYLCHOLINE]
         );
         // Тик 300: голод догорает, фон благополучия растёт.
         for _ in 200..300 {
@@ -736,21 +820,25 @@ mod tests {
         }
         let conc = &a.critters[0].creature.blood.conc;
         assert!(
-            close(conc[chem::HUNGER], 18.559843063),
-            "HUNGER@300: {} ≠ 18.559843063", conc[chem::HUNGER]
+            close(conc[chem::HUNGER], 12.472839355),
+            "HUNGER@300: {} ≠ 12.472839355", conc[chem::HUNGER]
         );
         assert!(
-            close(conc[chem::SEROTONIN], 42.114841461),
-            "SEROTONIN@300: {} ≠ 42.114841461", conc[chem::SEROTONIN]
+            close(conc[chem::SEROTONIN], 44.297607422),
+            "SEROTONIN@300: {} ≠ 44.297607422", conc[chem::SEROTONIN]
         );
         assert!(
-            close(conc[chem::ACETYLCHOLINE], 15.032350540),
-            "ACETYLCHOLINE@300: {} ≠ 15.032350540", conc[chem::ACETYLCHOLINE]
+            close(conc[chem::ACETYLCHOLINE], 14.270312309),
+            "ACETYLCHOLINE@300: {} ≠ 14.270312309", conc[chem::ACETYLCHOLINE]
         );
-        // Траектория эталона: без ударов о стену (сенсорный вход не искажён).
+        // Траектория эталона: стадия B — существо ест раньше (виз. гоминг) и
+        // после еды продолжает охоту, ворочая в L-углу: 22 удара за тики
+        // 200..300 детерминированы (см. запись DIOMA_RECORD_TRACE: wall_hits
+        // на 200 — 0, на 300 — 22). Химия выше — основной сторож; счётчик
+        // фиксирует траекторию целиком.
         assert_eq!(
-            a.critters[0].wall_hits, 0,
-            "эталонная охота без ударов: {} ударов", a.critters[0].wall_hits
+            a.critters[0].wall_hits, 22,
+            "эталонная траектория стадии B: {} ударов", a.critters[0].wall_hits
         );
     }
 
@@ -1052,6 +1140,97 @@ mod tests {
         // Боковая стена (курс вдоль неё): только одна проба — не «прямо».
         let lateral = arena.sense(Vec2::new(1.5, 10.0), std::f32::consts::FRAC_PI_2, false);
         assert!(!lateral.wall, "боковая стена — не стена по курсу: {lateral:?}");
+    }
+
+    // ─── Зрение (стадия B: конус ±VISION_HALF_FOV, дальность VISION_RANGE) ──
+
+    /// Зрительный конус: ягода в левой половине конуса (пеленг −45°) →
+    /// vis_l > vis_r; в правой (+45°) → vis_r > vis_l; строго позади
+    /// (пеленг π) — не видна. Ягода ровно по курсу (пеленг 0) уходит
+    /// в правый бин — как у запаха (rel < 0 → левый, 0 → правый).
+    #[test]
+    fn vision_cone_left_right_and_behind() {
+        let fresh = || {
+            let mut map = WorldMap::default();
+            map.add_room(0.0, 0.0, 40.0, 40.0);
+            Arena::new(5, map)
+        };
+        let pos = Vec2::new(20.0, 20.0);
+        let heading = 0.0f32;
+
+        // Слева: ягода под −45° (dx=+10, dy=−10), dist 14.1 → vis ≈ 0.65.
+        let mut a = fresh();
+        a.add_berry(Vec2::new(30.0, 10.0));
+        let s = a.sense(pos, heading, false);
+        assert!(
+            s.vis_l > 0.0 && s.vis_r == 0.0,
+            "слева: vis_l={} vis_r={}",
+            s.vis_l,
+            s.vis_r
+        );
+
+        // Справа: ягода под +45° (dx=+10, dy=+10).
+        let mut a = fresh();
+        a.add_berry(Vec2::new(30.0, 30.0));
+        let s = a.sense(pos, heading, false);
+        assert!(
+            s.vis_l == 0.0 && s.vis_r > 0.0,
+            "справа: vis_l={} vis_r={}",
+            s.vis_l,
+            s.vis_r
+        );
+
+        // Позади (пеленг π): пеленг вне конуса — не видна.
+        let mut a = fresh();
+        a.add_berry(Vec2::new(10.0, 20.0));
+        let s = a.sense(pos, heading, false);
+        assert!(
+            s.vis_l == 0.0 && s.vis_r == 0.0,
+            "позади: vis_l={} vis_r={}",
+            s.vis_l,
+            s.vis_r
+        );
+
+        // Ровно по курсу (пеленг 0): правый бин (спецификация Sense).
+        let mut a = fresh();
+        a.add_berry(Vec2::new(30.0, 20.0));
+        let s = a.sense(pos, heading, false);
+        assert!(
+            s.vis_r > 0.0 && s.vis_l == 0.0,
+            "по курсу: vis_l={} vis_r={}",
+            s.vis_l,
+            s.vis_r
+        );
+    }
+
+    /// Зрение не проходит сквозь стены: ягода в соседней комнате у общей
+    /// стены не видна существу в своей комнате (та же проверка комнаты,
+    /// что у запаха — дистанция и пеленг при этом в конусе); зайдя в ту же
+    /// комнату, существо видит её.
+    #[test]
+    fn vision_blocked_by_room() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        map.add_room(40.0, 0.0, 80.0, 20.0);
+        let mut arena = Arena::new(3, map);
+        // Ягода в комнате B у общей стены, ровно по курсу существа из A.
+        arena.add_berry(Vec2::new(45.0, 10.0));
+
+        // Существо в комнате A: дистанция 10, пеленг 0 — видно было бы,
+        // если бы стены были прозрачны. Комната другая — зрение гасится.
+        let in_a = arena.sense(Vec2::new(35.0, 10.0), 0.0, false);
+        assert_eq!(
+            in_a.vis_l + in_a.vis_r,
+            0.0,
+            "зрение не должно проходить сквозь стену: {in_a:?}"
+        );
+
+        // Переходим в комнату B — та же ягода видна (дистанция 3, пеленг 0).
+        let in_b = arena.sense(Vec2::new(42.0, 10.0), 0.0, false);
+        assert!(
+            in_b.vis_l + in_b.vis_r > 0.0,
+            "в той же комнате зрение должно видеть: {in_b:?}"
+        );
     }
 
     // ─── Berry-API (Arena::berry_info) ────────────────────────────────────

@@ -22,7 +22,8 @@ fn main() {
     let sense = Sense {
         smell_l: 0.6,
         smell_r: 0.3,
-        wall_l: 0.0,
+        vis_l: 0.0,
+        vis_r: 0.0,        wall_l: 0.0,
         wall_r: 0.0,
         food_near: true,
         wall: false,

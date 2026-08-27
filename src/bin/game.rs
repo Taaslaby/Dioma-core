@@ -347,6 +347,13 @@ impl Game {
                     onoff(c.alive),
                     sex_glyph(c.sex),
                 ));
+                // Стадия B: зрение существа (левый/правый глаз-бин).
+                lines.push(format!(
+                    "  vizhu edu: {} (L {:.2} R {:.2})",
+                    if c.vis_l > 0.0 || c.vis_r > 0.0 { "da" } else { "net" },
+                    c.vis_l,
+                    c.vis_r,
+                ));
             } else {
                 lines.push(format!("vydeleno #{}: net v snimke", sel.0));
             }

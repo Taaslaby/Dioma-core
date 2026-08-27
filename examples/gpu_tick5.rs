@@ -11,8 +11,8 @@ fn wd(a: &Creature, b: &Creature) -> f32 {
 
 fn main() {
     let seed = 7u64;
-    let s0 = Sense { smell_l: 0.6, smell_r: 0.6, wall_l: 0.9, wall_r: 0.0, food_near: true, wall: true, place: 0, heading: 0.0, see_eat: false };
-    let s1 = Sense { smell_l: 0.1, smell_r: 0.1, wall_l: 0.0, wall_r: 0.0, food_near: true, wall: false, place: 0, heading: 0.0, see_eat: false };
+    let s0 = Sense { smell_l: 0.6, smell_r: 0.6, vis_l: 0.0, vis_r: 0.0, wall_l: 0.9, wall_r: 0.0, food_near: true, wall: true, place: 0, heading: 0.0, see_eat: false };
+    let s1 = Sense { smell_l: 0.1, smell_r: 0.1, vis_l: 0.0, vis_r: 0.0, wall_l: 0.0, wall_r: 0.0, food_near: true, wall: false, place: 0, heading: 0.0, see_eat: false };
 
     // Полные
     let mut cpu1 = Creature::new(seed);

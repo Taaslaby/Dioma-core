@@ -1,7 +1,7 @@
 //! Builder pattern для удобного создания существ с различными конфигурациями.
 
 use crate::creature::{Creature, CreatureGenome};
-use crate::engine::grow::{avoidance_layout, grow, grow_gpu};
+use crate::engine::grow::{grow, grow_gpu, stage_b_layout};
 use crate::engine::neurons::PlasticityParams;
 
 /// Builder для создания существ с гибкой конфигурацией.
@@ -104,15 +104,15 @@ impl CreatureBuilder {
 
         if self.gpu_grown {
             // GPU рост + GPU динамика
-            let grown = grow_gpu(&avoidance_layout(), &genome.steering, self.seed);
+            let grown = grow_gpu(&stage_b_layout(), &genome.steering, self.seed);
             Creature::from_genome_grown(genome, self.seed, grown)
         } else if self.use_gpu {
             // CPU рост + GPU динамика
-            let grown = grow(&avoidance_layout(), &genome.steering, self.seed);
+            let grown = grow(&stage_b_layout(), &genome.steering, self.seed);
             Creature::assemble_gpu(grown, genome, self.seed)
         } else if let Some(params) = self.plasticity_params {
             // CPU с кастомными параметрами
-            let grown = grow(&avoidance_layout(), &genome.steering, self.seed);
+            let grown = grow(&stage_b_layout(), &genome.steering, self.seed);
             Creature::assemble(grown, genome, self.seed, params)
         } else {
             // Дефолтное CPU существо

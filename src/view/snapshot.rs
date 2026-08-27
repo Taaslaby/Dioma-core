@@ -56,6 +56,9 @@ pub struct CritterView {
     pub food_eaten: u32,
     /// Пол существа (самец/самка; без игровых эффектов до транша 3).
     pub sex: Sex,
+    /// Зрение (0..1): ягода в левом/правом поле зрения (снимок `Critter.vis_*`).
+    pub vis_l: f32,
+    pub vis_r: f32,
 }
 
 /// Ягода: позиция + фаза роста 0..1 (1 = спелая).
@@ -99,6 +102,8 @@ impl SimView {
                     wants_food: cr.wants_food(),
                     food_eaten: cr.food_eaten(),
                     sex: cr.sex(),
+                    vis_l: c.vis_l,
+                    vis_r: c.vis_r,
                 }
             })
             .collect();

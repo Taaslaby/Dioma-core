@@ -7,7 +7,7 @@
 //! Координаты, столкновения, еда и социальное наблюдение принадлежат хосту
 //! (`crate::sim::Arena`).
 use crate::body::metabolism::{chem, locus, Blood};
-use crate::engine::grow::{avoidance_layout, grow, grow_gpu};
+use crate::engine::grow::{grow, grow_gpu, stage_b_layout};
 use crate::engine::instincts::Instinct;
 use crate::engine::neurons::{gains_from, Brain, PlasticityParams, BRAIN_STEPS_PER_TICK};
 use crate::rng::XorShift;
@@ -22,9 +22,11 @@ pub use builder::CreatureBuilder;
 pub use genome::{CreatureGenome, MetabolismGene, Sex};
 pub use metrics::{BloodState, BrainStats, CreatureEvent, CreatureMetrics};
 
-/// Регионы avoidance_layout (см. engine::grow::avoidance_layout).
-/// Индексы регионов мозга в layout'е избегания (см. [`crate::engine::grow::avoidance_layout`]).
+/// Регионы stage_b_layout (см. engine::grow::stage_b_layout).
+/// Индексы регионов мозга в layout'е стадии B (см. [`crate::engine::grow::stage_b_layout`]).
 /// Публичные: научные тулзы ([`crate::sci`]) и оверлеи группируют нейроны по регионам.
+/// Ядро 0..6 — как в avoidance_layout; зрение и ассоциативный слой добавлены
+/// В КОНЕЦ (append-only): старые индексы не сдвинуты.
 pub const REGION_SL: usize = 0; // запах слева
 pub const REGION_SR: usize = 1; // запах справа
 pub const REGION_WL: usize = 2; // стена слева
@@ -32,6 +34,10 @@ pub const REGION_WR: usize = 3; // стена справа
 pub const REGION_I: usize = 4; // тормозной интернейрон
 pub const REGION_ML: usize = 5; // мотор слева (поворот влево)
 pub const REGION_MR: usize = 6; // мотор справа (поворот вправо)
+pub const REGION_VL: usize = 7; // зрение слева (глаз-бин)
+pub const REGION_VR: usize = 8; // зрение справа (глаз-бин)
+pub const REGION_ASSOC_E: usize = 9; // ассоциативный хаб (возбуждающий)
+pub const REGION_ASSOC_I: usize = 10; // тормозной контур хаба
 
 /// Базовый фоновый ток мозга (тонус нейронов).
 const BASAL_EXT: f32 = 0.12;
@@ -65,14 +71,23 @@ const LEARNED_DOPAMINE_SCALE: f32 = 100.0;
 const LEARNED_PRE_DRIVE: f32 = 4.0;
 /// Ток ко-активации post-региона при прожигании выученного инстинкта.
 const LEARNED_POST_DRIVE: f32 = 8.0;
-/// Прямые рефлекторные пары «сенсор → мотор» (регионы avoidance_layout):
+/// Прямые рефлекторные пары «сенсор → мотор» (регионы stage_b_layout):
 /// только они сворачиваются в инстинкты. Тормозные пути через I не
 /// передаются — рефлекс это стимул→действие, а не тонкая настройка.
+/// Зрения (VL/VR) здесь НЕТ намеренно: зрение учится через ассоциативный
+/// хаб обычным STDP и в инстинкт-гены не сворачивается («зрение учится,
+/// а не прошивается — ради гибкой охоты», см. гейны в `assemble_impl`).
 const REFLEX_PAIRS: [(usize, usize); 4] = [(0, 5), (1, 6), (2, 6), (3, 5)]; // SL→ML, SR→MR, WL→MR, WR→ML
 /// Масштаб «запах [0..1] → ток сенсорного региона».
 const SMELL_CURRENT: f32 = 4.0;
 /// Масштаб «стена [0..1] → ток региона стены».
 const WALL_CURRENT: f32 = 4.0;
+/// Масштаб «зрение [0..1] → ток зрительного региона»: 0.7 × SMELL_CURRENT.
+/// Зрение — дальнобойный, но слабый сигнал: подсказывает курс на дистанции,
+/// где запаховый градиент ещё не различает стороны, но не заглушает обоняние
+/// у рта. 0.7 подобрано на детур-тесте (см. отчёт): охота стала прямее,
+/// но запах остался главным рулём у цели.
+const VISION_CURRENT: f32 = 0.7 * SMELL_CURRENT;
 /// Порог близости стены, с которого фиксируется облегчение (стена отодвинулась).
 const RELIEF_MIN: f32 = 0.05;
 /// Дофамин за облегчение (стена отодвинулась — побег успешен).
@@ -121,6 +136,13 @@ pub struct Sense {
     pub smell_l: f32,
     /// 0..1 — запах еды справа.
     pub smell_r: f32,
+    /// 0..1 — зрение: съедобная ягода в левой половине поля зрения
+    /// (относительно курса, |пеленг| ≤ VISION_HALF_FOV). Дальность —
+    /// VISION_RANGE (мировых юнитов); стены и комнаты непрозрачны, как
+    /// для запаха. Заполняет хост ([`crate::sim::Arena::sense`]).
+    pub vis_l: f32,
+    /// 0..1 — зрение: съедобная ягода в правой половине поля зрения.
+    pub vis_r: f32,
     /// 0..1 — близость стены слева (относительно курса).
     pub wall_l: f32,
     /// 0..1 — близость стены справа.
@@ -160,6 +182,8 @@ struct Bounds {
     sr: (usize, usize),
     wl: (usize, usize),
     wr: (usize, usize),
+    vl: (usize, usize),
+    vr: (usize, usize),
     ml: (usize, usize),
     mr: (usize, usize),
 }
@@ -208,7 +232,7 @@ impl Creature {
     /// `lr = 0` отключает обучение — мозг-«камень» для сравнения).
     pub fn new_with_params(seed: u64, params: PlasticityParams) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow(&avoidance_layout(), &genome.steering, seed);
+        let grown = grow(&stage_b_layout(), &genome.steering, seed);
         Self::assemble(grown, genome, seed, params)
     }
 
@@ -218,7 +242,7 @@ impl Creature {
     /// (см. `engine::neurons::Brain::new_gpu`).
     pub fn new_gpu(seed: u64) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow(&avoidance_layout(), &genome.steering, seed);
+        let grown = grow(&stage_b_layout(), &genome.steering, seed);
         Self::assemble_gpu(grown, genome, seed)
     }
 
@@ -227,7 +251,7 @@ impl Creature {
     /// тихо падает на CPU (прометей сам выбирает бэкенд).
     pub fn new_gpu_grown(seed: u64) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow_gpu(&avoidance_layout(), &genome.steering, seed);
+        let grown = grow_gpu(&stage_b_layout(), &genome.steering, seed);
         Self::assemble_gpu(grown, genome, seed)
     }
 
@@ -241,7 +265,7 @@ impl Creature {
     /// grown-весов), не движковый дефолт 6: иначе обучение не могло бы
     /// потенцировать пути, и эффект Болдуина был бы невозможен.
     pub fn from_genome(genome: CreatureGenome, seed: u64) -> Self {
-        let grown = grow(&avoidance_layout(), &genome.steering, seed);
+        let grown = grow(&stage_b_layout(), &genome.steering, seed);
         Self::from_genome_grown(genome, seed, grown)
     }
 
@@ -352,9 +376,33 @@ impl Creature {
         // где пол выбирается случайно при наследовании.
         let mut genome = genome;
         genome.sex = Sex::from_seed(seed);
+        // Стадия B: исходящие рёбра ассоциативного хаба выведены из мягкого
+        // гомеостаза ядра (см. `PlasticityParams::homeo_exclude_pre`) — хаб
+        // учится дофамином, но не участвует в защите рефлексов от наказания.
+        let mut params = params;
+        params.homeo_exclude_pre = vec![REGION_ASSOC_E, REGION_ASSOC_I];
+        // Гейны анатомии (стадия B, 11 регионов). Ядро 0..6 — как раньше.
+        // Зрение учится, а не прошивается — ради гибкой охоты: прямые
+        // VL/VR→ML/MR аксоны схемы (stage_b_layout) получают НУЛЕВОЙ гейн и
+        // выпадают при сборке мозга; зрение входит в моторы ТОЛЬКО через
+        // ассоциативный хаб (VL/VR→ASSOC_E→ML/MR) обычным STDP — eligibility
+        // глобальная, дофамин сам решает, какой «зрительный руль» нажить.
+        // В REFLEX_PAIRS зрение не добавляем (инстинктом не рождается).
+        //
+        // Масштабы гейнов хаба (замерено на стадии B, см. отчёт):
+        // - выход хаб→моторы 0.1: у новорождённого необученные веса хаба
+        //   (90 нейронов × медиана 2) не должны ни глушить рефлексы, ни
+        //   раздувать цель мягкого гомеостаза (target_in_sum) — иначе наказание
+        //   стеной больше не перераспределяется на гоминг (гоминг гас).
+        //   Слабый, но живой путь: STDP донашивает его за жизнь;
+        // - рекуррентность ASSOC_E→ASSOC_E 0.4: без неё хаб не звенит
+        //   (1194 спайка/тик на виз. сигнале → помеха моторам), а с полным
+        //   1.0 петля самовозбуждается;
+        // - хаб→ядро (I) 0.2: тоже живёт вне цели гомеостаза ядра.
         let gains = gains_from(
-            7,
+            11,
             &[
+                // ── Ядро рефлексов (как в avoidance_layout) ──
                 (REGION_SL, REGION_ML, 1.0),
                 (REGION_SR, REGION_MR, 1.0),
                 (REGION_SL, REGION_I, 0.8),
@@ -363,6 +411,20 @@ impl Creature {
                 (REGION_WR, REGION_ML, WALL_AVOID_GAIN),
                 (REGION_I, REGION_ML, 1.0),
                 (REGION_I, REGION_MR, 1.0),
+                // ── Зрение → ассоциативный хаб (без прямых VL/VR→мотор) ──
+                (REGION_VL, REGION_ASSOC_E, 1.0),
+                (REGION_VR, REGION_ASSOC_E, 1.0),
+                // ── Хаб: рекуррентность, E/I-контур, слабый выход на моторы ──
+                (REGION_ASSOC_E, REGION_ASSOC_E, 0.4),
+                (REGION_ASSOC_E, REGION_ASSOC_I, 1.0),
+                (REGION_ASSOC_I, REGION_ASSOC_E, 1.0),
+                (REGION_ASSOC_E, REGION_ML, 0.1),
+                (REGION_ASSOC_E, REGION_MR, 0.1),
+                (REGION_ASSOC_I, REGION_ML, 0.1),
+                (REGION_ASSOC_I, REGION_MR, 0.1),
+                // Тормозной контур хаба в ядро — слабый (вне цели гомеостаза).
+                (REGION_ASSOC_E, REGION_I, 0.2),
+                (REGION_ASSOC_I, REGION_I, 0.2),
             ],
         );
         let brain = if gpu {
@@ -378,6 +440,8 @@ impl Creature {
             sr: brain.region_bounds(REGION_SR),
             wl: brain.region_bounds(REGION_WL),
             wr: brain.region_bounds(REGION_WR),
+            vl: brain.region_bounds(REGION_VL),
+            vr: brain.region_bounds(REGION_VR),
             ml: brain.region_bounds(REGION_ML),
             mr: brain.region_bounds(REGION_MR),
         };
@@ -490,6 +554,17 @@ impl Creature {
         }
         for e in &mut ext[self.bounds.wr.0..self.bounds.wr.1] {
             *e += wr_current;
+        }
+        // Зрение: как запах, но слабее (VISION_CURRENT = 0.7 × SMELL_CURRENT)
+        // и со своим масштабом дальности — см. const'ы. Регионы VL/VR в конце
+        // мозга (append-only), ток не трогает ядро рефлексов.
+        let vl_current = sense.vis_l * gain * VISION_CURRENT;
+        let vr_current = sense.vis_r * gain * VISION_CURRENT;
+        for e in &mut ext[self.bounds.vl.0..self.bounds.vl.1] {
+            *e += vl_current;
+        }
+        for e in &mut ext[self.bounds.vr.0..self.bounds.vr.1] {
+            *e += vr_current;
         }
         // Пейсмейкер «сердце»: тонический ток прикладывается каждый тик
         // (ext пересчитывается целиком — иначе `fill` выше затёр бы ток,

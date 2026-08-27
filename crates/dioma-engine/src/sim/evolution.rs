@@ -297,6 +297,8 @@ impl Evolution {
             see_eat: false,
             sleeping: false,
             sleep_ticks: 0,
+            vis_l: 0.0,
+            vis_r: 0.0,
         });
         *child_idx += 1;
     }

@@ -85,6 +85,15 @@ pub struct PlasticityParams {
     /// Домножать ли Δw дофамина на syn_scale (HAAP). false = шаг обучения
     /// в LIF-единицах (lr·D·e), клэмп всё равно w_max·syn_scale.
     pub haap_dopamine_scaled: bool,
+    /// Регионы-ПРЕ, чьи исходящие рёбра исключены из мягкого гомеостаза
+    /// (target_in_sum / normalize / sleep_consolidate). Стадия B: исходящие
+    /// рёбра ассоциативного хаба (ASSOC_E/ASSOC_I) не должны участвовать
+    /// в гомеостазе ядра рефлексов — иначе необученные веса хаба в моторах
+    /// раздувают цель нормализации, и после LTD ядра (наказание стеной)
+    /// восстановительная масса утекает в тихие рёбра хаба вместо гоминга
+    /// (гоминг гаснет: замерено на стадии B, см. отчёт). Пластичность
+    /// (дофамин) хаба не затрагивается — он учится как обычно.
+    pub homeo_exclude_pre: Vec<usize>,
 }
 
 impl Default for PlasticityParams {
@@ -104,6 +113,7 @@ impl Default for PlasticityParams {
             haap_syn_scale: HAAP_SYN_SCALE,
             haap_syn_cap: HAAP_SYN_CAP,
             haap_dopamine_scaled: true,
+            homeo_exclude_pre: Vec::new(),
         }
     }
 }
@@ -374,7 +384,11 @@ impl Brain {
         }
         let mut target_in_sum = vec![0.0f32; n_neurons];
         for idx in 0..n_syn {
-            if !inh_syn[idx] {
+            if !inh_syn[idx]
+                && !params
+                    .homeo_exclude_pre
+                    .contains(&grown.region_of[pre_of[idx]])
+            {
                 target_in_sum[post_of[idx]] += vv[idx];
             }
         }
@@ -1021,9 +1035,12 @@ impl Brain {
         self.norm_sums.resize(self.n, 0.0f32);
         let sums = &mut self.norm_sums;
         for idx in 0..self.pre_of.len() {
-            if !self.inh_syn[idx] {
-                sums[self.post_of[idx]] += self.dynamics.values()[idx];
+            if self.inh_syn[idx]
+                || self.params.homeo_exclude_pre.contains(&self.region_of[self.pre_of[idx]])
+            {
+                continue;
             }
+            sums[self.post_of[idx]] += self.dynamics.values()[idx];
         }
         let rate = self.params.homeo_rate;
         let now = self.step_count;
@@ -1032,6 +1049,9 @@ impl Brain {
                 continue;
             }
             if now < self.thaw_at[idx] {
+                continue;
+            }
+            if self.params.homeo_exclude_pre.contains(&self.region_of[self.pre_of[idx]]) {
                 continue;
             }
             let post = self.post_of[idx];
@@ -1092,7 +1112,12 @@ impl Brain {
     pub fn sleep_consolidate(&mut self, alpha: f32) {
         let mut sums = vec![0.0f32; self.n];
         for idx in 0..self.pre_of.len() {
-            if !self.inh_syn[idx] {
+            if !self.inh_syn[idx]
+                && !self
+                    .params
+                    .homeo_exclude_pre
+                    .contains(&self.region_of[self.pre_of[idx]])
+            {
                 sums[self.post_of[idx]] += self.dynamics.values()[idx];
             }
         }

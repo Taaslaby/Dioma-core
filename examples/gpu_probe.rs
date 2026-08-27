@@ -28,7 +28,8 @@ fn main() {
             Sense {
                 smell_l: (phase.sin() * 0.5 + 0.5).min(1.0),
                 smell_r: ((phase + 1.7).sin() * 0.5 + 0.5).min(1.0),
-                wall_l: if i % 23 == 0 { 0.8 } else { 0.0 },
+                vis_l: 0.0,
+                vis_r: 0.0,                wall_l: if i % 23 == 0 { 0.8 } else { 0.0 },
                 wall_r: if i % 31 == 0 { 0.8 } else { 0.0 },
                 ..Default::default()
             }

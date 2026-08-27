@@ -172,6 +172,8 @@ impl SciApp {
         Sense {
             smell_l: 0.5 + 0.5 * (t * 0.05).sin(),
             smell_r: 0.5 + 0.5 * (t * 0.043).cos(),
+            vis_l: 0.0,
+            vis_r: 0.0,
             wall_l: ((t * 0.11).sin() * 0.5 + 0.5).min(1.0),
             wall_r: ((t * 0.09).cos() * 0.5 + 0.5).min(1.0),
             food_near: tick % 90 == 0,
