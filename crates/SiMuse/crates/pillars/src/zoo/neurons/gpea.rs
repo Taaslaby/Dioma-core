@@ -112,7 +112,7 @@ pub mod gpea {
     #[allow(dead_code)]
     pub const CA_VOL: f32 = 3.355e-11;
     #[allow(dead_code)]
-    pub const CA_AREA: f32 = 2513.2741228718345; // π·40·20 µm² (reference geometry)
+    pub const CA_AREA: f32 = 2_513.274_2; // π·40·20 µm² (reference geometry)
 
     // Ionic concentrations (global in the fly model) — mM
     pub const NA_NAI: f32 = 10.0;

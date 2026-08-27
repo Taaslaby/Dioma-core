@@ -70,7 +70,6 @@ impl Default for StdpConfig {
 /// `fast_exp` over the gap would be more accurate, but we reproduce the dense
 /// kernel's rounding exactly; the total multiply count is the same the dense
 /// path already spent per step, just batched at events/rewards).
-
 pub struct Brain {
     n_neurons: usize,
     pre_of: Vec<u32>,
