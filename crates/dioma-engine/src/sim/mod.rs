@@ -10,11 +10,14 @@
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
 use crate::creature::{Action, Creature, Sense};
+use crate::engine::perf::flush_denormals;
 use crate::env::map::WorldMap;
 use crate::env::math::Vec2;
 use crate::env::{AgentId, Season, Substance, TimeOfDay, WorldClock};
 use crate::world::{Cls, World, SLOT_EAT};
+use rayon::prelude::*;
 use std::f32::consts::TAU;
+use std::sync::OnceLock;
 
 pub mod berry;
 pub mod evolution;
@@ -273,6 +276,14 @@ impl Arena {
     }
 
     /// Один такт: мир (сообщения/скрипты/физика) → сон → существа → еда → рост.
+    ///
+    /// Горячий путь параллелизован (rayon, см. [`sim_pool`]): фазы A (сенсоры)
+    /// и B (тикание мозгов) — независимые существа — считаются на пуле потоков;
+    /// фаза C (движение/еда/социальное/климат/рост ягод) остаётся
+    /// последовательной — она мутирует мир/карту и требует порядка. Детерминизм
+    /// бит-в-бит: тик каждого существа выполняется ЦЕЛИКОМ на одном потоке
+    /// (нет реасоциации float между потоками), порядок пачки действий
+    /// сохраняется (rayon collect по индексам), фаза C не тронута.
     pub fn step(&mut self) {
         self.tick += 1;
         // 0. Мир: доставка сообщений (в т.ч. вчерашний EAT → «хрум» → die),
@@ -304,36 +315,64 @@ impl Arena {
 
         // 1. Сенсоры (по живым ягодам мира + память о соседе за едой) → решения.
         //    Только бодрствующие: спящие не чувствуют и не действуют.
-        let senses: Vec<Option<Sense>> = self
-            .critters
-            .iter()
-            .map(|c| {
-                if c.sleeping {
-                    None
-                } else {
-                    Some(self.sense(c.pos, c.heading, c.see_eat))
-                }
-            })
-            .collect();
-        for c in &mut self.critters {
-            c.see_eat = false; // окно наблюдения закрылось
-        }
-        let mut actions: Vec<(usize, Action)> = Vec::with_capacity(self.critters.len());
-        for (i, c) in self.critters.iter_mut().enumerate() {
-            match &senses[i] {
-                Some(sense) => {
-                    // Снимок зрения для оверлеев/тестов (поля Critter.vis_*).
-                    c.vis_l = sense.vis_l;
-                    c.vis_r = sense.vis_r;
-                    actions.push((i, c.creature.tick(sense)));
-                }
-                None => {
-                    // Спящий не видит: снимок обнуляется, мозг не вызывается.
-                    c.vis_l = 0.0;
-                    c.vis_r = 0.0;
-                }
+        //
+        //    Фаза A — ПАРАЛЛЕЛЬНО (rayon): sense читает только world и critters
+        //    (иммутабельно; поля арены расщеплены — borrow-split `critters` +
+        //    `world`, климата/счётчиков фаза A не касается). Каждый критик
+        //    независим → результат не зависит от планировщика; порядок
+        //    collect сохраняется (бит-в-бит как последовательный проход).
+        //    FTZ (MXCSR) — состояние ПОТОКА: воркеры пула мозг не создавали,
+        //    поэтому каждая closure выставляет флаг вручную (см. engine::perf:
+        //    без FTZ STDP-следы в денормалях замедляют SIMD ~×10 и меняют
+        //    семантику распада). 2 инструкции, дёшево.
+        let actions: Vec<(usize, Action)> = sim_pool().install(|| {
+            let senses: Vec<Option<Sense>> = {
+                let Arena { critters, world, .. } = self;
+                critters
+                    .par_iter()
+                    .map(|c| {
+                        flush_denormals();
+                        if c.sleeping {
+                            None
+                        } else {
+                            Some(Self::sense_world(world, c.pos, c.heading, c.see_eat))
+                        }
+                    })
+                    .collect()
+            };
+            for c in &mut self.critters {
+                c.see_eat = false; // окно наблюдения закрылось
             }
-        }
+            //    Фаза B — ПАРАЛЛЕЛЬНО: каждый критик тикает СВОЙ мозг (свой
+            //    ext/spike_hist/кровь/гиппокамп). Мир не читается — сенсоры
+            //    уже материализованы в фазе A, так что critters — единственный
+            //    mutable-займ (disjoint per element). Спящие не получают Action
+            //    ровно как в последовательном проходе (пачка содержит только
+            //    бодрствующих в порядке индексов; filter_map порядок хранит).
+            let actions: Vec<(usize, Action)> = self
+                .critters
+                .par_iter_mut()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    flush_denormals();
+                    match &senses[i] {
+                        Some(sense) => {
+                            // Снимок зрения для оверлеев/тестов (поля Critter.vis_*).
+                            c.vis_l = sense.vis_l;
+                            c.vis_r = sense.vis_r;
+                            Some((i, c.creature.tick(sense)))
+                        }
+                        None => {
+                            // Спящий не видит: снимок обнуляется, мозг не вызывается.
+                            c.vis_l = 0.0;
+                            c.vis_r = 0.0;
+                            None
+                        }
+                    }
+                })
+                .collect();
+            actions
+        });
 
         // 2. Движение по комнатам (стены/переходы — физика мира).
         //    Удар о стену = кандидат вне всех комнат: позиция зажимается на
@@ -472,19 +511,29 @@ impl Arena {
     /// почти нет), зрение — честным конусом ±VISION_HALF_FOV с линейным
     /// затуханием до VISION_RANGE. Стены и комнаты по-прежнему непрозрачны:
     /// ягода в другой комнате не видна (та же проверка комнаты, что у запаха).
+    ///
+    /// (Тестовый мост: горячий путь зовёт [`Self::sense_world`].)
+    #[cfg(test)]
     fn sense(&self, pos: Vec2, heading: f32, see_eat: bool) -> Sense {
+        Self::sense_world(&self.world, pos, heading, see_eat)
+    }
+
+    /// Тело `sense` над одним `&World` (иммутабельно). Вызывается и из
+    /// обёртки `&self`, и из параллельной фазы A `Arena::step` (borrow-split:
+    /// воркеры rayon видят только `world` — климат/счётчики не читаются).
+    fn sense_world(world: &World, pos: Vec2, heading: f32, see_eat: bool) -> Sense {
         // Комната существа: запах и зрение не проходят сквозь стены — ягода
         // видна/пахнет только из той же комнаты; двери — пока нет (транш 2).
         // На невалидной карте (точка вне комнат) фильтр не включается —
         // старое поведение.
-        let my_room = self.world.map.room_at(pos);
+        let my_room = world.map.room_at(pos);
         let mut l = 0.0f32;
         let mut r = 0.0f32;
         let mut lv = 0.0f32;
         let mut rv = 0.0f32;
         let mut near = false;
-        for &id in self.world.all_ids() {
-            let Some(ag) = self.world.agent(id) else { continue };
+        for &id in world.all_ids() {
+            let Some(ag) = world.agent(id) else { continue };
             // Отрастающие ягоды не пахнут и не «у рта» — иначе существо
             // залипало бы у пустой ягоды.
             if !Self::berry_edible(ag) {
@@ -494,7 +543,7 @@ impl Arena {
             // проверка комнаты дешевле дистанции/atan2 и отсекает сквозные
             // сигналы сразу.
             if let Some(room) = my_room {
-                if self.world.map.room_at(ag.pos) != Some(room) {
+                if world.map.room_at(ag.pos) != Some(room) {
                     continue;
                 }
             }
@@ -537,8 +586,10 @@ impl Arena {
             (heading + std::f32::consts::FRAC_PI_4).cos(),
             (heading + std::f32::consts::FRAC_PI_4).sin(),
         );
-        let wall_l = self.wall_probe(pos, left).max(self.wall_probe(pos, ahead_l));
-        let wall_r = self.wall_probe(pos, right).max(self.wall_probe(pos, ahead_r));
+        let wall_l = Self::wall_probe_world(&world.map, pos, left)
+            .max(Self::wall_probe_world(&world.map, pos, ahead_l));
+        let wall_r = Self::wall_probe_world(&world.map, pos, right)
+            .max(Self::wall_probe_world(&world.map, pos, ahead_r));
 
         // Память места: грубая клетка карты (квадрат PLACE_CELL) + курс.
         let cx = (pos.x / PLACE_CELL).floor() as i64;
@@ -561,13 +612,11 @@ impl Arena {
         }
     }
 
-    /// Близость стены в направлении `dir`: 1.0 у самой стены, затухает к 0 на
-    /// `WALL_LOOKAHEAD` (стена = точка вне всех комнат — та же семантика, что
-    /// у блокировки движения).
-    fn wall_probe(&self, pos: Vec2, dir: Vec2) -> f32 {
+    /// Тело `wall_probe` над одной картой (см. [`Self::sense_world`]).
+    fn wall_probe_world(map: &WorldMap, pos: Vec2, dir: Vec2) -> f32 {
         let mut d = WALL_PROBE_STEP;
         while d <= WALL_LOOKAHEAD {
-            if self.world.map.room_at(pos + dir * d).is_none() {
+            if map.room_at(pos + dir * d).is_none() {
                 return 1.0 - (d / WALL_LOOKAHEAD);
             }
             d += WALL_PROBE_STEP;
@@ -604,6 +653,32 @@ impl Arena {
     pub fn day_phase_fraction(&self) -> f32 {
         WorldClock::day_phase_fraction(self.tick)
     }
+}
+
+/// Пул rayon для параллельных фаз A/B `Arena::step` (лениво, один на процесс).
+///
+/// Число потоков — `std::thread::available_parallelism()` (как у глобального
+/// пула rayon). Отладка/сравнение с последовательным проходом:
+/// `DIOMA_SINGLE_THREAD=1` собирает пул на 1 поток — код тот же (closures
+/// фаз A/B не меняются), поэтому семантика идентична многопоточной; при
+/// 1 критике/1 потоке rayon не подмешивает никакой гонки — результат тот же.
+///
+/// Собственный пул (а не глобальный) — чтобы держать число потоков и их
+/// имена под контролем и не зависеть от `RAYON_NUM_THREADS` процесса.
+fn sim_pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let threads = if std::env::var("DIOMA_SINGLE_THREAD").map(|v| v == "1").unwrap_or(false) {
+            1
+        } else {
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+        };
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|i| format!("dioma-sim-{i}"))
+            .build()
+            .expect("пул rayon для симуляции")
+    })
 }
 
 /// Детерминированный разброс потомства из (id родителя, такт) — без ГСЧ.
