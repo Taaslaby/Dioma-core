@@ -1,0 +1,154 @@
+﻿[workspace]
+resolver = "2"
+members = [
+    "crates/pillars", "crates/pillars-macros", "crates/pillars-cuda",
+    "crates/pillars-wgpu",
+    "crates/pillars-connectome",
+    "crates/prometheus-grow",
+    "crates/t3",
+    "crates/train",
+    "crates/taas-format",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["TaasLab <taaslab@proton.me>"]
+license = "GPL-3.0-only"
+repository = "https://github.com/anomalyco/taas-checkmate"
+homepage = "https://taaslab.ai"
+readme = "README.md"
+keywords = ["neural", "simd", "spiking-neural-networks", "brain-simulation", "wavelets"]
+categories = ["science::neuroscience", "science::robotics", "algorithms::machine-learning"]
+
+# в”Ђв”Ђ GUI (connscope) вЂ” РµРґРёРЅС‹Р№ РёСЃС‚РѕС‡РЅРёРє РІРµСЂСЃРёР№ egui-СЃРµРјРµР№СЃС‚РІР° в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# РџСЂР°РІРёР»Рѕ: РћР”РРќ РјРёРЅРѕСЂ egui РЅР° РІСЃС‘ РїСЂРёР»РѕР¶РµРЅРёРµ (СЃРµР№С‡Р°СЃ 0.35). РљР°Р¶РґС‹Р№ РїР»Р°РіРёРЅ
+# РјР°РїРёС‚СЃСЏ РЅР° СЃРІРѕР№ egui РјРёРЅРѕСЂ; РёСЃС‚РѕС‡РЅРёРє РїСЂР°РІРґС‹ вЂ” `cargo tree -i egui` РґРѕР»Р¶РµРЅ
+# РїРѕРєР°Р·С‹РІР°С‚СЊ СЂРѕРІРЅРѕ РѕРґРЅСѓ РІРµСЂСЃРёСЋ. РќРµ РїРѕРґРЅРёРјР°Р№ РїР»Р°РіРёРЅ РґРѕ РІРµСЂСЃРёРё, С‚СЂРµР±СѓСЋС‰РµР№
+# Р±РѕР»РµРµ РЅРѕРІС‹Р№ egui, РЅРµ РїРѕРґРЅСЏРІ РѕРґРЅРѕРІСЂРµРјРµРЅРЅРѕ eframe.
+[workspace.dependencies]
+# `persistence` вЂ” СЃРѕС…СЂР°РЅСЏРµС‚ egui Memory (РїР°РЅРµР»Рё + `insert_persisted`) РЅР° РґРёСЃРє
+# РјРµР¶РґСѓ Р·Р°РїСѓСЃРєР°РјРё; Р±РµР· РЅРµС‘ РїРµСЂСЃРёСЃС‚РµРЅС‚РЅР°СЏ СЂР°СЃРєР»Р°РґРєР° РґРѕРєР° Р¶РёР»Р° Р±С‹ С‚РѕР»СЊРєРѕ РІ СЃРµСЃСЃРёРё.
+eframe = { version = "0.35", features = ["wgpu", "persistence"] }
+egui-elegance = "0.14"
+egui_graphs = "0.31"
+egui-phosphor = { version = "0.13", default-features = false, features = ["regular", "bold"] }
+# egui_plot РІРµСЂСЃРёРѕРЅРёС‚СЃСЏ РЅРµР·Р°РІРёСЃРёРјРѕ: 0.36 РІСЃС‘ РµС‰С‘ СЃРѕР±РёСЂР°РµС‚СЃСЏ РЅР° egui 0.35.
+egui_plot = "0.36"
+egui-wgpu = "0.35"
+# Р”РѕРєРёРЅРі РґР»СЏ egui 0.35 (0.21 СѓР¶Рµ С‚СЂРµР±СѓРµС‚ egui 0.36 / edition 2024 вЂ” РЅРµ С‚СЂРѕРіР°РµРј).
+# `serde` вЂ” РїРµСЂСЃРёСЃС‚РµРЅС‚РЅРѕСЃС‚СЊ DockState. РџРѕРєР° РѕР±СЉСЏРІР»РµРЅ В«РЅР° Р±СѓРґСѓС‰РµРµВ»: РЅРё РѕРґРёРЅ
+# РєСЂРµР№С‚ РµРіРѕ РµС‰С‘ РЅРµ РёСЃРїРѕР»СЊР·СѓРµС‚.
+egui_dock = { version = "0.20", features = ["serde"] }
+
+# в”Ђв”Ђ РћР±С‰РёРµ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РєСЂРµР№С‚РѕРІ вЂ” РµРґРёРЅС‹Р№ РёСЃС‚РѕС‡РЅРёРє РІРµСЂСЃРёР№ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+rand = "0.8"
+wide = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1"
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
+flate2 = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[package]
+name = "taas-checkmate"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Pure Rust wavelet neural engine вЂ” SIMD, CUDA, FlyWire connectome"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "taas_checkmate"
+
+[dependencies]
+# Internal crates (always present)
+pillars = { path = "crates/pillars" }
+pillars-connectome = { path = "crates/pillars-connectome", optional = true }
+taas-train = { path = "crates/train" }
+taas-format = { path = "crates/taas-format", optional = true }
+
+# Internal crates (optional, behind features)
+taas-t3 = { path = "crates/t3", optional = true }
+pillars-cuda = { path = "crates/pillars-cuda", optional = true }
+pillars-wgpu = { path = "crates/pillars-wgpu", optional = true }
+
+# External dependencies
+rayon = "1"
+wide = "0.7"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = { version = "0.2", optional = true }
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3", "abi3-py311"], optional = true }
+numpy = { version = "0.23", optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# getrandom 0.2 (pulled in by rand 0.8) needs the "js" backend on wasm32-unknown-unknown.
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "bench"
+harness = false
+
+[[bench]]
+name = "bench_all"
+harness = false
+
+[[bench]]
+name = "bench_lod_gnw"
+harness = false
+required-features = ["karmac"]
+
+[[bench]]
+name = "bench_spikegpt_forward"
+harness = false
+
+[features]
+default = ["t3", "format"]
+
+# Core T3 oscillator engine (oscillator + PST + decoders)
+t3 = ["taas-t3"]
+
+# .taas save/load format (pulls zstd; excluded from the wasm build so no C
+# cross-compiler is required for the browser package)
+format = ["dep:taas-format"]
+
+# Training (BPTT, SPIGRAD, connectome chase)
+train = ["taas-train/t3"]
+
+# Connectome brain simulator (also exposes connectome_chase in train)
+connectome = ["dep:pillars-connectome", "taas-train/connectome"]
+
+# Cognitive architecture (GNW, LOD, BasalGanglia) вЂ” РІСЃС‚СЂРѕРµРЅРѕ РІ РєРѕСЂРЅРµРІРѕР№ РєСЂРµР№С‚
+karmac = []
+# JavaScript/WASM facade over the Rust-owned Cognitive Arena state machine
+wasm = ["karmac", "dep:wasm-bindgen"]
+
+# GPU acceleration вЂ” compound feature, implies t3 + connectome
+cuda = ["t3", "connectome",
+        "dep:pillars-cuda",
+        "taas-t3/cuda",
+        "pillars-connectome/cuda",
+        "taas-train/cuda"]
+
+# WebGPU compute (portable, Vulkan/Metal/DX12 — вычисления)
+wgpu-compute = ["dep:pillars-wgpu"]
+
+# Python bindings
+python = ["dep:pyo3", "dep:numpy", "dep:pillars-connectome", "connectome", "t3", "format", "taas-train/connectome", "karmac"]
+
+# Everything
+all = ["t3", "train", "format", "connectome", "karmac", "wasm", "cuda", "wgpu-compute", "python"]
+

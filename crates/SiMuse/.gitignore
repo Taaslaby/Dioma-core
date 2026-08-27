@@ -1,0 +1,64 @@
+target/
+*.so
+*.pyc
+__pycache__/
+*.egg-info/
+research/
+.DS_Store
+*.bak
+*~
+.env
+*.o
+*.a
+.venv/
+.vscode/
+.idea/
+.python-version
+__pypackages__/
+
+# Cargo.lock IS tracked: this crate ships as cdylib (Python extension) + lib,
+# so reproducible builds matter. Do NOT ignore it.
+
+# Large model / binary snapshot files (regenerated from data/)
+*.taas
+*.pt
+*.pth
+*.safetensors
+
+# Generated binary data dumps (kept under examples/data/ when needed for examples)
+/*.dat
+/*.bin
+
+# Python extension binaries built via maturin (regenerated from src/python)
+*.pyd
+/nt_map*.bin
+/photo_map.bin
+
+# Generated data CSVs at repo root (example outputs / scratch)
+/*.csv
+
+# Data-file indices at repo root (regenerated from connectome .taas)
+/*_indices.txt
+/*_indices_*.txt
+
+# Editor/tool workspace databases (SQLite)
+.freebuff/
+
+# sardana_flow run outputs (metrics CSVs, connectome checkpoints)
+/output/
+
+# Downloaded validation datasets (Zenodo/Figshare archives) - not part of the source tree.
+validation_data/
+!validation_data/human_hand/results.json
+
+# Generated wasm-pack output for the Cognitive Arena web UI (see build-wasm.sh)
+/resources/web/cognitive-arena/pkg/
+
+# Large binary datasets — distributed separately, not via git
+# (fafb.bin 157MB, manc_viz.bin 44MB, mnist_frames.npz 210MB)
+resources/examples/data/*.bin
+examples/data/
+resources/data/*.haap
+*.npz
+.freebuff/
+.agents/

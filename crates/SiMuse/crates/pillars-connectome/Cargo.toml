@@ -1,0 +1,39 @@
+[package]
+name = "pillars-connectome"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Universal connectome brain simulator — pillars-native engine + sim_* API"
+
+[dependencies]
+pillars = { path = "../pillars" }
+pillars-cuda = { path = "../pillars-cuda", optional = true }
+prometheus-grow = { path = "../prometheus-grow" }
+serde = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+rand = { workspace = true }
+
+[features]
+default = ["rayon"]
+rayon = ["pillars/rayon"]
+cuda = ["pillars-cuda"]
+
+[[bench]]
+name = "bench_rcm"
+harness = false
+
+[[bench]]
+name = "bench_hh_parity"
+harness = false
+
+[[example]]
+name = "flywire_sugar_gpu"
+required-features = ["cuda"]
+
+[[example]]
+name = "flywire_gpea_gpu"
+required-features = ["cuda"]

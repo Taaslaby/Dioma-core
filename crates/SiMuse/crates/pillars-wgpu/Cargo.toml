@@ -1,0 +1,13 @@
+[package]
+name = "pillars-wgpu"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "pillars-wgpu — WebGPU compute backend for pillars (portable alternative to pillars-cuda)"
+
+[dependencies]
+pillars = { path = "../pillars" }
+wgpu = { version = "22", features = ["wgsl"] }
+bytemuck = { workspace = true }
+pollster = "0.3"

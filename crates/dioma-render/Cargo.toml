@@ -1,0 +1,15 @@
+[package]
+name = "dioma-render"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "dioma-render — 2D спрайтовый рендер-движок на wgpu"
+
+[dependencies]
+wgpu = { version = "22", features = ["wgsl"] }
+bytemuck = "1"
+png = "0.17"
+
+[dev-dependencies]
+pollster = "0.3"
+winit = "0.30"

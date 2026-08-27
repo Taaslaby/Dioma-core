@@ -1,3 +1,11 @@
+# Dioma — НЕ воркспейс: path-зависимости указывают в crates/SiMuse, у
+# которого свой [workspace] + Cargo.lock + workspace-наследование. Если бы
+# dioma был воркспейс-корнем, cargo резолвил бы `workspace = true` крейтов
+# SiMuse против dioma (вложенные воркспейсы не поддерживаются) и падал бы на
+# отсутствующих workspace.package/workspace.dependencies. Без [workspace] у
+# dioma крейты SiMuse находят свой корень обычным walk-up, как до переноса.
+# crates/dioma-render — самостоятельный пакет (пока никем не используется).
+
 [package]
 name = "dioma"
 version = "0.2.0"
@@ -5,18 +13,16 @@ edition = "2021"
 description = "Игра о выращиваемых спикинг-агентах поверх движка taas-checkmate"
 
 [dependencies]
-pillars = { path = "../Проекты/asm_engines/taas_checkmate/crates/pillars" }
-pillars-connectome = { path = "../Проекты/asm_engines/taas_checkmate/crates/pillars-connectome" }
-prometheus-grow = { path = "../Проекты/asm_engines/taas_checkmate/crates/prometheus-grow" }
-taas-format = { path = "../Проекты/asm_engines/taas_checkmate/crates/taas-format" }
-# Когнитивный рантайм karmac (SpikingBrain: каналы→GNW→базальные ганглии).
-taas-checkmate = { path = "../Проекты/asm_engines/taas_checkmate", default-features = false, features = ["karmac"] }
+pillars = { path = "crates/SiMuse/crates/pillars" }
+pillars-connectome = { path = "crates/SiMuse/crates/pillars-connectome" }
+pillars-wgpu = { path = "crates/SiMuse/crates/pillars-wgpu" }
+prometheus-grow = { path = "crates/SiMuse/crates/prometheus-grow", features = ["gpu"] }
+pollster = "0.3"
+taas-format = { path = "crates/SiMuse/crates/taas-format" }
 rayon = "1"
-eframe = "0.29"
-egui = "0.29"
-egui_plot = "0.29"
+wide = "0.7"
 
-# ── Активные бины (протоколы и обсерватории); история — в archive/bins ──
+# ── Активные бины (протоколы); история — в archive/bins ──
 
 [[bin]]
 name = "dynasty"
@@ -35,45 +41,9 @@ name = "conditioning"
 path = "src/bin/conditioning.rs"
 
 [[bin]]
-name = "exam"
-path = "src/bin/exam.rs"
-
-[[bin]]
-name = "poc-heredity"
-path = "src/bin/poc_heredity.rs"
-
-[[bin]]
-name = "maze-test"
-path = "src/bin/maze_test.rs"
-
-[[bin]]
-name = "brain-battle"
-path = "src/bin/brain_battle.rs"
-
-[[bin]]
 name = "sardana-probe"
 path = "src/bin/sardana_probe.rs"
 
 [[bin]]
-name = "evolution"
-path = "src/bin/evolution.rs"
-
-[[bin]]
-name = "observatory"
-path = "src/bin/observatory.rs"
-
-[[bin]]
-name = "observatory-eco"
-path = "src/bin/observatory_eco.rs"
-
-[[bin]]
 name = "grow-viz"
 path = "src/bin/grow_viz.rs"
-
-[[bin]]
-name = "lifecycle"
-path = "src/bin/lifecycle.rs"
-
-[[bin]]
-name = "side-smoke"
-path = "src/bin/side_smoke.rs"

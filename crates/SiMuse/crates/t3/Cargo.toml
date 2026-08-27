@@ -1,0 +1,20 @@
+[package]
+name = "taas-t3"
+version.workspace = true
+edition = "2021"
+description = "T3 oscillator engine — 3-population Kuramoto + Stuart-Landau + decoders"
+
+[lib]
+name = "taas_t3"
+
+[dependencies]
+pillars = { path = "../pillars" }
+wide = { workspace = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+rand = { workspace = true }
+pillars-cuda = { path = "../pillars-cuda", optional = true }
+
+[features]
+default = ["serde", "serde_json"]
+cuda = ["dep:pillars-cuda"]

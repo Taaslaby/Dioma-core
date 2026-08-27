@@ -1,0 +1,60 @@
+//! # 🚀 pillars-cuda — one pillars source → CPU SIMD + CUDA
+//!
+//! NVRTC engine that runs the `#[dual_neuron]` kernels:
+//!
+//! ```rust,ignore
+//! #[dual_neuron]            // ← proc-macro from pillars-macros
+//! pub mod hh {
+//!     #[derive(NeuronModel)]
+//!     pub struct HHModel { #[state] v, #[param] g_Na, … }
+//!
+//!     impl ComputeNeuron for HHModel {
+//!         fn step<S: SimdLane>(…) { … }   // THE single source of truth
+//!     }
+//! }
+//! ```
+//!
+//! - The Rust code is untouched → runs on CPU SIMD via `NeuralPopulation`.
+//! - The macro also emits `HH_CUDA_SOURCE` — a CUDA C++ kernel string.
+//! - [`CompiledModel::new`] feeds it to **NVRTC** at runtime → PTX → kernel.
+//!
+//! No duplicated equations, no AOT `.cu` files, no codegen build steps.
+//!
+//! All neuron models live **in `pillars::zoo::neurons`** (single source of
+//! truth) — every model is `#[dual_neuron]` there and exports its
+//! `*_CUDA_SOURCE`. This crate re-exports them and adds the NVRTC driver.
+
+pub mod alpha_lif;
+pub mod engine;
+pub mod ffi;
+pub mod gpea;
+pub mod gpea_syn;
+pub mod kernel;
+pub mod network;
+
+pub use alpha_lif::{AlphaLifGpu, AlphaLifOutput, AlphaLifParams};
+pub use gpea::{GpeaGpu, GpeaOutput, GpeaParams};
+pub use gpea_syn::GpeaGpuSynaptic;
+pub use kernel::{BufferArg, CudaKernel, LaunchConfig, ScalarArg};
+pub use network::{CompiledNetwork, NetworkPop};
+
+/// AOT GPU microkernels + persistent device context. One `.cu` per
+/// microkernel in `kernels/`, FFI wrappers here. Exposed upstream as `cuda`:
+/// `pub use pillars_cuda::gpu as cuda;`.
+pub mod gpu;
+
+pub use engine::CompiledModel;
+
+// ── Zoo models transpiled IN pillars (no copy here — single source) ──
+pub use pillars::zoo::neurons::{
+    AdExModel, AlphaLifModel, BeamModel, FHNModel, GLIF3Model, GLIF4Model, HAAPModel, HRModel,
+    Izhikevich2007Model, IzhikevichDualModel, IzhikevichModel, LIFAtModel, LIFModel,
+    MorrisLecarModel, NeuromotorModel, RateModel, SAWModel, TransformerModel, VSNModel, WCModel,
+};
+pub use pillars::zoo::neurons::{
+    ADEX_CUDA_SOURCE, ALPHA_LIF_CUDA_SOURCE, BEAM_CUDA_SOURCE, FHN_CUDA_SOURCE, GLIF3_CUDA_SOURCE,
+    GLIF4_CUDA_SOURCE, HAAP_CUDA_SOURCE, HR_CUDA_SOURCE,
+    IZHIKEVICH_2007_CUDA_SOURCE, IZHIKEVICH_CUDA_SOURCE, IZHIKEVICH_DUAL_CUDA_SOURCE,
+    LIFAT_CUDA_SOURCE, LIF_CUDA_SOURCE, MORRIS_LECAR_CUDA_SOURCE, NEUROMOTOR_CUDA_SOURCE,
+    RATE_CUDA_SOURCE, SAW_CUDA_SOURCE, TRANSFORMER_CUDA_SOURCE, VSN_CUDA_SOURCE, WC_CUDA_SOURCE,
+};
