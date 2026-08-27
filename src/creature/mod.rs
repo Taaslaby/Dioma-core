@@ -88,6 +88,9 @@ const TONIC_DRIVE_NORM: f32 = 0.5;
 pub const FOOD_PORTION: f32 = 60.0;
 /// Дофамин за еду (фазический, в мозг для STDP).
 const EAT_DOPAMINE: f32 = 1.0;
+/// Зеркальный дофамин за «видел соседа за едой» (социальное обучение).
+/// Слабее еды: подглядывание подкрепляет, но не так, как собственный обед.
+const MIRROR_DOPAMINE: f32 = 0.5;
 /// Негативный дофамин за удар о стену (наказание → LTD рефлекса,
 /// который привёл к удару). Умеренный: серия ударов в стене должна
 /// ослабить рефлекс (перестать скрести), но не убить охоту целиком.
@@ -122,6 +125,9 @@ pub struct Sense {
     pub place: u32,
     /// Курс существа в радианах (0 = +x, против часовой; для памяти места).
     pub heading: f32,
+    /// true — видел соседа за едой в этом/прошлом тике (зеркальный сигнал
+    /// для социального обучения). Заполняет хост.
+    pub see_eat: bool,
 }
 
 /// Действие существа, читаемое хостом.
@@ -440,6 +446,13 @@ impl Creature {
         // 4. Награда за еду: обучение стоит глюкозы (метаболический бюджет).
         if eat && self.blood.pay_for_plasticity(EAT_DOPAMINE) {
             self.brain.schedule_reward(EAT_DOPAMINE * self.blood.plasticity_budget());
+        }
+        // Социальное обучение (зеркальный дофамин): видел соседа за едой —
+        // то, что я делаю сейчас, ведёт к еде. Подкрепляет текущее поведение
+        // (куда я рулю — туда еда), не требуя съесть самому. Слабее еды и
+        // тоже стоит глюкозы — культура не бесплатна.
+        if sense.see_eat && self.blood.wants_food() && self.blood.pay_for_plasticity(MIRROR_DOPAMINE) {
+            self.brain.schedule_reward(MIRROR_DOPAMINE * self.blood.plasticity_budget());
         }
         // Облегчение: успешный отворот от стены — положительный сигнал
         // (негативное подкрепление: стена отошла = «так и делай»).
@@ -1029,6 +1042,49 @@ mod tests {
         assert!(
             (total_weight(&child) - w1).abs() > 1.0,
             "потомок не копирует выученные веса родителя"
+        );
+    }
+
+    /// Социальное обучение: существо видит соседа за едой (see_eat) и
+    /// получает зеркальный дофамин — путь запах→руль потенцируется БЕЗ
+    /// собственной еды. Культура распространяется стаей без генов.
+    #[test]
+    fn social_learning_reinforces_behavior_without_eating() {
+        // Ученик: нюхает еду слева (рулит влево) и видит, как сосед ест.
+        let mut learner = Creature::new(3);
+        learner.blood.conc[chem::HUNGER] = 200.0;
+        let watch = Sense {
+            smell_l: 1.0,
+            smell_r: 0.0,
+            see_eat: true,
+            ..Default::default()
+        };
+        for _ in 0..300 {
+            learner.tick(&watch);
+        }
+        assert_eq!(learner.food_eaten(), 0, "ученик сам не ест");
+        let g_learner = learner.brain.learned_gain(REGION_SL, REGION_ML);
+
+        // Контроль: тот же прогон без зеркального сигнала.
+        let mut lonely = Creature::new(3);
+        lonely.blood.conc[chem::HUNGER] = 200.0;
+        let plain = Sense {
+            smell_l: 1.0,
+            smell_r: 0.0,
+            ..Default::default()
+        };
+        for _ in 0..300 {
+            lonely.tick(&plain);
+        }
+        let g_lonely = lonely.brain.learned_gain(REGION_SL, REGION_ML);
+
+        assert!(
+            g_learner > 0.0,
+            "зеркальный сигнал дал выученный прирост: {g_learner}"
+        );
+        assert!(
+            g_learner > g_lonely + 10.0,
+            "социальное обучение сильнее одиночного: {g_learner} vs {g_lonely}"
         );
     }
 

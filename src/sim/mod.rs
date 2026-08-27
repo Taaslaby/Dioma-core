@@ -21,6 +21,8 @@ pub use evolution::{Evolution, EvolutionParams, GenerationStats};
 
 /// Радиус «рта»: на этом расстоянии еда считается съедобной.
 pub const EAT_RADIUS: f32 = 2.0;
+/// Радиус, в котором существо «видит» соседа за едой (социальное обучение).
+const SOCIAL_RADIUS: f32 = 10.0;
 /// Максимальный поворот за тик (радианы).
 pub const MAX_TURN: f32 = 0.3;
 /// Затухание запаха с дистанцией: 60/(60+d).
@@ -61,6 +63,9 @@ pub struct Critter {
     pub creature: Creature,
     /// Сколько раз существо ударилось о стену (счётчик для наблюдения/тестов).
     pub wall_hits: u64,
+    /// Видел ли соседа за едой на прошлом такте (социальное обучение:
+    /// заполняет sense.see_eat на следующий тик и сбрасывается).
+    pub see_eat: bool,
 }
 
 /// Арена: мир объектов (ягоды, карта) + существа. Детерминирована по сиду.
@@ -93,12 +98,13 @@ impl Arena {
     pub fn spawn_creature(&mut self, pos: Vec2, heading: f32, creature: Creature) -> AgentId {
         let id = AgentId(self.next_id);
         self.next_id += 1;
-        self.critters.push(Critter {
+        self.critters.push(        Critter {
             id,
             pos,
             heading,
             creature,
             wall_hits: 0,
+            see_eat: false,
         });
         id
     }
@@ -139,12 +145,15 @@ impl Arena {
         //    таймеры, скрипты и физика комнат.
         self.world.step();
 
-        // 1. Сенсоры (по живым ягодам мира) → решения.
+        // 1. Сенсоры (по живым ягодам мира + память о соседе за едой) → решения.
         let senses: Vec<Sense> = self
             .critters
             .iter()
-            .map(|c| self.sense(c.pos, c.heading))
+            .map(|c| self.sense(c.pos, c.heading, c.see_eat))
             .collect();
+        for c in &mut self.critters {
+            c.see_eat = false; // окно наблюдения закрылось
+        }
         let mut actions: Vec<(usize, Action)> = Vec::with_capacity(self.critters.len());
         for (i, c) in self.critters.iter_mut().enumerate() {
             actions.push((i, c.creature.tick(&senses[i])));
@@ -173,6 +182,7 @@ impl Arena {
         }
 
         // 3. Еда: рот открыт → послать ягоде сообщение EAT (хрумнёт на след. такте).
+        let mut eaters: Vec<Vec2> = Vec::new();
         for &(i, ref action) in &actions {
             if !action.eat {
                 continue;
@@ -191,6 +201,19 @@ impl Arena {
                 self.world.send(AgentId::NONE, bid, SLOT_EAT, 0);
                 if let Some(ag) = self.world.agent_mut(bid) {
                     ag.vars[1] = self.berry_regrow;
+                }
+                eaters.push(pos);
+            }
+        }
+        // Социальное обучение: соседи в радиусе видят едущего и получают
+        // зеркальный сигнал на следующий такт (see_eat → sense.see_eat).
+        if !eaters.is_empty() {
+            for c in &mut self.critters {
+                if c.see_eat {
+                    continue;
+                }
+                if eaters.iter().any(|e| e.dist(c.pos) <= SOCIAL_RADIUS) {
+                    c.see_eat = true;
                 }
             }
         }
@@ -249,7 +272,9 @@ impl Arena {
 
     /// Обоняние + направленное ощущение стен: запах ягод и близость стены
     /// слева/справа относительно курса + «еда у рта».
-    fn sense(&self, pos: Vec2, heading: f32) -> Sense {
+    /// Сенсоры существа: запах ягод (живые), стены, еда у рта, память места
+    /// и зеркальный сигнал `see_eat` (видел соседа за едой на прошлом такте).
+    fn sense(&self, pos: Vec2, heading: f32, see_eat: bool) -> Sense {
         let mut l = 0.0f32;
         let mut r = 0.0f32;
         let mut near = false;
@@ -304,6 +329,7 @@ impl Arena {
             wall: false,
             place,
             heading,
+            see_eat,
         }
     }
 

@@ -298,6 +298,7 @@ impl Evolution {
             heading: deterministic_heading(child_seed, 0),
             creature,
             wall_hits: 0,
+            see_eat: false,
         });
         *child_idx += 1;
     }
