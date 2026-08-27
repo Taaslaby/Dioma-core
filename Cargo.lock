@@ -233,8 +233,8 @@ name = "dioma"
 version = "0.2.0"
 dependencies = [
  "dioma-engine",
- "pillars",
  "pillars-connectome",
+ "pillars-wgpu",
  "pollster",
  "prometheus-grow",
  "taas-format",

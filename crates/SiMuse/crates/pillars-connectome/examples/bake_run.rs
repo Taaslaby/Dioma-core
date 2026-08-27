@@ -93,12 +93,12 @@ fn main() {
             let cols = load_hhparams(p, runner.n_neurons());
             // колонки .hhparams: g_na, g_k, g_l, e_na, e_k, e_l, inv_cm
             let map: [(usize, usize); 7] = [
-                (0, HHModelParamIdx::g_Na.into()),
-                (1, HHModelParamIdx::g_K.into()),
-                (2, HHModelParamIdx::g_Leak.into()),
-                (3, HHModelParamIdx::E_Na.into()),
-                (4, HHModelParamIdx::E_K.into()),
-                (5, HHModelParamIdx::E_Leak.into()),
+                (0, HHModelParamIdx::g_na.into()),
+                (1, HHModelParamIdx::g_k.into()),
+                (2, HHModelParamIdx::g_leak.into()),
+                (3, HHModelParamIdx::e_na.into()),
+                (4, HHModelParamIdx::e_k.into()),
+                (5, HHModelParamIdx::e_leak.into()),
                 (6, HHModelParamIdx::inv_cm.into()),
             ];
             for (src, dst) in map {

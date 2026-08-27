@@ -1127,10 +1127,10 @@ impl BrainRunner {
         self.state.u[..n].copy_from_slice(&u[..n]);
     }
 
-    /// Set per-neuron HH parameter column (e.g. `HHModelParamIdx::g_Na`) from a slice.
+    /// Set per-neuron HH parameter column (e.g. `HHModelParamIdx::g_na`) from a slice.
     ///
     /// Enables literature-based per-class physiology: load a distinct
-    /// g_Na / g_K / g_l / E_Leak / cm for each neuron instead of one
+    /// g_na / g_k / g_l / e_leak / cm for each neuron instead of one
     /// population-wide default. Returns the number of neurons written.
     ///
     /// Only valid when the runner was created with an `Hh` / `HhSynaptic` config;
@@ -1164,7 +1164,7 @@ impl BrainRunner {
         n
     }
 
-    /// Read one per-neuron HH parameter column (e.g. `HHModelParamIdx::g_Na`)
+    /// Read one per-neuron HH parameter column (e.g. `HHModelParamIdx::g_na`)
     /// — pairs with [`Self::set_hh_param_column`] for read-modify-write
     /// (e.g. pharmacology baselines). Empty for non-HH runners.
     pub fn get_hh_param_column(&self, col: usize) -> Vec<f32> {
@@ -1204,7 +1204,7 @@ impl BrainRunner {
         n
     }
 
-    /// Scale one per-neuron HH parameter column (e.g. `HHModelParamIdx::g_Na`)
+    /// Scale one per-neuron HH parameter column (e.g. `HHModelParamIdx::g_na`)
     /// by `factor` in place — pharmacology (channel blockers/openers) applied
     /// to a whole population at once. Returns neurons written (0 for non-HH
     /// runners). ⚠️ Same `reset()` caveat as [`Self::set_hh_param_column`].

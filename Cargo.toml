@@ -14,11 +14,11 @@ description = "Игра о выращиваемых спикинг-агента�
 
 [dependencies]
 dioma-engine = { path = "crates/dioma-engine" }
-pillars = { path = "crates/SiMuse/crates/pillars" }
-pillars-connectome = { path = "crates/SiMuse/crates/pillars-connectome" }
 prometheus-grow = { path = "crates/SiMuse/crates/prometheus-grow", features = ["gpu"] }
-pollster = "0.3"
+pillars-connectome = { path = "crates/SiMuse/crates/pillars-connectome" }
 taas-format = { path = "crates/SiMuse/crates/taas-format" }
+pollster = "0.3"
+pillars-wgpu = { path = "crates/SiMuse/crates/pillars-wgpu" }
 
 # ── Активные бины (протоколы); история — в archive/bins ──
 

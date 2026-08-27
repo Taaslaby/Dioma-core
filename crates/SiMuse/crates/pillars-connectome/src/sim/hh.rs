@@ -23,12 +23,12 @@ pub fn hh_population_standard(n: usize, dt: f32) -> NeuralPopulation<HHModel> {
 
     // Params — HH stub (Brian2-профиль: HH удалён, операнды остались)
     pop.fill_param(HHModelParamIdx::dt.into(), dt);
-    pop.fill_param(HHModelParamIdx::g_Na.into(), 120.0);
-    pop.fill_param(HHModelParamIdx::E_Na.into(), 50.0);
-    pop.fill_param(HHModelParamIdx::g_K.into(), 36.0);
-    pop.fill_param(HHModelParamIdx::E_K.into(), -77.0);
-    pop.fill_param(HHModelParamIdx::g_Leak.into(), 0.3);
-    pop.fill_param(HHModelParamIdx::E_Leak.into(), -65.0);
+    pop.fill_param(HHModelParamIdx::g_na.into(), 120.0);
+    pop.fill_param(HHModelParamIdx::e_na.into(), 50.0);
+    pop.fill_param(HHModelParamIdx::g_k.into(), 36.0);
+    pop.fill_param(HHModelParamIdx::e_k.into(), -77.0);
+    pop.fill_param(HHModelParamIdx::g_leak.into(), 0.3);
+    pop.fill_param(HHModelParamIdx::e_leak.into(), -65.0);
     pop.fill_param(HHModelParamIdx::inv_cm.into(), 1.0);
     // State: v = -65, gates m/h/n — stub
     pop.fill_state(0, -65.0);
@@ -41,7 +41,7 @@ pub fn hh_population_standard(n: usize, dt: f32) -> NeuralPopulation<HHModel> {
 }
 
 /// Build a pillars [`NeuralPopulation<HHModel>`] with **pacemaking** channels
-/// (NaV + KV + CaV-T): the T-type Ca²⁺ current (g_CaT = 0.5, E_CaT = +120 mV)
+/// (NaV + KV + CaV-T): the T-type Ca²⁺ current (g_ca_t = 0.5, e_ca_t = +120 mV)
 /// depolarizes the membrane past NaV threshold on its own → neurons fire
 /// **spontaneously** without any input current (rhythmic VNC/CPG activity).
 ///
@@ -51,7 +51,7 @@ pub fn hh_population_standard(n: usize, dt: f32) -> NeuralPopulation<HHModel> {
 /// `pacemaking_channels` reference test (`hh_step_scalar` with e_leak=−54.387).
 pub fn hh_population_pacemaking(n: usize, dt: f32) -> NeuralPopulation<HHModel> {
     let mut pop = hh_population_standard(n, dt);
-    pop.fill_param(HHModelParamIdx::E_Leak.into(), -54.387);
+    pop.fill_param(HHModelParamIdx::e_leak.into(), -54.387);
     pop
 }
 
