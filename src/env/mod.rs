@@ -8,10 +8,12 @@
 //!               химия комнат и общие идентификаторы (аналог C2e).
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
+pub mod climate;
 pub mod id;
 pub mod map;
 pub mod math;
 
+pub use climate::Climate;
 pub use id::{AgentId, Tick};
 pub use map::{CaRates, Door, Rect, Room, Substance, WorldMap, SUBSTANCES};
 pub use math::{RoomId, Vec2};

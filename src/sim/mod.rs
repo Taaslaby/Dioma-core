@@ -29,6 +29,8 @@ pub const MAX_TURN: f32 = 0.3;
 const SMELL_FALLOFF: f32 = 60.0;
 /// Размер клетки памяти места (грубая привязка «где была еда»).
 const PLACE_CELL: f32 = 8.0;
+/// Размер клетки климата (тепло/свет/питание диффундируют по сетке).
+const CLIMATE_CELL: f32 = 4.0;
 /// Дальность ощущения стены (юнитов) и шаг пробы.
 const WALL_LOOKAHEAD: f32 = 8.0;
 const WALL_PROBE_STEP: f32 = 1.0;
@@ -77,16 +79,21 @@ pub struct Arena {
     pub(crate) next_id: u64,
     /// Тиков отрастания съеденной ягоды (можно тюнить через эволюцию).
     pub berry_regrow: f32,
+    /// Климат мира: тепло/свет/питание диффундируют по сетке поверх карты,
+    /// ягоды растут там, где тепло+светло+сытно.
+    pub climate: crate::env::Climate,
 }
 
 impl Arena {
     pub fn new(seed: u64, map: WorldMap) -> Self {
+        let climate = crate::env::Climate::over(&map, CLIMATE_CELL as f64, prometheus_grow::DiffusionBackend::cpu());
         Arena {
             world: World::new(seed, map),
             critters: Vec::new(),
             tick: 0,
             next_id: 1,
             berry_regrow: BERRY_REGROW_TICKS,
+            climate,
         }
     }
 
@@ -218,7 +225,12 @@ impl Arena {
             }
         }
 
-        // 4. Рост ягод от плодородности комнаты (питание × свет из CA).
+        // 3.5. Климат: комнаты кормят поле, диффузия разносит тепло/свет/
+        //    питание по миру — ягоды растут там, где стало тепло.
+        self.climate.seed_from_rooms(&self.world.map);
+        self.climate.step();
+
+        // 4. Рост ягод от плодородности климата (тепло × свет × питание).
         //    Съеденные ягоды отрастают: vars[1] тикает вниз к нулю.
         //    Сначала собираем состояние (только чтение), потом мутируем —
         //    чтобы не держать заимствование мира.
@@ -348,12 +360,11 @@ impl Arena {
     }
 
     /// Плодородность точки: питательные вещества × свет комнаты (0..1).
+    /// Плодородность точки из климата: тепло × свет × питание (диффузия
+    /// уже разнесла их по миру — растения растут и вдали от источника,
+    /// пока к ним дошло тепло).
     fn fertility(&self, pos: Vec2) -> f32 {
-        let Some(rid) = self.world.map.room_at(pos) else {
-            return 0.0;
-        };
-        let ca = self.world.map.rooms[rid.0 as usize].ca;
-        (ca[Substance::Nutrients.idx()] / 255.0) * (ca[Substance::Light.idx()] / 255.0)
+        self.climate.fertility(pos.x, pos.y)
     }
 }
 
@@ -504,8 +515,12 @@ mod tests {
         arena.world.map.rates.decay = [0.0005; 4];
         let nutr = Substance::Nutrients.idx();
         let light = Substance::Light.idx();
+        let temp = Substance::Temperature.idx();
         arena.world.map.rooms[0].ca[nutr] = 200.0;
         arena.world.map.rooms[0].ca[light] = 200.0;
+        // Климат трёхфакторный (тепло × свет × питание) — плодородная
+        // комната должна быть и тёплой, иначе ягоды не растут.
+        arena.world.map.rooms[0].ca[temp] = 200.0;
 
         let rich = arena.add_berry(Vec2::new(20.0, 10.0)); // плодородная
         let poor = arena.add_berry(Vec2::new(60.0, 10.0)); // бедная
