@@ -1106,6 +1106,33 @@ impl Brain {
         }
     }
 
+    /// Сон-консолидация весов: сильные выученные дельты (относительно
+    /// снимка рождения `memory_lt`) закрепляются в долговременную память
+    /// и слегка усиливаются, слабые (шум/дрейф гомеостаза) отсекаются —
+    /// вес тянется обратно к снимку. Эталон Болдуина `memory_lt` НЕ
+    /// трогается: выученное за жизнь продолжает накапливаться между
+    /// рождениями, и `learned_gain` видит весь прирост.
+    pub fn consolidate_sleep(&mut self, strong_min: f32, reinforce: f32, prune: f32) {
+        let n = self.memory_lt.len().min(self.dynamics.values().len());
+        if n == 0 {
+            return;
+        }
+        let lt = self.memory_lt.clone();
+        let vals = self.dynamics.values().to_vec();
+        let mut out = vals.clone();
+        for i in 0..n {
+            let d = vals[i] - lt[i];
+            if d.abs() >= strong_min {
+                // Сильное выученное — в долговременную: усилить дельту.
+                out[i] = lt[i] + d * (1.0 + reinforce);
+            } else {
+                // Слабый шум — обрезать: вернуть к снимку рождения.
+                out[i] = lt[i] + d * (1.0 - prune);
+            }
+        }
+        let _ = self.set_csr_values(&out);
+    }
+
     /// Среднеквадратичное расхождение весов с долговременной копией
     /// (диагностика дрейфа).
     pub fn memory_drift_rms(&self) -> f32 {
@@ -1268,5 +1295,41 @@ mod tests {
             mb < ma - m0 * 0.2,
             "без сна выученное вымывается: ma={ma} mb={mb}"
         );
+    }
+
+    /// Сон-консолидация весов: сильное выученное закрепляется и усиливается,
+    /// слабый шум отсекается. Эталон рождения (`memory_lt`) не трогается.
+    #[test]
+    fn sleep_consolidation_reinforces_strong_prunes_weak() {
+        let grown = toy_grown();
+        let gains = gains_from(2, &[(0, 1, 1.0)]);
+        let mut b = Brain::new(&grown, gains, homeo_params());
+        let lt = b.dynamics.values().to_vec(); // снимок рождения
+
+        // 0-й синапс сильно выучен (+2), остальные — шум (+0.05).
+        let mut vals = lt.clone();
+        vals[0] += 2.0;
+        for v in vals.iter_mut().skip(1) {
+            *v += 0.05;
+        }
+        b.set_csr_values(&vals).unwrap();
+
+        b.consolidate_sleep(0.5, 0.2, 0.8);
+        let out = b.dynamics.values().to_vec();
+
+        let d0 = out[0] - lt[0];
+        assert!(
+            d0 > 2.0 + 0.2,
+            "сильное выученное усиливается при закреплении: d0={d0}"
+        );
+        for i in 1..lt.len() {
+            let d = (out[i] - lt[i]).abs();
+            assert!(
+                d < 0.02,
+                "слабый шум отсекается во сне: синапс {i} d={d}"
+            );
+        }
+        // Эталон Болдуина не сдвинут: выученное продолжает накапливаться.
+        assert_eq!(b.memory_lt, lt);
     }
 }

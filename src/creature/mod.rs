@@ -91,6 +91,15 @@ const EAT_DOPAMINE: f32 = 1.0;
 /// который привёл к удару). Умеренный: серия ударов в стене должна
 /// ослабить рефлекс (перестать скрести), но не убить охоту целиком.
 const WALL_DOPAMINE: f32 = -0.5;
+/// Сон: как сильно гомеостаз якорится на выученном за день (0..1).
+const SLEEP_ANCHOR_ALPHA: f32 = 0.5;
+/// Минимальная абсолютная дельта веса (от снимка рождения), которая
+/// считается «выученным» и закрепляется во сне; ниже — шум, отсекается.
+const SLEEP_STRONG_MIN: f32 = 0.5;
+/// Насколько сильное выученное усиливается при закреплении во сне.
+const SLEEP_REINFORCE: f32 = 0.15;
+/// Доля слабого шума, отсекаемая во сне (вес тянется к снимку рождения).
+const SLEEP_PRUNE: f32 = 0.7;
 
 /// Взгляд существа на мир за тик. Заполняет хост (world/sim/арена).
 #[derive(Clone, Copy, Debug, Default)]
@@ -430,6 +439,23 @@ impl Creature {
             .clamp(-1.0, 1.0);
         let drive = (self.blood.motor_tonic() / TONIC_DRIVE_NORM).clamp(0.0, 1.0);
         Action { steer, drive, eat }
+    }
+
+    // ─── Сон (ночная фаза — зовёт хост между днями) ───────────────────────
+
+    /// Ночь: сон-консолидация. Днём мозг копит eligibility (обучение),
+    /// во сне: окно обучения закрывается (eligibility обнуляется), гомеостаз
+    /// якорится на выученном (`sleep_consolidate`), сильные пути дня
+    /// закрепляются в долговременные веса, слабые (шум) отсекаются
+    /// (`consolidate_sleep`), тело восстанавливается (`blood.sleep`:
+    /// усталость/кортизол падают, глюкоза и урон — лучше). Эталон Болдуина
+    /// (`memory_lt`) не трогается — выученное накапливается всю жизнь и
+    /// сворачивается в инстинкт-гены при размножении.
+    pub fn sleep(&mut self) {
+        self.brain.clear_eligibility();
+        self.brain.sleep_consolidate(SLEEP_ANCHOR_ALPHA);
+        self.brain.consolidate_sleep(SLEEP_STRONG_MIN, SLEEP_REINFORCE, SLEEP_PRUNE);
+        self.blood.sleep();
     }
 
     // ─── События (хост сообщает после тика) ───────────────────────────────
@@ -969,6 +995,50 @@ mod tests {
         assert!(
             (total_weight(&child) - w1).abs() > 1.0,
             "потомок не копирует выученные веса родителя"
+        );
+    }
+
+    /// Сон улучшает охоту: два существа охотятся одинаковое число тиков,
+    /// но «спящий» после дня закрепляет выученное (сон: консолидация +
+    /// якорь гомеостаза), а «бодрый» простаивает без сна. Спящий сохраняет
+    /// больше выученного прироста пути запах→мотор (learned_gain) — его
+    /// день не вымывается дрейфом, и охота опирается на закреплённый рефлекс.
+    #[test]
+    fn sleep_cycle_beats_awake_hunting() {
+        let hunt = Sense {
+            smell_l: 1.0,
+            food_near: true,
+            ..Default::default()
+        };
+        let night = Sense::default();
+        let mut sleeper = Creature::new(5);
+        let mut awake = Creature::new(5);
+        sleeper.blood.conc[chem::HUNGER] = 200.0;
+        awake.blood.conc[chem::HUNGER] = 200.0;
+        for day in 0..6 {
+            for _ in 0..50 {
+                sleeper.tick(&hunt);
+            }
+            for _ in 0..50 {
+                awake.tick(&hunt);
+            }
+            if day % 2 == 1 {
+                sleeper.sleep();
+                // Ночь без сна: дрейф гомеостаза вымывает выученное.
+                for _ in 0..25 {
+                    awake.tick(&night);
+                }
+            }
+        }
+        let g_s = sleeper.brain.learned_gain(REGION_SL, REGION_ML);
+        let g_a = awake.brain.learned_gain(REGION_SL, REGION_ML);
+        assert!(
+            g_s > 0.0,
+            "спящий сохранил выученный прирост пути: {g_s}"
+        );
+        assert!(
+            g_s > g_a,
+            "сон закрепляет выученное лучше бодрствования: sleeper={g_s} awake={g_a}"
         );
     }
 

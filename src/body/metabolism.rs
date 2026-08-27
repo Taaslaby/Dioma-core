@@ -532,6 +532,16 @@ impl Blood {
         self.loci[locus::EVENT_WALL] = 1.0;
     }
 
+    /// Сон: тело восстанавливается — усталость и кортизол падают (стресс
+    /// сходит), глюкоза чуть пополняется (покой), повреждения заживают.
+    /// Зовёт хост в ночной фазе, вместе с консолидацией мозга.
+    pub fn sleep(&mut self) {
+        self.conc[chem::FATIGUE] = (self.conc[chem::FATIGUE] * 0.3).min(255.0);
+        self.conc[chem::CORTISOL] = (self.conc[chem::CORTISOL] * 0.5).min(255.0);
+        self.conc[chem::GLUCOSE] = (self.conc[chem::GLUCOSE] + 15.0).min(255.0);
+        self.organ.damage = (self.organ.damage - 0.02).max(0.0);
+    }
+
     // ─── Параметры (тело читает после update) ───────────────────────────────
     pub fn sensor_gain(&self) -> f32 {
         self.loci[locus::SENSOR_GAIN].max(0.1) * self.loci[locus::GAIN_GLOBAL]
