@@ -1,4 +1,15 @@
-/target
+# Сборка — на любой глубине (в т.ч. crates/SiMuse/target)
+target/
+
+# Инструмент Freebuff — локальное состояние, не для репозитория
+.freebuff/
+
+# Runtime-данные игры (сейвы существ, реплеи)
+graveyard/
+*.rep
+
+# Прочее
 Cargo.lock.bak
 *.pyd
 __pycache__/
+.DS_Store
