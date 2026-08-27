@@ -8,8 +8,8 @@
 //!              Неправильное действие → болевой сигнал → избегание.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use pillars_connectome::{BrainConfig, BrainRunner, ConnectomeData};
 use dioma::rng::XorShift;
+use pillars_connectome::{BrainConfig, BrainRunner, ConnectomeData};
 
 fn main() {
     println!("╔═══════════════════════════════════════╗");
@@ -18,10 +18,10 @@ fn main() {
 
     // ── Создаём крошечный мозг: 4 нейрона ──
     // Нейрон 0: MOTOR_UP (танцует вверх)
-    // Нейрон 1: MOTOR_DOWN (танцует вниз)  
+    // Нейрон 1: MOTOR_DOWN (танцует вниз)
     // Нейрон 2: LIGHT_SENSOR (видит лампочку)
     // Нейрон 3: SHOCK_SENSOR (чувствует боль)
-    
+
     let n = 4;
     // Полносвязный: все ко всем.
     let mut rp = vec![0i32; n + 1];
@@ -48,40 +48,52 @@ fn main() {
     println!("── ФАЗА ОБУЧЕНИЯ (30 проб) ──");
     let mut dance_score = 0usize;
     let _prev_dir = 0i32; // 0=нет, 1=вверх, -1=вниз
-    
+
     for trial in 1..=30 {
         // Свет включается.
         let ext = vec![3.0f32, 3.0, 5.0, 0.0]; // LIGHT яркий
-        
+
         let mut up_fired = false;
         let mut down_fired = false;
         let _up_before_down = false;
-        
+
         // Проба: 100 шагов (5 мс).
         for step in 0..100 {
             let buf = runner.run(1, &ext);
-            
+
             let up_spiked = buf[0] != 0;
             let down_spiked = buf[1] != 0;
-            
-            if step < 50 { // первая половина = ожидаем ВВЕРХ
-                if up_spiked { up_fired = true; }
-            } else { // вторая половина = ожидаем ВНИЗ
-                if down_spiked { down_fired = true; }
+
+            if step < 50 {
+                // первая половина = ожидаем ВВЕРХ
+                if up_spiked {
+                    up_fired = true;
+                }
+            } else {
+                // вторая половина = ожидаем ВНИЗ
+                if down_spiked {
+                    down_fired = true;
+                }
             }
         }
-        
+
         // Правильный танец: сначала вверх, потом вниз.
         let danced = up_fired && down_fired;
-        if danced { dance_score += 1; }
-        
+        if danced {
+            dance_score += 1;
+        }
+
         // Награда если танцевал.
         if danced {
             runner.run(1, &[0.0, 0.0, 0.0, 0.0]); // пустой шаг для тайминга
         }
-        
+
         if trial % 10 == 0 {
-            println!("  проба {:>2}: танец={}", trial, if danced {"✓"} else {"✗"});
+            println!(
+                "  проба {:>2}: танец={}",
+                trial,
+                if danced { "✓" } else { "✗" }
+            );
         }
     }
     println!("  итог обучения: {}/30 танцев", dance_score);
@@ -96,11 +108,17 @@ fn main() {
     for trial in 1..=30 {
         let ext = vec![3.0f32, 3.0, 5.0, 0.0];
         let mut winner_this_trial = 0i32;
-        
+
         for _step in 0..50 {
             let buf = runner.run(1, &ext);
-            if buf[0] != 0 { winner_this_trial = 0; break; }
-            if buf[1] != 0 { winner_this_trial = 1; break; }
+            if buf[0] != 0 {
+                winner_this_trial = 0;
+                break;
+            }
+            if buf[1] != 0 {
+                winner_this_trial = 1;
+                break;
+            }
         }
 
         // ШОК: если тот же победил что и в прошлый раз — шум в мозг!
@@ -110,12 +128,15 @@ fn main() {
             let noise_ext: Vec<f32> = (0..n).map(|_| rng.unit() as f32 * 40.0).collect();
             runner.run(1, &noise_ext);
             shocks += 1;
-            println!("  ⚡ ШОК! проба {} — повтор {}", trial, 
-                if winner_this_trial == 0 {"UP"} else {"DOWN"});
+            println!(
+                "  ⚡ ШОК! проба {} — повтор {}",
+                trial,
+                if winner_this_trial == 0 { "UP" } else { "DOWN" }
+            );
         } else {
             correct_avoids += 1;
         }
-        
+
         last_winner = winner_this_trial;
     }
     println!("  шоков получено: {shocks} · правильных избеганий: {correct_avoids}");

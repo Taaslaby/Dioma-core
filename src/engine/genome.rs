@@ -49,6 +49,12 @@ impl Grown {
             .iter()
             .rposition(|&r| r == region)
             .map_or(start, |p| p + 1);
+        // Инвариант контигуальности: между первым и последним нейроном региона
+        // не должно быть чужих регионов, иначе [start, end) не настоящие границы.
+        debug_assert!(
+            self.region_of[start..end].iter().all(|&r| r == region),
+            "region_of должен идти сплошными блоками: нарушено у региона {region}"
+        );
         (start, end)
     }
 }

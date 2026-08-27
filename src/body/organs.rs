@@ -22,7 +22,9 @@ const DT_FINE: f32 = 0.05;
 /// Подшагов тонкого органа на тик.
 const SUBSTEPS_FINE: usize = 500;
 
-// ─── Стандартная спина: 10 S (боль) → 10 I (inh) → 10 M ────────────────────
+// ─── Стандартная спина: 10 S (боль) → 10 M (мотонейроны) ───────────────────
+// I-популяция (индексы SPINE_N_S..SPINE_N_S+SPINE_N_I) зарезервирована под
+// будущую тормозную интернейронную дугу и пока не участвует в связях.
 pub const SPINE_N_S: usize = 10;
 pub const SPINE_N_I: usize = 10;
 pub const SPINE_N_M: usize = 10;
@@ -31,6 +33,9 @@ pub const SPINE_N: usize = SPINE_N_S + SPINE_N_I + SPINE_N_M;
 pub const SPINE_W_SM: f32 = 0.40;
 
 /// CSR спинальной дуги для `BrainConfig::hh_synaptic` (рецепторы строятся).
+///
+/// Round-robin: S[s] → M[s % SPINE_N_M] с весом [`SPINE_W_SM`]; у I и M
+/// исходящих рёбер нет, их строки пусты.
 pub fn standard_spine_conn() -> ConnectomeData {
     let n = SPINE_N;
     let mut rp = vec![0i32; n + 1];
@@ -42,8 +47,12 @@ pub fn standard_spine_conn() -> ConnectomeData {
         ci.push(m as i32);
         vals.push(SPINE_W_SM);
     }
-    for n_ in (0..n).rev() {
-        rp[n_ + 1] = ci.len() as i32;
+    // Хвост: строки после S-нейронов пусты, а конец последней S-строки (rp[SPINE_N_S])
+    // закрывается текущей длиной ci. Раньше цикл шёл по (0..n).rev() и затирал
+    // уже выставленные rp[1..=9] константой ci.len() — все рёбра доставались
+    // только S-нейрону 0, остальные девять оставались без исходящих синапсов.
+    for rp_i in rp.iter_mut().skip(SPINE_N_S) {
+        *rp_i = ci.len() as i32;
     }
     let nt = vec![1.0f32; n];
     let mut conn = ConnectomeData::new(rp, ci, vals, nt, vec![]);
@@ -142,8 +151,7 @@ impl OrganBrain {
         midbrain_n: usize,
     ) -> Self {
         let spine =
-            BrainRunner::new(spine_conn, BrainConfig::hh_synaptic(DT_FINE))
-                .expect("spine runner");
+            BrainRunner::new(spine_conn, BrainConfig::hh_synaptic(DT_FINE)).expect("spine runner");
         let mut midbrain = BrainRunner::new(
             ConnectomeData::new(
                 vec![0; midbrain_n + 1],
@@ -238,10 +246,11 @@ impl OrganBrain {
             self.carry[o as usize] = vec![0.0; n];
         }
         for axon in &self.axons {
+            let src = spikes.of(axon.from);
             let total: i64 = axon
                 .pre
                 .iter()
-                .map(|&i| spikes.of(axon.from)[i] as i64)
+                .map(|&i| if i < src.len() { src[i] as i64 } else { 0 })
                 .sum();
             let cur = total as f32 * axon.weight_per_spike;
             let carry = &mut self.carry[axon.to as usize];
@@ -271,4 +280,55 @@ fn run_fine(runner: &mut BrainRunner, ext: &[f32], substeps: usize) -> Vec<i32> 
         }
     }
     sums
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spine_csr_one_edge_per_sensory_neuron() {
+        let conn = standard_spine_conn();
+        let n = SPINE_N;
+        let rp = &conn.row_ptr;
+        let ci = &conn.col_indices;
+        let vals = &conn.values;
+
+        assert_eq!(conn.n_neurons, n);
+        assert_eq!(conn.n_synapses, SPINE_N_S, "ровно 10 синапсов");
+        assert_eq!(rp.len(), n + 1);
+
+        for s in 0..SPINE_N_S {
+            let start = rp[s] as usize;
+            let end = rp[s + 1] as usize;
+            assert_eq!(
+                end - start,
+                1,
+                "S[{s}]: ожидалось ровно одно ребро, получили {}",
+                end - start
+            );
+            let target = ci[start] as usize;
+            let expected = SPINE_N_S + SPINE_N_I + s % SPINE_N_M;
+            assert_eq!(
+                target, expected,
+                "S[{s}] → {target}, а должен → {expected}"
+            );
+            assert!(
+                (vals[start] - SPINE_W_SM).abs() < 1e-6,
+                "S[{s}]: вес {:.3} ≠ {:.3}",
+                vals[start],
+                SPINE_W_SM
+            );
+        }
+
+        // I- и M-нейроны: нет исходящих рёбер.
+        for i in SPINE_N_S..n {
+            assert_eq!(
+                rp[i], rp[i + 1],
+                "нейрон {i}: должен быть пустым, получил рёбра [{}, {})",
+                rp[i],
+                rp[i + 1]
+            );
+        }
+    }
 }

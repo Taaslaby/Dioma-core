@@ -10,9 +10,9 @@
 //!              C) сон — выученное закрепляется только у тех, кто спит.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma::engine::neurons::{gains_from, Brain, PlasticityParams};
-use dioma::engine::grow;
 use dioma::engine::graph::{sync_weights_from_brain, tropic_rewire, RewireOpts, TropicField};
+use dioma::engine::grow;
+use dioma::engine::neurons::{gains_from, Brain, PlasticityParams};
 use dioma::engine::rules::{compete, PythiaUnit, RuleGene};
 use dioma::rng::XorShift;
 
@@ -41,7 +41,11 @@ fn main() {
     println!("╔═══════════════════════════════════════════╗");
     println!("║  ГЕНЫ ПРАВИЛ · ТРОПИКА · СОН              ║");
     println!("╚═══════════════════════════════════════════╝");
-    println!("мозг: {} клеток · {} синапсов", grown.nt.len(), grown.edges.len());
+    println!(
+        "мозг: {} клеток · {} синапсов",
+        grown.nt.len(),
+        grown.edges.len()
+    );
 
     part_a_personalities(&grown, &gains, &params, &mut rng);
     part_b_tropic(grown.clone(), &gains, &params);
@@ -138,7 +142,10 @@ fn part_b_tropic(mut grown: dioma::Grown, gains: &[Vec<f32>], params: &Plasticit
     println!("\n── B. ТРОПИЧЕСКАЯ ПЕРЕСТРОЙКА ──");
     let mut brain = Brain::new(&grown, gains.to_vec(), params.clone());
     let mut field = TropicField::new(grown.nt.len(), 80);
-    let opts = RewireOpts { moves_per_call: 8, ..Default::default() };
+    let opts = RewireOpts {
+        moves_per_call: 8,
+        ..Default::default()
+    };
     let mut rng = XorShift::new(4242);
     let spt = brain.steps_per_tick();
     let zero = vec![0.12f32; grown.nt.len()];

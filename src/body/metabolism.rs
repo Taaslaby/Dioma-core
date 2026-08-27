@@ -18,7 +18,34 @@ pub mod chem {
     pub const PAIN: usize = 3; // ноцицепция (удары о стены)
     pub const REWARD: usize = 4; // дофамин (событие еды)
     pub const FATIGUE: usize = 5; // утомление (от моторной активности!)
-    pub const N: usize = 6;
+    /// Серотонин-подобный: медленный фон благополучия. Растёт от сытости,
+    /// тает часами. Высокий = сытый спокойный мир; низкий = тревожность.
+    pub const SEROTONIN: usize = 6;
+    /// Кортизол-подобный: медленный стресс. Качели голода и боль его гонят;
+    /// высокий подавляет пластичность (обучение дороже) и обостряет боль.
+    pub const CORTISOL: usize = 7;
+    /// Ацетилхолин-подобный: посредник внимания. Пищеварение выделяет,
+    /// обучение расходует — мост «поел → мозг готов учиться».
+    pub const ACETYLCHOLINE: usize = 8;
+    pub const N: usize = 9;
+}
+
+/// Тайм-константы распада (доля, остающаяся за тик 25 мс).
+pub mod decay {
+    use super::chem;
+    /// Гормональные химии: полураспад ~ минуты — память тела о недавней жизни.
+    pub const HORMONE_SLOW: f32 = 0.9995;
+    pub fn table() -> Vec<f32> {
+        let mut d = vec![0.999f32; chem::N];
+        d[chem::PAIN] = 0.90;
+        d[chem::REWARD] = 0.94;
+        d[chem::HUNGER] = 0.995;
+        d[chem::FATIGUE] = 0.995;
+        d[chem::SEROTONIN] = HORMONE_SLOW;
+        d[chem::CORTISOL] = HORMONE_SLOW;
+        d[chem::ACETYLCHOLINE] = 0.998;
+        d
+    }
 }
 
 /// Локусы — именованные точки «чего угодно» существа.
@@ -97,6 +124,13 @@ pub struct BrainOrgan {
     pub starve_damage: f32,
     /// 0..1 — накопленное повреждение (глушит GAIN_GLOBAL).
     pub damage: f32,
+    /// Глюкоза на единицу дофамина при фиксации веса (метаболический бюджет
+    /// обучения): пластичность не бесплатна — интеллект конкурирует с телом.
+    pub cost_per_dopamine: f32,
+    /// Восстановление повреждения за тик при сытости (глюкоза > 150):
+    /// голодание калечит, изобилие лечит — градиент отбора вместо
+    /// храповика «пир/вымирание».
+    pub heal_rate: f32,
 }
 
 /// Один тик крови для отладки: события, химии, локусы, урон органа.
@@ -133,7 +167,8 @@ impl Blood {
     /// стехиометрию, утомление от моторики, дофамин от еды, боль от стен.
     pub fn creature(robot: bool) -> Self {
         let reactions = vec![
-            // Пищеварение: 1 FOOD → 1 GLUCOSE.
+            // Пищеварение: 1 FOOD → 1 GLUCOSE + 0.3 ACh (внимание к миру:
+            // поел — мозг получил посредник для обучения).
             Reaction {
                 prop_r1: 1.0,
                 r1: chem::FOOD,
@@ -142,8 +177,8 @@ impl Blood {
                 rate: 0.10,
                 prop_p1: 1.0,
                 p1: chem::GLUCOSE,
-                prop_p2: 0.0,
-                p2: usize::MAX,
+                prop_p2: 0.3,
+                p2: chem::ACETYLCHOLINE,
             },
             // Ферментативное утоление: 1 HUNGER + 1 GLUCOSE → 1 GLUCOSE
             // (глюкоза — фермент: нужна, но conserve'd).
@@ -155,6 +190,21 @@ impl Blood {
                 rate: 0.010,
                 prop_p1: 1.0,
                 p1: chem::GLUCOSE,
+                prop_p2: 0.0,
+                p2: usize::MAX,
+            },
+            // Синтез серотонина из сытости: 1 GLUCOSE → 1 SEROTONIN.
+            // Медленный каскад: сытость сегодня = спокойствие на часы.
+            // rate мал намеренно: глюкоза не должна выгорать от одной сытости
+            // (этой реакцией полураспад глюкозы — десятки секунд, не тики).
+            Reaction {
+                prop_r1: 1.0,
+                r1: chem::GLUCOSE,
+                prop_r2: 0.0,
+                r2: usize::MAX,
+                rate: 0.0004,
+                prop_p1: 1.0,
+                p1: chem::SEROTONIN,
                 prop_p2: 0.0,
                 p2: usize::MAX,
             },
@@ -203,13 +253,43 @@ impl Blood {
                 digital: false,
                 locus: locus::SPEED,
             },
-            // Повреждение мозга глушит всё.
+            // Паническая гиперактивность при почти смертельном голоде:
+            // крайний голод добавляет фиксированный моторный тон (мечется,
+            // а не глушится). Повреждение глушится отдельно — GAIN_GLOBAL в шаге 5.
             Receptor {
                 chem: chem::HUNGER,
                 threshold: 240.0,
                 gain: 1.5,
                 reduce: false,
                 digital: true,
+                locus: locus::MOTOR_TONIC,
+            },
+            // Серотонин успокаивает: снижает тревожность поворота.
+            Receptor {
+                chem: chem::SEROTONIN,
+                threshold: 10.0,
+                gain: 0.03,
+                reduce: true,
+                digital: false,
+                locus: locus::TURN_GAIN,
+            },
+            // Кортизол обостряет обоняние (стрессовая бдительность),
+            // но глушит моторный тон (замороженность). Качели голода
+            // гоняют кортизол — темперамент существа меняется минутами.
+            Receptor {
+                chem: chem::CORTISOL,
+                threshold: 20.0,
+                gain: 1.5,
+                reduce: false,
+                digital: false,
+                locus: locus::SENSOR_GAIN,
+            },
+            Receptor {
+                chem: chem::CORTISOL,
+                threshold: 60.0,
+                gain: 0.5,
+                reduce: true,
+                digital: false,
                 locus: locus::MOTOR_TONIC,
             },
         ];
@@ -233,10 +313,13 @@ impl Blood {
                 chem: chem::PAIN,
             },
             // Моторная активность → утомление (мозг→химия→тело, замкнуто).
+            // Порог под реальный динамик: моторы дают ~5–20 спайков за тик,
+            // а не десятки LIF-единиц. Раньше порог 25 делал утомление
+            // мёртвым механизмом (fatigue всегда 0).
             Emitter {
                 locus: locus::RATE_MOTOR,
-                threshold: 25.0,
-                gain: 0.05,
+                threshold: 6.0,
+                gain: 0.20,
                 remove: false,
                 digital: false,
                 chem: chem::FATIGUE,
@@ -250,18 +333,30 @@ impl Blood {
                 digital: false,
                 chem: chem::HUNGER,
             },
+            // Дефицит глюкозы → стресс-гормон (медленный): хронический голод
+            // копит кортизол, и существо становится пугливым на минуты.
+            Emitter {
+                locus: locus::GLUCOSE_DEFICIT,
+                threshold: 40.0,
+                gain: 0.004,
+                remove: false,
+                digital: false,
+                chem: chem::CORTISOL,
+            },
+            // Боль тоже вливает стресс (острый эпизод поверх хроники).
+            Emitter {
+                locus: locus::EVENT_WALL,
+                threshold: 0.5,
+                gain: 8.0,
+                remove: true,
+                digital: true,
+                chem: chem::CORTISOL,
+            },
         ];
         let mut conc = vec![0.0f32; chem::N];
         conc[chem::GLUCOSE] = 128.0;
-        let decay = {
-            let mut d = vec![0.999f32; chem::N];
-            d[chem::FOOD] = 0.999;
-            d[chem::PAIN] = 0.90;
-            d[chem::REWARD] = 0.94;
-            d[chem::HUNGER] = 0.995;
-            d[chem::FATIGUE] = 0.995;
-            d
-        };
+        conc[chem::SEROTONIN] = 30.0;
+        let decay = decay::table();
         let mut pins = Vec::new();
         if robot {
             pins.push((chem::HUNGER, 255.0));
@@ -279,6 +374,8 @@ impl Blood {
                 cost_per_activity: 0.0015,
                 starve_damage: 0.002,
                 damage: 0.0,
+                cost_per_dopamine: 0.4,
+                heal_rate: 0.000_05,
             },
             pins,
         }
@@ -296,6 +393,8 @@ impl Blood {
 
     /// Один тик крови. Порядок: реакции → распады → эмиттеры → рецепторы →
     /// орган (цена активности, урон голода) → пины → запись трейса.
+    /// ВАЖНО: реакции внутри тика последовательны — каждая видит концентрации
+    /// после предыдущей; итог зависит от порядка в `reactions`, а не симметричен.
     pub fn update(&mut self) {
         let (ev_ate, ev_wall) = (
             self.loci[locus::EVENT_ATE] > 0.5,
@@ -356,7 +455,20 @@ impl Blood {
         }
 
         // 4. Рецепторы: химия → локус (аддитивно поверх дефолтов).
+        // Входные локусы (события и драйвы: EVENT_*, RATE_MOTOR,
+        // GLUCOSE_DEFICIT) пишутся ТЕЛОМ до update() — сброс дефолтов их
+        // ЗАТИРАЕТ, и урон/мощность в шаге 5 видят нули (существа не
+        // умирали и не голодали). Сохраняем их до пересчёта рецепторов.
+        let drive_loci = [
+            (locus::EVENT_ATE, self.loci[locus::EVENT_ATE]),
+            (locus::EVENT_WALL, self.loci[locus::EVENT_WALL]),
+            (locus::RATE_MOTOR, self.loci[locus::RATE_MOTOR]),
+            (locus::GLUCOSE_DEFICIT, self.loci[locus::GLUCOSE_DEFICIT]),
+        ];
         self.loci = locus::defaults();
+        for &(l, v) in &drive_loci {
+            self.loci[l] = v;
+        }
         for r in &self.receptors {
             let signal = (self.conc[r.chem] - r.threshold).max(0.0);
             let effect = if r.digital {
@@ -371,7 +483,8 @@ impl Blood {
             self.loci[r.locus] += if r.reduce { -effect } else { effect };
         }
 
-        // 5. Орган «мозг»: активность стоит глюкозы; голод калечит.
+        // 5. Орган «мозг»: активность стоит глюкозы; голод калечит,
+        // изобилие лечит (градиент отбора вместо храповика).
         let activity = self.loci[locus::RATE_MOTOR];
         let cost = self.organ.cost_per_activity * activity;
         if self.conc[chem::GLUCOSE] >= cost {
@@ -379,6 +492,11 @@ impl Blood {
         } else {
             self.conc[chem::GLUCOSE] = 0.0;
             self.organ.damage = (self.organ.damage + self.organ.starve_damage).min(1.0);
+        }
+        if self.conc[chem::GLUCOSE] > 150.0 && self.organ.damage > 0.0 {
+            self.organ.damage = (self.organ.damage - self.organ.heal_rate).max(0.0);
+            // Заживление тоже ест глюкозу — восстановление не бесплатно.
+            self.conc[chem::GLUCOSE] -= 0.01;
         }
         // Повреждение глушит глобальный гейн производительности.
         self.loci[locus::GAIN_GLOBAL] *= 1.0 - self.organ.damage;
@@ -432,5 +550,183 @@ impl Blood {
     /// Еда интересна только голодному (рецептор «рта»).
     pub fn wants_food(&self) -> bool {
         self.conc[chem::HUNGER] > 40.0
+    }
+
+    /// Метаболический множитель пластичности [0..1]: кортизол дорогой
+    /// (стресс → обучение подавлено), ацетилхолин дешёвый (внимание после
+    /// еды → окно обучаемости). Мозг читает перед reward_now.
+    pub fn plasticity_budget(&self) -> f32 {
+        let stress = (self.conc[chem::CORTISOL] / 120.0).min(1.0);
+        let attention = (self.conc[chem::ACETYLCHOLINE] / 60.0).min(1.0);
+        (1.0 - 0.6 * stress) * (0.7 + 0.3 * attention)
+    }
+
+    /// Списать метаболическую цену фиксации веса: сколько глюкозы стоит
+    /// этот дофамин. false — мозг обанкротился, награда не прошла.
+    pub fn pay_for_plasticity(&mut self, dopamine: f32) -> bool {
+        let cost = self.organ.cost_per_dopamine * dopamine;
+        if self.conc[chem::GLUCOSE] >= cost {
+            self.conc[chem::GLUCOSE] -= cost;
+            true
+        } else {
+            // Частичная выплата: слабый сигнал обучения при истощении.
+            let paid = self.conc[chem::GLUCOSE];
+            self.conc[chem::GLUCOSE] = 0.0;
+            paid > 0.0
+        }
+    }
+}
+
+#[cfg(test)]
+mod hormone_tests {
+    use super::*;
+
+    /// Гормоны — память тела: после серии ударов кортизол держится минуты,
+    /// а не тики (в отличие от боли с decay 0.90).
+    #[test]
+    fn cortisol_outlives_pain_by_orders_of_magnitude() {
+        let mut b = Blood::creature(false);
+        b.conc[chem::PAIN] = 100.0;
+        b.conc[chem::CORTISOL] = 100.0;
+        for _ in 0..200 {
+            b.update();
+        }
+        assert!(
+            b.conc[chem::PAIN] < 1.0,
+            "боль должна угаснуть: {}",
+            b.conc[chem::PAIN]
+        );
+        assert!(
+            b.conc[chem::CORTISOL] > 50.0,
+            "кортизол — медленная память: {}",
+            b.conc[chem::CORTISOL]
+        );
+    }
+
+    /// Каскад: пищеварение выделяет ацетилхолин (после еды окно внимания).
+    #[test]
+    fn digestion_produces_acetylcholine() {
+        let mut b = Blood::creature(false);
+        let ach0 = b.conc[chem::ACETYLCHOLINE];
+        b.ingest_food(90.0);
+        for _ in 0..50 {
+            b.update();
+        }
+        assert!(
+            b.conc[chem::ACETYLCHOLINE] > ach0 + 1.0,
+            "еда должна дать посредник внимания: {}",
+            b.conc[chem::ACETYLCHOLINE]
+        );
+    }
+
+    /// Метаболический бюджет: стресс подавляет пластичность, внимание помогает.
+    #[test]
+    fn plasticity_budget_respects_hormones() {
+        let mut calm = Blood::creature(false);
+        calm.conc[chem::SEROTONIN] = 80.0;
+        let mut stressed = Blood::creature(false);
+        stressed.conc[chem::CORTISOL] = 150.0;
+        let mut attentive = Blood::creature(false);
+        attentive.conc[chem::ACETYLCHOLINE] = 120.0;
+
+        let base = calm.plasticity_budget();
+        assert!(
+            stressed.plasticity_budget() < base * 0.6,
+            "стресс должен глушить обучение"
+        );
+        assert!(
+            attentive.plasticity_budget() > base,
+            "внимание должно помогать обучению"
+        );
+    }
+
+    /// Обучение стоит глюкозы; при банкротстве платится остаток.
+    #[test]
+    fn plasticity_costs_glucose_and_can_bankrupt() {
+        let mut b = Blood::creature(false);
+        b.conc[chem::GLUCOSE] = 10.0;
+        assert!(b.pay_for_plasticity(5.0), "достаточно денег — платим");
+        assert!((b.conc[chem::GLUCOSE] - (10.0 - 0.4 * 5.0)).abs() < 1e-4);
+
+        b.conc[chem::GLUCOSE] = 0.5;
+        assert!(
+            b.pay_for_plasticity(5.0),
+            "частичная выплата — глюкоза была"
+        );
+        assert_eq!(b.conc[chem::GLUCOSE], 0.0, "банкрот: всё списано");
+    }
+
+    /// Входные локусы (события/драйвы) не должны затираться рецепторами:
+    /// тело пишет их ДО update(), урон и драйв обязаны дойти до органа.
+    #[test]
+    fn drive_loci_survive_receptor_reset() {
+        let mut b = Blood::creature(false);
+        b.loci[locus::RATE_MOTOR] = 100.0;
+        b.loci[locus::GLUCOSE_DEFICIT] = 50.0;
+        b.loci[locus::EVENT_WALL] = 1.0;
+        b.update();
+        // Урон: моторная активность стоит глюкозу; дефицит → голод.
+        assert!(
+            b.loci[locus::RATE_MOTOR] > 0.0,
+            "RATE_MOTOR затёрт рецепторами: {}",
+            b.loci[locus::RATE_MOTOR]
+        );
+        assert!(
+            b.loci[locus::GLUCOSE_DEFICIT] > 0.0,
+            "GLUCOSE_DEFICIT затёрт: {}",
+            b.loci[locus::GLUCOSE_DEFICIT]
+        );
+        assert!(
+            b.loci[locus::EVENT_WALL] == 0.0,
+            "EVENT_WALL должен гаснуть после эмиссии"
+        );
+    }
+
+    /// Заживление: изобилие лечит повреждение, голодание калечит.
+    #[test]
+    fn abundance_heals_starvation_damage() {
+        let mut b = Blood::creature(false);
+        b.organ.damage = 0.2;
+        // Держим глюкозу в зоне изобилия: еда поступает быстрее расхода.
+        for _ in 0..2000 {
+            b.conc[chem::GLUCOSE] = 200.0; // искусственная капельница
+            b.update();
+        }
+        assert!(
+            b.organ.damage < 0.15,
+            "изобилие должно лечить: {}",
+            b.organ.damage
+        );
+    }
+
+    /// Регресс: синтез серотонина не должен выжигать глюкозу. Раньше
+    /// rate=0.02 сжигал ~2% запаса за тик (полураспад ~33 тика ≈ 0.8 с)
+    /// и существо голодало за доли секунды просто от сытости. Теперь
+    /// глюкоза тратится медленно, а серотонин всё ещё копится.
+    #[test]
+    fn serotonin_synthesis_does_not_drain_glucose() {
+        let mut b = Blood::creature(false);
+        b.loci[locus::RATE_MOTOR] = 0.0; // без моторной активности
+        let g0 = b.conc[chem::GLUCOSE];
+        let s0 = b.conc[chem::SEROTONIN];
+
+        for _ in 0..500 {
+            b.update();
+        }
+
+        assert!(
+            b.conc[chem::GLUCOSE] > g0 * 0.4,
+            "сытость не должна выжигать глюкозу: {} → {}",
+            g0,
+            b.conc[chem::GLUCOSE]
+        );
+        // Серотонин — медленный фон: за 500 тиков (~12 с) заметно растёт,
+        // но не взлетает (равновесие ~0.8×глюкоза, тает с HORMONE_SLOW).
+        assert!(
+            b.conc[chem::SEROTONIN] > s0 + 5.0,
+            "сытость должна копить серотонин: {} → {}",
+            s0,
+            b.conc[chem::SEROTONIN]
+        );
     }
 }

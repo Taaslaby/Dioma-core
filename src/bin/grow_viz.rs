@@ -57,16 +57,35 @@ fn main() {
         let cx = cents.iter().map(|c| c[0]).sum::<f64>() / cents.len() as f64;
         let cy = cents.iter().map(|c| c[1]).sum::<f64>() / cents.len() as f64;
         let bumps = vec![
-            ArtificialGradient::Gaussian { axis: 0, max: st.bump_max, mean: cx, sigma: st.bump_sigma },
-            ArtificialGradient::Gaussian { axis: 1, max: st.bump_max, mean: cy, sigma: st.bump_sigma },
+            ArtificialGradient::Gaussian {
+                axis: 0,
+                max: st.bump_max,
+                mean: cx,
+                sigma: st.bump_sigma,
+            },
+            ArtificialGradient::Gaussian {
+                axis: 1,
+                max: st.bump_max,
+                mean: cy,
+                sigma: st.bump_sigma,
+            },
         ];
-        world.add_substance(Substance::new(name, 0.2, Steering::DEGRADATION, &world.grid, bumps));
+        world.add_substance(Substance::new(
+            name,
+            0.2,
+            Steering::DEGRADATION,
+            &world.grid,
+            bumps,
+        ));
     }
 
     let mut rng = XorShift::new(777); // тот же сид, что в демо-прогонах
     for r in &layout.regions {
         for _ in 0..r.count {
-            let (u, v) = (rng.unit() * 2.0 - 1.0, rng.unit() * 2.0 * std::f64::consts::PI);
+            let (u, v) = (
+                rng.unit() * 2.0 - 1.0,
+                rng.unit() * 2.0 * std::f64::consts::PI,
+            );
             let c = u.cos();
             let rad = r.radius * rng.unit().cbrt();
             let xy = (1.0 - u * u).max(0.0).sqrt() * rad;
@@ -75,7 +94,11 @@ fn main() {
                 r.center[1] + xy * v.sin(),
                 r.center[2] + c * rad,
             );
-            let ty = if r.inhibitory { CellType::Inhibitory } else { CellType::Excitatory };
+            let ty = if r.inhibitory {
+                CellType::Inhibitory
+            } else {
+                CellType::Excitatory
+            };
             let cell_id = world.add_cell(p, ty, 4.0);
             world.cells[cell_id].tag = r.tag.to_string();
             if let Some(m) = &r.secrete {
@@ -140,7 +163,10 @@ fn main() {
             .entry((tag_of_node[e.pre], tag_of_node[e.post]))
             .or_default() += 1;
     }
-    println!("\n  ══ СИНАПСЫ ПОСЛЕ УЗНАВАНИЯ ({} всего) ══", g.edges.len());
+    println!(
+        "\n  ══ СИНАПСЫ ПОСЛЕ УЗНАВАНИЯ ({} всего) ══",
+        g.edges.len()
+    );
     for (ri, r) in layout.regions.iter().enumerate() {
         for (rj, rj_r) in layout.regions.iter().enumerate() {
             if let Some(&n) = by_pair.get(&(ri, rj)) {

@@ -20,6 +20,10 @@ pub struct Instinct {
     pub dopamine: f32,
 }
 
+/// Верхняя граница дофамина инстинкта: за много поколений мутаций сигнал
+/// не должен расходиться бесконечно (нижняя граница — в `mutate`).
+const DOPAMINE_MAX: f32 = 8.0;
+
 impl Instinct {
     /// Мутация инстинкта: дрейф токов и дофамина (индексы не трогаем —
     /// топология врождённая).
@@ -28,24 +32,43 @@ impl Instinct {
         for (_, drive) in g.inputs.iter_mut() {
             *drive = (*drive + rng.gauss() as f32 * sigma * 20.0).max(0.5);
         }
-        g.dopamine = (g.dopamine + rng.gauss() as f32 * sigma * 4.0).max(0.2);
+        g.dopamine = (g.dopamine + rng.gauss() as f32 * sigma * 4.0)
+            .clamp(0.2, DOPAMINE_MAX);
         g
     }
 
     /// Прожечь инстинкт в мозге: стимулировать вход, наградить, закрепить
     /// сном (цель гомеостаза + долговременный снимок обновляются).
     pub fn burn_into(&self, brain: &mut Brain, tonic: f32) {
+        self.burn_into_with_cap(brain, tonic, brain.plasticity_w_max());
+    }
+
+    /// То же, но с явным потолком клэмпа весов. Рождение (первый сон
+    /// новорождённого) прожигает инстинкты ВЫШЕ рабочего `w_max`: у
+    /// grown-коннектома хвосты весов десятки единиц, а рабочий потолок
+    /// пластичности ~6 — обычный дофамин срезал бы их при первом же
+    /// награждении и ОСЛАБИЛ бы рефлекс вместо усиления.
+    pub fn burn_into_with_cap(&self, brain: &mut Brain, tonic: f32, w_cap: f32) {
         let mut ext = vec![tonic; brain.n];
+        let mut stimulated = vec![false; brain.n];
         for &(i, drive) in &self.inputs {
             if i < brain.n {
                 ext[i] += drive;
+                stimulated[i] = true;
             }
         }
         let spt = brain.steps_per_tick();
+        // Прожигание — до 500 подшагов HAAP: переиспользуем буфер спайков,
+        // чтобы не аллоцировать `n_neurons` на каждый подшаг.
+        let mut spikes = Vec::with_capacity(brain.n);
         for _ in 0..spt {
-            brain.step(&ext);
+            brain.step_into(&ext, &mut spikes);
         }
-        brain.reward_now(self.dopamine);
+        // Фиксировать только собственную дугу: ко-активация сенсора и мотора
+        // возбуждает и тормозные пути (через интернейроны), и без этого
+        // фильтра награда усилила бы их — рефлекс глушил бы собственный драйв.
+        brain.restrict_eligibility(&stimulated);
+        brain.reward_now_with_cap(self.dopamine, w_cap);
         brain.clear_eligibility();
         // Закрепление: новая норма гомеостаза + эталон памяти.
         brain.sleep_consolidate(0.6);
@@ -84,9 +107,10 @@ mod tests {
         let mut ext = vec![0.12f32; 8];
         ext[0] = 2.0; // свет слева
         let mut m = 0i64;
+        let mut spikes = Vec::with_capacity(brain.n);
         for _ in 0..spt {
-            let sp = brain.step(&ext);
-            m += sp[4] as i64 + sp[5] as i64;
+            brain.step_into(&ext, &mut spikes);
+            m += spikes[4] as i64 + spikes[5] as i64;
         }
         m
     }
@@ -115,8 +139,7 @@ mod tests {
 
         // Контроль: тот же опыт БЕЗ закрепления (только стимул+награда
         // уже были выше) — сравниваем с ненаграждённым мозгом.
-        let mut awake_only =
-            Brain::new(&weak_grown(), gains_from(2, &[(0, 1, 1.0)]), params);
+        let mut awake_only = Brain::new(&weak_grown(), gains_from(2, &[(0, 1, 1.0)]), params);
         let _ = response(&mut awake_only);
 
         assert!(
@@ -132,7 +155,10 @@ mod tests {
             gains_from(2, &[(0, 1, 1.0)]),
             PlasticityParams::default(),
         );
-        let wild = Instinct { inputs: vec![(9999, 2.0)], dopamine: 0.5 };
+        let wild = Instinct {
+            inputs: vec![(9999, 2.0)],
+            dopamine: 0.5,
+        };
         wild.burn_into(&mut brain, 0.12); // не должно паниковать
     }
 }

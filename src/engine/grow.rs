@@ -65,7 +65,7 @@ impl Layout {
 }
 
 /// Рулевые параметры роста (мутабельная часть генома).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Steering {
     pub noise_weight: f64,
     pub gradient_weight: f64,
@@ -99,12 +99,34 @@ impl Default for Steering {
 impl Steering {
     /// Быстрое разложение морфогенов (поле не топит наведение).
     pub const DEGRADATION: f64 = 0.02;
+
+    /// Мутация генома роста: относительный дрейф параметров (±sigma),
+    /// всё положительное, экстремальные значения зажаты (иначе мутация
+    /// ломает саму возможность роста коннектома). Шаги роста дрейфуют
+    /// в разумных пределах [50, 1000].
+    pub fn mutate(&self, rng: &mut XorShift, sigma: f64) -> Steering {
+        let mut drift = |v: f64| (v * (1.0 + rng.gauss() * sigma)).max(0.1);
+        Steering {
+            noise_weight: drift(self.noise_weight),
+            gradient_weight: drift(self.gradient_weight),
+            old_dir_weight: drift(self.old_dir_weight),
+            turn_rate_deg: drift(self.turn_rate_deg).min(90.0),
+            stop_concentration: drift(self.stop_concentration),
+            bump_max: drift(self.bump_max),
+            bump_sigma: drift(self.bump_sigma),
+            synapse_dist: drift(self.synapse_dist),
+            grow_steps: (self.grow_steps as f64 * (1.0 + rng.gauss() * sigma))
+                .round()
+                .clamp(50.0, 1000.0) as usize,
+        }
+    }
 }
 
-/// Вырастить коннектом из layout.
+/// Построить мир прометея из layout: сетка, морфогены, клетки, аксоны.
+/// Возвращает мир и регионы клеток (порядок add_cell = порядок layout).
 ///
 /// Границы мира выводятся из геометрии регионов (с запасом на гауссианы).
-pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
+fn build_world(layout: &Layout, st: &Steering, seed: u64) -> (World, Vec<usize>) {
     // Границы мира: все сомы ± 70.
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
@@ -221,12 +243,18 @@ pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
             idx += 1;
         }
     }
+    (world, region_of)
+}
 
-    let t0 = std::time::Instant::now();
-    for _ in 0..st.grow_steps {
-        world.step();
-    }
-
+/// Финальная фаза роста: узнать пары тегов, сформировать синапсы, свернуть
+/// мир в `Grown`.
+fn finalize(
+    mut world: World,
+    region_of: Vec<usize>,
+    layout: &Layout,
+    st: &Steering,
+    growth_s: f64,
+) -> Grown {
     // Узнавание: таблица допустимых пар тегов.
     let mut allowed = HashMap::new();
     let mut prob = HashMap::new();
@@ -236,7 +264,6 @@ pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
     }
     let rec = TagRecognition { allowed, prob };
     world.form_synapses_tagged(st.synapse_dist, &rec);
-    let growth_s = t0.elapsed().as_secs_f64();
 
     let g = world.to_graph();
     let nt: Vec<f32> = region_of
@@ -260,6 +287,106 @@ pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
         growth_s,
         rule_genes: Vec::new(),
         instincts: Vec::new(),
+    }
+}
+
+/// Вырастить коннектом из layout на CPU (rayon-диффузия прометея).
+pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
+    let (mut world, region_of) = build_world(layout, st, seed);
+
+    let t0 = std::time::Instant::now();
+    for _ in 0..st.grow_steps {
+        world.step();
+    }
+    let growth_s = t0.elapsed().as_secs_f64();
+
+    finalize(world, region_of, layout, st, growth_s)
+}
+
+/// Вырастить коннектом из layout с диффузией морфогенов на GPU (wgpu).
+///
+/// Строит тот же мир, но подключает `DiffusionBackend::Gpu` (прометеевский
+/// 7-точечный лапласиан в compute-шейдере; CPU-диффузия — rayon, GPU — wgpu).
+/// Инициализация адаптера — async, блокируемся через pollster. Без адаптера
+/// прометей сам падает обратно на CPU (`DiffusionBackend::new`), так что
+/// вызов безопасен в любом окружении.
+///
+/// Рост стохастичен и не обязан бит-в-бит совпадать с CPU-путём: GPU считает
+/// диффузию в f32, CPU — в f64, траектории аксонов разойдутся, как от разных
+/// сидов. Топология (какие пары регионов замыкаются) сохраняется — проверено
+/// пробой grow_gpu_probe.
+pub fn grow_gpu(layout: &Layout, st: &Steering, seed: u64) -> Grown {
+    let backend = pollster::block_on(prometheus_grow::DiffusionBackend::new());
+    grow_with_backend(layout, st, seed, backend)
+}
+
+/// Рост с готовым диффузионным бэкендом: один адаптер/устройство на много
+/// существ (пул рождающихся) — инициализация wgpu дорогая, её не стоит
+/// повторять на каждого ребёнка.
+pub fn grow_with_backend(
+    layout: &Layout,
+    st: &Steering,
+    seed: u64,
+    backend: prometheus_grow::DiffusionBackend,
+) -> Grown {
+    let (mut world, region_of) = build_world(layout, st, seed);
+    world.set_diffusion_backend(backend);
+
+    let t0 = std::time::Instant::now();
+    for _ in 0..st.grow_steps {
+        world.step();
+    }
+    let growth_s = t0.elapsed().as_secs_f64();
+
+    finalize(world, region_of, layout, st, growth_s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CPU-рост детерминирован (проверено: 908 рёбер в двух процессах):
+    /// короткие дуги рефлекторной дуги (SL→ML, SR→MR, I→*) замыкаются всегда;
+    /// длинная диагональ WL→MR/WR→ML (240 мкм) — стохастична по сиду.
+    #[test]
+    fn grow_cpu_topology() {
+        let layout = avoidance_layout();
+        let st = Steering {
+            grow_steps: 200,
+            ..Steering::default()
+        };
+        // Сид 777 (сверен с grow_gpu_probe): все 8 пар, включая длинные
+        // диагонали WL→MR / WR→ML. Сид 42 их не даёт — диагональ хрупкая.
+        let g = grow(&layout, &st, 777);
+        assert!(!g.edges.is_empty(), "коннектом пуст");
+        assert_eq!(g.region_of.len(), layout.n());
+        let mut out = std::collections::HashSet::new();
+        for &(pre, _, _) in &g.edges {
+            out.insert(g.region_of[pre]);
+        }
+        for ri in 0..5 {
+            assert!(out.contains(&ri), "регион {ri} не дал ни одной дуги");
+        }
+    }
+
+    /// GPU-рост (или CPU-fallback без адаптера) исполняется до конца и даёт
+    /// непустой коннектом с корректными границами. Топологию не проверяем:
+    /// GPU-диффузия считается в f32 и детерминирована только в пределах
+    /// одного адаптера/драйвера, поэтому точный набор дуг между машинами
+    /// не гарантирован (в отличие от CPU, см. grow_cpu_topology).
+    #[test]
+    fn grow_gpu_smoke() {
+        let layout = avoidance_layout();
+        let st = Steering {
+            grow_steps: 200,
+            ..Steering::default()
+        };
+        let g = grow_gpu(&layout, &st, 42);
+        assert!(!g.edges.is_empty(), "коннектом пуст");
+        assert_eq!(g.region_of.len(), layout.n());
+        for &(pre, post, _) in &g.edges {
+            assert!(pre < layout.n() && post < layout.n(), "ребро вне границ");
+        }
     }
 }
 
@@ -370,6 +497,96 @@ pub fn agent_layout() -> Layout {
             ("SR".into(), "SR".into()),
             ("SR".into(), "MR".into()),
             ("SR".into(), "I".into()),
+            ("I".into(), "ML".into()),
+            ("I".into(), "MR".into()),
+        ],
+    }
+}
+
+/// Арена + направленное ощущение стен: + WL/WR (стена слева/справа).
+/// Регионы: 0=SL 1=SR 2=WL 3=WR 4=I 5=ML 6=MR.
+///
+/// WL растёт аксоны к MR (стена слева → поворот ВПРАВО, прочь), WR — к ML
+/// (стена справа → поворот влево). Перекрёст — это направленное избегание:
+/// существо отворачивает от стены, а не глушит гоминг целиком. Пути пластичны —
+/// наказание (удар) и облегчение (стена отодвинулась) формируют их через STDP.
+pub fn avoidance_layout() -> Layout {
+    Layout {
+        regions: vec![
+            RegionSpec {
+                tag: "SL",
+                center: [-60.0, -60.0, 0.0],
+                radius: 15.0,
+                count: 20,
+                inhibitory: false,
+                secrete: None,
+                axons: vec![axon("ML", 170.0), axon("ML", 170.0)],
+            },
+            RegionSpec {
+                tag: "SR",
+                center: [60.0, -60.0, 0.0],
+                radius: 15.0,
+                count: 20,
+                inhibitory: false,
+                secrete: None,
+                axons: vec![axon("MR", 170.0), axon("MR", 170.0)],
+            },
+            RegionSpec {
+                tag: "WL",
+                center: [-30.0, -75.0, 0.0],
+                radius: 12.0,
+                count: 12,
+                inhibitory: false,
+                secrete: None,
+                // Перекрёстная диагональ до противоположного мотора длинная:
+                // 240 вместо 170, иначе аксон упирается в max_len и не достаёт
+                // до контактного радиуса (видно на edge-счётчике пар WL→MR=0).
+                axons: vec![axon("MR", 240.0)],
+            },
+            RegionSpec {
+                tag: "WR",
+                center: [30.0, -75.0, 0.0],
+                radius: 12.0,
+                count: 12,
+                inhibitory: false,
+                secrete: None,
+                axons: vec![axon("ML", 240.0)],
+            },
+            RegionSpec {
+                tag: "I",
+                center: [0.0, -30.0, 0.0],
+                radius: 12.0,
+                count: 16,
+                inhibitory: true,
+                secrete: None,
+                axons: vec![axon("ML", 140.0), axon("MR", 140.0)],
+            },
+            RegionSpec {
+                tag: "ML",
+                center: [-60.0, 60.0, 0.0],
+                radius: 15.0,
+                count: 20,
+                inhibitory: false,
+                secrete: Some("ML".into()),
+                axons: vec![],
+            },
+            RegionSpec {
+                tag: "MR",
+                center: [60.0, 60.0, 0.0],
+                radius: 15.0,
+                count: 20,
+                inhibitory: false,
+                secrete: Some("MR".into()),
+                axons: vec![],
+            },
+        ],
+        allowed_pairs: vec![
+            ("SL".into(), "ML".into()),
+            ("SL".into(), "I".into()),
+            ("SR".into(), "MR".into()),
+            ("SR".into(), "I".into()),
+            ("WL".into(), "MR".into()),
+            ("WR".into(), "ML".into()),
             ("I".into(), "ML".into()),
             ("I".into(), "MR".into()),
         ],

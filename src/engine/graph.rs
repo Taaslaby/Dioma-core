@@ -29,7 +29,13 @@ pub struct RewireOpts {
 
 impl Default for RewireOpts {
     fn default() -> Self {
-        Self { moves_per_call: 6, weak_w: 0.35, new_w: 0.5, cap_out: 32, cap_in: 32 }
+        Self {
+            moves_per_call: 6,
+            weak_w: 0.35,
+            new_w: 0.5,
+            cap_out: 32,
+            cap_in: 32,
+        }
     }
 }
 
@@ -43,7 +49,11 @@ pub struct TropicField {
 impl TropicField {
     /// `every` — период перестройки в тиках.
     pub fn new(n: usize, every: usize) -> Self {
-        Self { ema: vec![0.0; n], tick: 0, every: every.max(1) }
+        Self {
+            ema: vec![0.0; n],
+            tick: 0,
+            every: every.max(1),
+        }
     }
 
     /// Учёт спайков тика; true — пора перестраивать.
@@ -66,7 +76,9 @@ fn percentile(v: &[f32], q: f32) -> f32 {
     }
     let mut s = v.to_vec();
     s.sort_by(f32::total_cmp);
-    let idx = ((s.len() as f32 - 1.0) * q).round().clamp(0.0, s.len() as f32 - 1.0) as usize;
+    let idx = ((s.len() as f32 - 1.0) * q)
+        .round()
+        .clamp(0.0, s.len() as f32 - 1.0) as usize;
     s[idx]
 }
 
@@ -108,13 +120,19 @@ pub fn tropic_rewire(
         .iter()
         .enumerate()
         .filter(|&(_, &(pre, post, w))| {
-            w.abs() <= opts.weak_w && out_deg[pre] >= 2 && in_deg[post] >= 2 && troph[pre] < thr * 0.5
+            w.abs() <= opts.weak_w
+                && out_deg[pre] >= 2
+                && in_deg[post] >= 2
+                && troph[pre] < thr * 0.5
         })
         .map(|(ei, _)| ei)
         .collect();
 
     let active: Vec<usize> = (0..n).filter(|&i| troph[i] >= thr).collect();
-    let mut journal = RewireJournal { removals: Vec::new(), sprouts: Vec::new() };
+    let mut journal = RewireJournal {
+        removals: Vec::new(),
+        sprouts: Vec::new(),
+    };
     if active.len() < 2 {
         return (RewireReport { moved: 0 }, journal);
     }
@@ -127,11 +145,18 @@ pub fn tropic_rewire(
         let ei = weak.swap_remove(pick);
         let (pre, post, _) = grown.edges[ei];
 
+        // Степени могли просесть уже в этом вызове (другое слабое ребро с тем
+        // же pre/post удалено раньше): перепроверяем актуально, иначе нейрон
+        // останется без единой связи вопреки контракту «у обеих сторон останется
+        // связь» (и в release дошло бы до wraparound usize).
+        if out_deg[pre] < 2 || in_deg[post] < 2 {
+            continue;
+        }
+
         let a = active[(rng.unit() * active.len() as f64) as usize % active.len()];
         let b = active[(rng.unit() * active.len() as f64) as usize % active.len()];
         if a == b
             || pairs.contains(&(a, b))
-            || (a == pre && b == post)
             || out_deg[a] >= opts.cap_out
             || in_deg[b] >= opts.cap_in
         {
@@ -160,7 +185,9 @@ pub fn tropic_rewire(
     kept.extend(sprouts);
     grown.edges = kept;
 
-    let report = RewireReport { moved: journal.removals.len() };
+    let report = RewireReport {
+        moved: journal.removals.len(),
+    };
     (report, journal)
 }
 
@@ -241,8 +268,14 @@ mod tests {
         let mut rng = XorShift::new(9);
         let (rep, j) = tropic_rewire(&mut g, &troph, &mut rng, &RewireOpts::default());
         let strong_after = g.edges.iter().filter(|&&(_, _, w)| w > 0.5).count();
-        assert_eq!(strong_after, strong_before, "сильные связи не должны страдать");
-        assert!(j.sprouts.iter().all(|&(a, _, _)| troph[a] >= 3.0), "ростки — от активных");
+        assert_eq!(
+            strong_after, strong_before,
+            "сильные связи не должны страдать"
+        );
+        assert!(
+            j.sprouts.iter().all(|&(a, _, _)| troph[a] >= 3.0),
+            "ростки — от активных"
+        );
         assert!(rep.moved <= 6);
     }
 
@@ -274,5 +307,49 @@ mod tests {
         let mut rng = XorShift::new(5);
         let (rep, _) = tropic_rewire(&mut g, &troph, &mut rng, &RewireOpts::default());
         assert_eq!(rep.moved, 0);
+    }
+
+    #[test]
+    fn rewire_does_not_starve_shared_source() {
+        // Клетка 0 имеет шесть слабых исходящих связей — все кандидаты на
+        // рассасывание с общим источником. Без перепроверки актуальной степени
+        // внутри цикла за один вызов удалились бы все шесть, и out_deg[0]
+        // ушёл бы в 0 (в release — wraparound usize).
+        let edges = vec![
+            (0, 6, 0.10),
+            (0, 7, 0.10),
+            (0, 8, 0.10),
+            (0, 9, 0.10),
+            (0, 10, 0.10),
+            (0, 11, 0.10),
+            (1, 6, 1.0),
+            (2, 7, 1.0),
+            (3, 8, 1.0),
+            (4, 9, 1.0),
+            (5, 10, 1.0),
+            (1, 11, 1.0),
+        ];
+        let make_grown = || Grown {
+            edges: edges.clone(),
+            region_of: vec![0; 12],
+            nt: vec![1.0; 12],
+            growth_s: 0.0,
+            rule_genes: Vec::new(),
+            instincts: Vec::new(),
+        };
+        // Трофика: активны 1..=5, тихие — 0 и посты 6..=11.
+        let troph = vec![0.0, 3.0, 3.0, 3.0, 3.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+        for seed in 0..64u64 {
+            let mut g = make_grown();
+            let mut rng = XorShift::new(seed);
+            let _ = tropic_rewire(&mut g, &troph, &mut rng, &RewireOpts::default());
+
+            let out0 = g.edges.iter().filter(|&&(pre, _, _)| pre == 0).count();
+            assert!(
+                out0 >= 1,
+                "seed {seed}: источник 0 остался без исходящих связей"
+            );
+        }
     }
 }

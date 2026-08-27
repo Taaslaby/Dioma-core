@@ -8,8 +8,8 @@
 //!              существо ещё решает, куда двигаться.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma::engine::neurons::{gains_from, Brain, PlasticityParams};
 use dioma::engine::grow;
+use dioma::engine::neurons::{gains_from, Brain, PlasticityParams};
 use dioma::engine::rules::{compete, PythiaUnit, RuleGene};
 use dioma::rng::XorShift;
 
@@ -17,6 +17,8 @@ const SL: usize = 0;
 const SR: usize = 1;
 /// Регион-носитель «гена решения» в этом протоколе (ML).
 const DECISION_GENE_REGION: usize = 3;
+/// Мутация гена правила (абсолютная, на параметр).
+const MUTATE_RULE_SIGMA: f32 = 0.08;
 
 fn main() {
     println!("╔═══════════════════════════════════════════╗");
@@ -41,9 +43,7 @@ fn main() {
     let mut gene = RuleGene::spiker(0.7, 0.5, 0.50, 2.0);
     let mut lineage_seed = 1000u64;
 
-    println!(
-        "  пок │ порог гена │ подпись (мин амп реш.) │ точн@2 │ точн@9"
-    );
+    println!("  пок │ порог гена │ подпись (мин амп реш.) │ точн@2 │ точн@9");
     for gen in 0..=3 {
         let mut brain = Brain::new(&grown, gains.clone(), params.clone());
         let signature = min_deciding_amplitude(&gene, &mut brain);
@@ -59,9 +59,11 @@ fn main() {
         );
 
         // Наследник: ген родителя ± шум (та же формула, что spawn_child).
-        lineage_seed = lineage_seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        lineage_seed = lineage_seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1);
         let mut rng = XorShift::new(lineage_seed ^ (0x9E37_79B9 ^ DECISION_GENE_REGION as u64));
-        gene = gene.mutate(&mut rng, dioma::heritage::MUTATE_RULE_SIGMA);
+        gene = gene.mutate(&mut rng, MUTATE_RULE_SIGMA);
     }
     println!();
     println!("  Анатомия одна у всех — различие создают только гены правил.");

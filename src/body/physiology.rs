@@ -220,7 +220,10 @@ pub fn resting_state(c: &[f32; N_COLS]) -> (f32, f32, f32) {
     let h_inf = |v: f32| 1.0 / (1.0 + ((v - vh_h) / k_h).exp());
     let f = |v: f32| g_l * (v - e_l) + g_m * u_inf(v) * (v - e_k) + g_h * h_inf(v) * (v - e_h);
     let (mut lo, mut hi) = (-120.0f32, -20.0f32);
-    debug_assert!(f(lo) < 0.0 && f(hi) > 0.0, "resting_state: нет перемены знака");
+    debug_assert!(
+        f(lo) < 0.0 && f(hi) > 0.0,
+        "resting_state: нет перемены знака"
+    );
     for _ in 0..60 {
         let mid = 0.5 * (lo + hi);
         if f(mid) < 0.0 {
@@ -235,10 +238,7 @@ pub fn resting_state(c: &[f32; N_COLS]) -> (f32, f32, f32) {
 
 /// Залить колонки HAAP в раннер: параметры + гейты в равновесие шаблона.
 /// Единая точка инициализации (Brain, органный средний мозг).
-pub fn apply_haap_columns(
-    runner: &mut pillars_connectome::BrainRunner,
-    cols: &[[f32; N_COLS]],
-) {
+pub fn apply_haap_columns(runner: &mut pillars_connectome::BrainRunner, cols: &[[f32; N_COLS]]) {
     use pillars::zoo::HAAPModelParamIdx;
     let order = [
         HAAPModelParamIdx::dt,
@@ -281,8 +281,7 @@ pub fn pacemaker_mix_columns(n: usize, genes: &PhysioGenes) -> Vec<[f32; N_COLS]
     const PACEMAKER_FRACTION: f64 = 0.34;
     (0..n)
         .map(|i| {
-            let h =
-                ((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as f64 / u32::MAX as f64;
+            let h = ((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as f64 / u32::MAX as f64;
             if h < PACEMAKER_FRACTION {
                 haap_columns(Archetype::Pacemaker, genes)
             } else {

@@ -10,8 +10,8 @@
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
 use pillars_connectome::{BrainConfig, BrainRunner, ConnectomeData};
-use taas_format::TaasReader;
 use std::collections::HashSet;
+use taas_format::TaasReader;
 
 fn main() {
     println!("╔══════════════════════════════════════════╗");
@@ -39,7 +39,9 @@ fn main() {
     let z = vec![0.0f32; n];
 
     // Разминка.
-    for _ in 0..200 { brain.run(1, &z); }
+    for _ in 0..200 {
+        brain.run(1, &z);
+    }
 
     // ══════════════════════════════════════════════
     // ТЕСТ 1: Pattern Separation
@@ -53,8 +55,11 @@ fn main() {
         let mut r2 = BrainRunner::new(
             ConnectomeData::new(rp.clone(), ci.clone(), vals.clone(), nt.clone(), vec![]),
             BrainConfig::lif_alpha(0.05),
-        ).unwrap();
-        for _ in 0..100 { r2.run(1, &z); }
+        )
+        .unwrap();
+        for _ in 0..100 {
+            r2.run(1, &z);
+        }
 
         // Стимул: каждые 64-е нейроны для паттерна pat_id.
         let mut stim = z.clone();
@@ -63,7 +68,8 @@ fn main() {
         }
 
         let mut resp = vec![0i64; n];
-        for _ in 0..100 { // 5 мс стимула
+        for _ in 0..100 {
+            // 5 мс стимула
             let buf = r2.run(1, &stim);
             for (i, &s) in buf.iter().enumerate() {
                 resp[i] += s as i64;
@@ -74,28 +80,63 @@ fn main() {
 
     // Попарная корреляция ответов.
     for a in 0..3 {
-        for b in (a+1)..4 {
-            let dot: f64 = patterns[a].iter().zip(patterns[b].iter())
-                .map(|(x, y)| (x * y) as f64).sum();
-            let na: f64 = patterns[a].iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
-            let nb: f64 = patterns[b].iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+        for b in (a + 1)..4 {
+            let dot: f64 = patterns[a]
+                .iter()
+                .zip(patterns[b].iter())
+                .map(|(x, y)| (x * y) as f64)
+                .sum();
+            let na: f64 = patterns[a]
+                .iter()
+                .map(|x| (*x as f64).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            let nb: f64 = patterns[b]
+                .iter()
+                .map(|x| (*x as f64).powi(2))
+                .sum::<f64>()
+                .sqrt();
             let cos = if na * nb > 0.0 { dot / (na * nb) } else { 0.0 };
             println!("  паттерн {} vs {}: cosine={:.3}", a, b, cos);
         }
     }
     let avg_cos = {
-        let mut cos_sum = 0.0; let mut cnt = 0;
-        for a in 0..4 { for b in (a+1)..4 {
-            let dot: f64 = patterns[a].iter().zip(patterns[b].iter())
-                .map(|(x, y)| (x * y) as f64).sum();
-            let na = patterns[a].iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
-            let nb = patterns[b].iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
-            if na * nb > 0.0 { cos_sum += dot / (na * nb); cnt += 1; }
-        }}
+        let mut cos_sum = 0.0;
+        let mut cnt = 0;
+        for a in 0..4 {
+            for b in (a + 1)..4 {
+                let dot: f64 = patterns[a]
+                    .iter()
+                    .zip(patterns[b].iter())
+                    .map(|(x, y)| (x * y) as f64)
+                    .sum();
+                let na = patterns[a]
+                    .iter()
+                    .map(|x| (*x as f64).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                let nb = patterns[b]
+                    .iter()
+                    .map(|x| (*x as f64).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                if na * nb > 0.0 {
+                    cos_sum += dot / (na * nb);
+                    cnt += 1;
+                }
+            }
+        }
         cos_sum / cnt.max(1) as f64
     };
-    println!("  средняя корреляция: {:.3} ({})", avg_cos,
-        if avg_cos < 0.5 {"различает ✓"} else {"слишком похоже"});
+    println!(
+        "  средняя корреляция: {:.3} ({})",
+        avg_cos,
+        if avg_cos < 0.5 {
+            "различает ✓"
+        } else {
+            "слишком похоже"
+        }
+    );
 
     // ══════════════════════════════════════════════
     // ТЕСТ 2: КАСКАД — как далеко распространяется?
@@ -104,19 +145,28 @@ fn main() {
     let mut cascade_runner = BrainRunner::new(
         ConnectomeData::new(rp.clone(), ci.clone(), vals.clone(), nt.clone(), vec![]),
         BrainConfig::lif_alpha(0.05),
-    ).unwrap();
-    for _ in 0..100 { cascade_runner.run(1, &z); }
+    )
+    .unwrap();
+    for _ in 0..100 {
+        cascade_runner.run(1, &z);
+    }
 
     let mut stim2 = z.clone();
-    for cell in stim2.iter_mut().take(10) { *cell = 50.0; } // точечный удар
+    for cell in stim2.iter_mut().take(10) {
+        *cell = 50.0;
+    } // точечный удар
 
     let mut wavefront: Vec<usize> = Vec::new();
     let mut prev_active: HashSet<usize> = HashSet::new();
     for _step in 0..50 {
         let buf = cascade_runner.run(1, &stim2);
-        let now_active: HashSet<usize> = buf.iter().enumerate()
-            .filter(|(_, &s)| s != 0).map(|(i, _)| i).collect();
-        
+        let now_active: HashSet<usize> = buf
+            .iter()
+            .enumerate()
+            .filter(|(_, &s)| s != 0)
+            .map(|(i, _)| i)
+            .collect();
+
         // Новые нейроны = активные сейчас но не были раньше.
         let new_count = now_active.difference(&prev_active).count();
         wavefront.push(new_count);
@@ -125,11 +175,22 @@ fn main() {
 
     // Волна: сколько НОВЫХ нейронов активируется на каждом шаге.
     let total_wave: usize = wavefront.iter().sum();
-    let _peak_step = wavefront.iter().enumerate().max_by_key(|(_, v)| **v).map(|(i, _)| i).unwrap_or(0);
-    println!("  новых нейронов по шагам (первые 20): {:?}",
-        wavefront.iter().take(20).collect::<Vec<_>>());
-    println!("  всего вовлечено: {}/{} ({}%)", total_wave / 50, n,
-        total_wave / 50 * 100 / n);
+    let _peak_step = wavefront
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, v)| **v)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    println!(
+        "  новых нейронов по шагам (первые 20): {:?}",
+        wavefront.iter().take(20).collect::<Vec<_>>()
+    );
+    println!(
+        "  всего вовлечено: {}/{} ({}%)",
+        total_wave / 50,
+        n,
+        total_wave / 50 * 100 / n
+    );
 
     drop(wavefront);
 
@@ -148,8 +209,11 @@ fn main() {
     }
 
     // Топ-10 самых активных.
-    let mut ranked: Vec<(usize, i64)> = neuron_activity.iter().enumerate()
-        .map(|(i, &v)| (i, v)).collect();
+    let mut ranked: Vec<(usize, i64)> = neuron_activity
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i, v))
+        .collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1));
     println!("топ-10 коммандных нейронов:");
     for &(idx, act) in ranked.iter().take(10) {
@@ -160,8 +224,10 @@ fn main() {
     // Концентрация активности: топ-1% нейронов делает какой % спайков?
     let total: i64 = neuron_activity.iter().sum();
     let top_1pct: i64 = ranked.iter().take(n / 100).map(|(_, v)| *v).sum();
-    println!("  топ-1% нейронов генерирует {:.1}% всей активности",
-        top_1pct as f64 / total.max(1) as f64 * 100.0);
+    println!(
+        "  топ-1% нейронов генерирует {:.1}% всей активности",
+        top_1pct as f64 / total.max(1) as f64 * 100.0
+    );
 
     // ══════════════════════════════════════════════
     // ТЕСТ 4: OSCILLATION — есть ли ритмы?
@@ -172,21 +238,32 @@ fn main() {
         let buf = brain.run(1, &drive_vec(n, 3.0));
         rate_series.push(buf.iter().map(|&s| s as f64).sum::<f64>());
     }
-    
+
     // Простая автокорреляция на лаге 5 и 10.
     let mean = rate_series.iter().sum::<f64>() / rate_series.len() as f64;
-    let var = rate_series.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / rate_series.len() as f64;
+    let var =
+        rate_series.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / rate_series.len() as f64;
     if var > 0.0 {
         for lag in [5usize, 10] {
-            let cov: f64 = rate_series.iter().zip(rate_series.iter().skip(lag))
-                .map(|(a, b)| (a - mean) * (b - mean)).sum::<f64>()
+            let cov: f64 = rate_series
+                .iter()
+                .zip(rate_series.iter().skip(lag))
+                .map(|(a, b)| (a - mean) * (b - mean))
+                .sum::<f64>()
                 / (rate_series.len() - lag) as f64;
             println!("  автокорреляция лаг={}: {:.3}", lag, cov / var);
         }
     }
     let cv = var.sqrt() / mean.max(0.01);
-    println!("  коэффициент вариации: {:.2} ({})", cv,
-        if cv > 0.3 {"ритмичная активность ✓"} else {"тоник"});
+    println!(
+        "  коэффициент вариации: {:.2} ({})",
+        cv,
+        if cv > 0.3 {
+            "ритмичная активность ✓"
+        } else {
+            "тоник"
+        }
+    );
 }
 
 fn drive_vec(n: usize, level: f32) -> Vec<f32> {

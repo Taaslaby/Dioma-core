@@ -25,7 +25,8 @@ pub enum Var {
 }
 
 impl Var {
-    fn idx(self) -> usize {
+    /// Индекс в массиве состояния клетки (публично для моста TNMT).
+    pub fn idx(self) -> usize {
         match self {
             Var::Act => 0,
             Var::Inp => 1,
@@ -60,7 +61,11 @@ pub enum Op {
     Stop,
     /// Спайк: если top > порога из `thr_var` (и не в рефрактере) — Out=1 и
     /// старт рефрактера, иначе Out затухает. Push Out.
-    Fire { thr_var: Var, refr: f32, decay: f32 },
+    Fire {
+        thr_var: Var,
+        refr: f32,
+        decay: f32,
+    },
     /// Записать top в S4 как candidacy для конкуренции этого тика.
     Compete,
 }
@@ -84,14 +89,20 @@ pub struct RuleGene {
 impl Default for RuleGene {
     fn default() -> Self {
         // Интегратор: leak 0.9, gain 0.3.
-        Self { template: templates::INTEGRATOR, p: [0.9, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] }
+        Self {
+            template: templates::INTEGRATOR,
+            p: [0.9, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        }
     }
 }
 
 impl RuleGene {
     /// SPIKER: p=[leak, gain, thr, refr].
     pub fn spiker(leak: f32, gain: f32, thr: f32, refr: f32) -> Self {
-        Self { template: templates::SPIKER, p: [leak, gain, thr, refr, 0.0, 0.0, 0.0, 0.0] }
+        Self {
+            template: templates::SPIKER,
+            p: [leak, gain, thr, refr, 0.0, 0.0, 0.0, 0.0],
+        }
     }
 
     /// CONSOLIDATOR: p=[leak, gain, thr0, k_troph], refr=3.
@@ -113,7 +124,11 @@ impl RuleGene {
 }
 
 fn fire(refr: f32) -> Op {
-    Op::Fire { thr_var: Var::S4, refr: refr.max(1.0), decay: 0.55 }
+    Op::Fire {
+        thr_var: Var::S4,
+        refr: refr.max(1.0),
+        decay: 0.55,
+    }
 }
 
 /// Компиляция гена → программа. Один ген = одна динамика клетки.
@@ -322,7 +337,11 @@ impl PythiaUnit {
                         continue;
                     }
                     Op::Stop => break,
-                    Op::Fire { thr_var, refr, decay } => {
+                    Op::Fire {
+                        thr_var,
+                        refr,
+                        decay,
+                    } => {
                         let cand = stack.pop().unwrap_or(0.0);
                         let thr = cell.0[thr_var.idx()];
                         let o = Var::Out.idx();
@@ -397,14 +416,20 @@ mod tests {
 
     #[test]
     fn integrator_tends_to_input() {
-        let g = RuleGene { template: templates::INTEGRATOR, p: [0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+        let g = RuleGene {
+            template: templates::INTEGRATOR,
+            p: [0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        };
         let mut u = PythiaUnit::from_gene(&g, 1, 7);
         u.set_inputs(&[1.0]);
         let mut last = 0.0f32;
         for _ in 0..50 {
             last = u.step()[0];
         }
-        assert!((last - 1.0).abs() < 0.15, "integrator must approach input, got {last}");
+        assert!(
+            (last - 1.0).abs() < 0.15,
+            "integrator must approach input, got {last}"
+        );
     }
 
     #[test]
@@ -422,7 +447,12 @@ mod tests {
             l.step();
         }
         let run = |u: &mut PythiaUnit| -> f32 {
-            (0..20).map(|_| { u.set_inputs(&[0.45]); u.step()[0] }).sum()
+            (0..20)
+                .map(|_| {
+                    u.set_inputs(&[0.45]);
+                    u.step()[0]
+                })
+                .sum()
         };
         let qo = run(&mut q);
         let lo = run(&mut l);
@@ -440,9 +470,19 @@ mod tests {
             u.set_inputs(&[0.30]);
             u.step();
         }
-        let before: f32 = (0..10).map(|_| { u.set_inputs(&[0.30]); u.step()[0] }).sum();
+        let before: f32 = (0..10)
+            .map(|_| {
+                u.set_inputs(&[0.30]);
+                u.step()[0]
+            })
+            .sum();
         u.reward_cell(0, 1.0);
-        let after: f32 = (0..10).map(|_| { u.set_inputs(&[0.30]); u.step()[0] }).sum();
+        let after: f32 = (0..10)
+            .map(|_| {
+                u.set_inputs(&[0.30]);
+                u.step()[0]
+            })
+            .sum();
         assert!(
             before < 0.5 && after > 5.0,
             "reward must unlock firing: before={before} after={after}"

@@ -2,7 +2,7 @@
 //! Filename:    src/mind.rs
 //! Class:       neuworks
 //! Purpose:     bridge body → karmac SpikingBrain → behavior
-//! Description: кровь/температура/сенсорика OrganSim → 8 семантических
+//! Description: кровь/температура/сенсорика организма → 8 семантических
 //!              каналов SpikingBrain (GNW → базальные ганглии → WTA) —
 //!              назад приходит действие: сидеть / искать / подойти /
 //!              бежать / бродить. Награды (еда +, стена −) учат приор.
@@ -105,7 +105,7 @@ impl CreatureMind {
         }
     }
 
-    /// Каналы из состояния OrganSim. `fatigue01`, `fever01` — нормировки;
+    /// Каналы из состояния организма. `fatigue01`, `fever01` — нормировки;
     /// `sated01` — сытость (1 = полная); `pain_recent` затухает сам.
     #[allow(clippy::too_many_arguments)]
     pub fn channels(
