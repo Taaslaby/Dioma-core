@@ -326,6 +326,38 @@ impl Creature {
         Self::from_genome_grown(genome, child_seed, grown)
     }
 
+    /// Потомок ПАРЫ родителей (половое размножение): геном — кроссовер
+    /// [`CreatureGenome::crossover`] обоих родителей + мутация сидом потомка.
+    /// Проводка пересаживается от `self` (лучшего родителя пары — вызывает
+    /// эволюция) с печатью сида потомка; эффект Болдуина — объединение
+    /// выученных путей ОБОИХ родителей (дедупликация по паре регионов,
+    /// потолок `LEARNED_TOP_N` на союз — у ребёнка не больше рефлексов,
+    /// чем у одного родителя после свёртки). Пол — из сида потомка (C3).
+    ///
+    /// Детерминированно: тот же child_seed → тот же потомок пары (кроссовер
+    /// и мутация посеяны одним rng).
+    pub fn spawn_child_pair(&self, other: &Self, child_seed: u64) -> Self {
+        let mut rng = XorShift::new(child_seed ^ 0x9E37_79B9_7F4A_7C15);
+        let mut genome = self.genome.crossover(other.genome(), &mut rng);
+        genome = genome.mutate(&mut rng);
+        // Эффект Болдуина от обоих родителей: сильные пути, нажитые каждым
+        // за жизнь, сворачиваются в инстинкты — сначала объединение, потом
+        // кап на союз (иначе два родителя по LEARNED_TOP_N удвоили бы геном).
+        let mut learned = self.learned_instincts();
+        learned.extend(other.learned_instincts());
+        learned.sort_by(|x, y| y.dopamine.total_cmp(&x.dopamine));
+        learned.dedup_by(|x, y| genome::instinct_pair_key(y) == genome::instinct_pair_key(x));
+        learned.truncate(LEARNED_TOP_N);
+        genome.add_learned_instincts(learned, &mut rng);
+        // Пол — как в spawn_child: из сида потомка, а не от родителей.
+        genome.sex = Sex::from_seed(child_seed);
+        let mut grown = self.grown.clone();
+        for w in grown.edges.iter_mut() {
+            w.2 = (w.2 as f64 * (1.0 + rng.gauss() * INHERIT_WEIGHT_SIGMA)).max(0.1) as f32;
+        }
+        Self::from_genome_grown(genome, child_seed, grown)
+    }
+
     /// Проводка, с которой существо родилось (топология + базовые веса).
     /// Это то, что пересаживается потомку при размножении.
     pub fn grown(&self) -> &Grown {

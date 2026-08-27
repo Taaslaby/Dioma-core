@@ -141,7 +141,17 @@ fn heading_from_seed(seed: u64) -> f32 {
 
 // ─── Сценарий 1 «Дикий лес» ───────────────────────────────────────────────
 
-fn run_wild(total_ticks: u64) -> (Vec<Snap>, u64, Vec<WildEnd>) {
+/// Счётчики сна-бодрствования одного существа за прогон: окна бодрствования
+/// (длина в тиках, между двумя снами) и число снов. Дополняет снапшотный
+/// sleep_frac точной метрикой «бодрое окно» (критерий приёмки: ≥ 30 тиков).
+#[derive(Clone, Default)]
+struct SleepStats {
+    wake_windows: Vec<u32>,
+    sleeps: u32,
+    sleep_ticks: u32,
+}
+
+fn run_wild(total_ticks: u64) -> (Vec<Snap>, u64, Vec<WildEnd>, Vec<SleepStats>) {
     let mut arena = Arena::new(WILD_SEED, wild_map());
     // 6 существ в разнесённых позициях (по 2 в каждой комнате), курсы из сидов.
     let spawns: [(f32, f32); 6] = [
@@ -179,6 +189,10 @@ fn run_wild(total_ticks: u64) -> (Vec<Snap>, u64, Vec<WildEnd>) {
     let n = arena.critters.len();
     let mut prev_food: Vec<u32> = arena.critters.iter().map(|c| c.creature.food_eaten()).collect();
     let mut follow_ticks: u64 = 0;
+    // Окна бодрствования по существам (по-тиковый счёт, не снапшоты).
+    let mut was_sleeping = vec![false; n];
+    let mut cur_wake = vec![0u32; n];
+    let mut sleep_stats: Vec<SleepStats> = vec![SleepStats::default(); n];
     for t in 1..=total_ticks {
         arena.step();
         // Прокси «следования» по тикам (дополнение к снапшотному): бодрствующий
@@ -203,9 +217,34 @@ fn run_wild(total_ticks: u64) -> (Vec<Snap>, u64, Vec<WildEnd>) {
         }
         for (i, c) in arena.critters.iter().enumerate() {
             prev_food[i] = c.creature.food_eaten();
+            let sleeping = c.sleeping;
+            let st = &mut sleep_stats[i];
+            if sleeping {
+                st.sleep_ticks += 1;
+                if !was_sleeping[i] {
+                    st.sleeps += 1;
+                }
+                if cur_wake[i] > 0 {
+                    // Окно бодрствования закрылось сном.
+                    st.wake_windows.push(cur_wake[i]);
+                    cur_wake[i] = 0;
+                }
+            } else {
+                cur_wake[i] += 1;
+                if !was_sleeping[i] {
+                    // Проснулся — окно уже открыто (cur_wake только что ++).
+                }
+            }
+            was_sleeping[i] = sleeping;
         }
         if t % SNAPSHOT_EVERY == 0 {
             snaps.push(snapshot(&arena));
+        }
+    }
+    // Хвост: последнее бодрствование (не закрытое сном) тоже окно.
+    for i in 0..n {
+        if cur_wake[i] > 0 {
+            sleep_stats[i].wake_windows.push(cur_wake[i]);
         }
     }
 
@@ -224,7 +263,7 @@ fn run_wild(total_ticks: u64) -> (Vec<Snap>, u64, Vec<WildEnd>) {
             }
         })
         .collect();
-    (snaps, follow_ticks, ends)
+    (snaps, follow_ticks, ends, sleep_stats)
 }
 
 fn snapshot(arena: &Arena) -> Snap {
@@ -252,12 +291,16 @@ fn snapshot(arena: &Arena) -> Snap {
 
 // ─── Сценарий 2 «Поколения» ───────────────────────────────────────────────
 
-fn run_evolution(gens: u64) -> Vec<GenerationStats> {
+fn run_evolution(gens: u64) -> (Vec<GenerationStats>, Vec<f32>) {
     let mut evo = Evolution::new(EVO_SEED, wild_map(), EvolutionParams::default());
+    // Разнообразие геномов по поколениям: [стартовое, после gen1, ... после
+    // последней]. Анти-фиксация = метрика не схлопывается (см. эволюцию).
+    let mut diversity = vec![evo.population_diversity()];
     for _ in 0..gens {
         evo.run_generation();
+        diversity.push(evo.population_diversity());
     }
-    evo.history.clone()
+    (evo.history.clone(), diversity)
 }
 
 // ─── Метрики (считаются в раннере, кладутся в JSON) ───────────────────────
@@ -534,6 +577,8 @@ fn compute_metrics(
     total_ticks: u64,
     quick: bool,
     evo: &[GenerationStats],
+    evo_diversity: &[f32],
+    sleep: &[SleepStats],
 ) -> String {
     let n = snaps[0].critters.len();
     let intervals = snaps.len() - 1;
@@ -726,6 +771,8 @@ fn compute_metrics(
         let dopamine: Vec<String> = trend(&|s| s.instinct_dopamine_avg);
         let survivors: Vec<String> = evo.iter().map(|s| format!("{}", s.survivors)).collect();
         let born: Vec<String> = evo.iter().map(|s| format!("{}", s.born)).collect();
+        // Разнообразие геномов: [стартовая популяция, после gen1, …].
+        let diversity: Vec<String> = evo_diversity.iter().map(|d| format!("{:.4}", d)).collect();
         let delta_avg_food = last.avg_food_eaten - first.avg_food_eaten;
         let ratio_avg_food = if first.avg_food_eaten > 0.01 {
             last.avg_food_eaten / first.avg_food_eaten
@@ -734,11 +781,15 @@ fn compute_metrics(
         } else {
             0.0
         };
+        let div0 = evo_diversity.first().copied().unwrap_or(0.0);
+        let div_last = evo_diversity.last().copied().unwrap_or(0.0);
         format!(
             "{{\"gen_count\":{},\"avg_food_trend\":[{}],\"with_instinct_trend\":[{}],\
 \"instinct_dopamine_trend\":[{}],\"survivors_trend\":[{}],\"born_trend\":[{}],\
 \"avg_food_first\":{},\"avg_food_last\":{},\"delta_avg_food\":{},\"ratio_avg_food\":{},\
-\"with_instinct_first\":{},\"with_instinct_last\":{},\"dopamine_first\":{},\"dopamine_last\":{}}}",
+\"with_instinct_first\":{},\"with_instinct_last\":{},\"dopamine_first\":{},\"dopamine_last\":{},\
+\"diversity_trend\":[{}],\"diversity_first\":{},\"diversity_last\":{},\
+\"diversity_frac\":{}}}",
             evo.len(),
             avg_food.join(","),
             with_instinct.join(","),
@@ -752,10 +803,49 @@ fn compute_metrics(
             first.with_instinct,
             last.with_instinct,
             json_f(first.instinct_dopamine_avg),
-            json_f(last.instinct_dopamine_avg)
+            json_f(last.instinct_dopamine_avg),
+            diversity.join(","),
+            json_f(div0 as f64),
+            json_f(div_last as f64),
+            json_f(if div0 > 1e-6 { (div_last / div0) as f64 } else { 0.0 })
         )
         }
         (None, _) | (_, None) => "{\"gen_count\":0}".to_string(),
+    };
+
+    // Сон: бодрые окна по существам (по-тиковый счёт) + агрегат.
+    let mut sleep_creatures = String::new();
+    let mut all_windows: Vec<u32> = Vec::new();
+    let mut sleep_frac_exact = 0.0f64;
+    for (ci, s) in sleep.iter().enumerate() {
+        if ci > 0 {
+            sleep_creatures.push(',');
+        }
+        let mean = if s.wake_windows.is_empty() {
+            0.0
+        } else {
+            s.wake_windows.iter().sum::<u32>() as f64 / s.wake_windows.len() as f64
+        };
+        sleep_creatures.push_str(&format!(
+            "\"c{}\":{{\"sleeps\":{},\"sleep_ticks\":{},\"wake_windows\":{},\"wake_mean\":{}}}",
+            ci,
+            s.sleeps,
+            s.sleep_ticks,
+            s.wake_windows.len(),
+            json_f(mean)
+        ));
+        all_windows.extend(s.wake_windows.iter().copied());
+        sleep_frac_exact += s.sleep_ticks as f64;
+    }
+    let wake_mean = if all_windows.is_empty() {
+        0.0
+    } else {
+        all_windows.iter().sum::<u32>() as f64 / all_windows.len() as f64
+    };
+    let sleep_frac_exact = if total_ticks > 0 && !sleep.is_empty() {
+        sleep_frac_exact / (total_ticks as f64 * sleep.len() as f64)
+    } else {
+        0.0
     };
 
     format!(
@@ -770,6 +860,7 @@ fn compute_metrics(
 \"per_metric\":[{}],\"over_2x\":{},\"windows\":{}}},\
 \"follow\":{{\"snapshot_rate\":{},\"snapshot_events\":{},\"snapshot_slots\":{},\
 \"tick_rate\":{},\"tick_events\":{},\"ticks\":{},\"radius\":{}}},\
+\"sleep\":{{\"wake_mean\":{},\"wake_windows_total\":{},\"sleep_frac_exact\":{},\"per_creature\":{{{}}}}},\
 \"evolution\":{}}}",
         total_ticks,
         SNAPSHOT_EVERY,
@@ -799,6 +890,10 @@ fn compute_metrics(
         follow_ticks,
         total_ticks,
         SOCIAL_PROXY_RADIUS,
+        json_f(wake_mean),
+        all_windows.len(),
+        json_f(sleep_frac_exact),
+        sleep_creatures,
         evo_json
     )
 }
@@ -810,6 +905,8 @@ fn build_json(
     snaps: &[Snap],
     ends: &[WildEnd],
     evo: &[GenerationStats],
+    evo_diversity: &[f32],
+    sleep: &[SleepStats],
     follow_ticks: u64,
 ) -> String {
     let mut json = String::with_capacity(1 << 20);
@@ -901,7 +998,7 @@ fn build_json(
     // Метрики.
     json.push_str(&format!(
         "  \"metrics\": {}\n",
-        compute_metrics(snaps, ends, follow_ticks, total_ticks, quick, evo)
+        compute_metrics(snaps, ends, follow_ticks, total_ticks, quick, evo, evo_diversity, sleep)
     ));
     json.push_str("}\n");
     json
@@ -955,12 +1052,12 @@ fn main() {
         "— «Поколения»: {evo_gens} поколений, сид {EVO_SEED}, EvolutionParams::default()"
     );
 
-    let (wild_snaps, follow_ticks, ends) = run_wild(wild_ticks);
+    let (wild_snaps, follow_ticks, ends, sleep) = run_wild(wild_ticks);
     println!(
         "  «Дикий лес» отработал: {} снапшотов, эпифеноменов «следования» по тикам: {follow_ticks}",
         wild_snaps.len()
     );
-    let evo_stats = run_evolution(evo_gens);
+    let (evo_stats, evo_diversity) = run_evolution(evo_gens);
     println!("  «Поколения» отработали: {} поколений", evo_stats.len());
 
     let json = build_json(
@@ -969,6 +1066,8 @@ fn main() {
         &wild_snaps,
         &ends,
         &evo_stats,
+        &evo_diversity,
+        &sleep,
         follow_ticks,
     );
 
