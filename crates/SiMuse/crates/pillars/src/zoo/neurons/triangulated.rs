@@ -614,12 +614,12 @@ mod tests {
         let mut p = vec![0.0; n * HHModel::N_PARAMS];
         for i in 0..n {
             p[HHModelParamIdx::dt as usize * n + i] = 0.01;
-            p[HHModelParamIdx::g_Na as usize * n + i] = 120.0;
-            p[HHModelParamIdx::E_Na as usize * n + i] = 50.0;
-            p[HHModelParamIdx::g_K as usize * n + i] = 36.0;
-            p[HHModelParamIdx::E_K as usize * n + i] = -77.0;
-            p[HHModelParamIdx::g_Leak as usize * n + i] = 0.3;
-            p[HHModelParamIdx::E_Leak as usize * n + i] = -54.387;
+            p[HHModelParamIdx::g_na as usize * n + i] = 120.0;
+            p[HHModelParamIdx::e_na as usize * n + i] = 50.0;
+            p[HHModelParamIdx::g_k as usize * n + i] = 36.0;
+            p[HHModelParamIdx::e_k as usize * n + i] = -77.0;
+            p[HHModelParamIdx::g_leak as usize * n + i] = 0.3;
+            p[HHModelParamIdx::e_leak as usize * n + i] = -54.387;
             p[HHModelParamIdx::q10 as usize * n + i] = 1.0;
             p[HHModelParamIdx::v_thresh as usize * n + i] = 0.0;
             p[HHModelParamIdx::inv_cm as usize * n + i] = 1.0;
