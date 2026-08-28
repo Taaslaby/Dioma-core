@@ -1,8 +1,39 @@
 //! Builder pattern для удобного создания существ с различными конфигурациями.
 
 use crate::creature::{Creature, CreatureGenome};
-use crate::engine::grow::{grow, grow_gpu, stage_b_layout};
+use crate::engine::grow::{
+    avoidance_layout, grow, grow_gpu, stage_b_layout, stage_c_lite_layout, Layout,
+};
 use crate::engine::neurons::PlasticityParams;
+
+/// Раскладка мозга существа. По умолчанию — стадия C-lite (760 нейронов).
+/// Стадия B (300) остаётся для эталонных бенчмарков/сравнений.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BrainLayout {
+    /// Стадия C-lite: ядро + зрение 60×2 + кора 400/120 (760 нейронов).
+    StageCLite,
+    /// Стадия B: ядро + зрение 30×2 + ASSOC 90/30 (300 нейронов).
+    StageB,
+    /// Голое ядро avoidance (120 нейронов, регионы 0..6): крошечные
+    /// существа для GPU-тестов паритета пула (быстрый рост).
+    Avoidance,
+}
+
+impl Default for BrainLayout {
+    fn default() -> Self {
+        BrainLayout::StageCLite
+    }
+}
+
+impl BrainLayout {
+    fn layout(self) -> Layout {
+        match self {
+            BrainLayout::StageCLite => stage_c_lite_layout(),
+            BrainLayout::StageB => stage_b_layout(),
+            BrainLayout::Avoidance => avoidance_layout(),
+        }
+    }
+}
 
 /// Builder для создания существ с гибкой конфигурацией.
 ///
@@ -29,6 +60,7 @@ pub struct CreatureBuilder {
     plasticity_params: Option<PlasticityParams>,
     use_gpu: bool,
     gpu_grown: bool,
+    layout: BrainLayout,
 }
 
 impl Default for CreatureBuilder {
@@ -46,12 +78,19 @@ impl CreatureBuilder {
             plasticity_params: None,
             use_gpu: false,
             gpu_grown: false,
+            layout: BrainLayout::default(),
         }
     }
 
     /// Устанавливает сид для детерминированной генерации.
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = seed;
+        self
+    }
+
+    /// Устанавливает раскладку мозга (по умолчанию — стадия C-lite).
+    pub fn layout(mut self, layout: BrainLayout) -> Self {
+        self.layout = layout;
         self
     }
 
@@ -101,23 +140,34 @@ impl CreatureBuilder {
     /// Собирает существо с заданными параметрами.
     pub fn build(self) -> Creature {
         let genome = self.genome.unwrap_or_default();
+        let layout = self.layout.layout();
 
         if self.gpu_grown {
             // GPU рост + GPU динамика
-            let grown = grow_gpu(&stage_b_layout(), &genome.steering, self.seed);
+            let grown = grow_gpu(&layout, &genome.steering, self.seed);
             Creature::from_genome_grown(genome, self.seed, grown)
         } else if self.use_gpu {
             // CPU рост + GPU динамика
-            let grown = grow(&stage_b_layout(), &genome.steering, self.seed);
+            let grown = grow(&layout, &genome.steering, self.seed);
             Creature::assemble_gpu(grown, genome, self.seed)
         } else if let Some(params) = self.plasticity_params {
             // CPU с кастомными параметрами
-            let grown = grow(&stage_b_layout(), &genome.steering, self.seed);
+            let grown = grow(&layout, &genome.steering, self.seed);
             Creature::assemble(grown, genome, self.seed, params)
         } else {
             // Дефолтное CPU существо
             Creature::from_genome(genome, self.seed)
         }
+    }
+
+    /// Собрать существо для батч-пула арены (`engine::gpu_pool::BrainPool`):
+    /// мембрана — общий GPU-раннер, пластичность — CPU. Спавнить через
+    /// `Arena::spawn_creature` на арене из `Arena::new_pooled`.
+    pub fn build_pooled(self, pool: &mut crate::engine::gpu_pool::BrainPool) -> Creature {
+        let genome = self.genome.unwrap_or_default();
+        let layout = self.layout.layout();
+        let grown = grow(&layout, &genome.steering, self.seed);
+        Creature::assemble_pooled(grown, genome, self.seed, pool)
     }
 }
 

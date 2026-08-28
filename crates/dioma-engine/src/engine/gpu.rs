@@ -31,9 +31,11 @@ use pillars_wgpu::{WgpuContext, WgpuNetwork, WgpuPop};
 /// CPU-раннер (pillars alpha_lif::step, run_lif_alpha-scatter) считает те же
 /// узлы через `mul_add` — обе стороны гарантированно fma (IEEE-определён).
 /// Один инстанс на процесс (кэш): шейдер одинаков для всех особей модели.
-static ALPHA_LIF_FMA_WGSL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// Публичный внутри крейта: батч-пул арены (gpu_pool.rs) использует тот же
+/// шейдер для своей сети.
+pub(crate) static ALPHA_LIF_FMA_WGSL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-fn alpha_lif_fma_wgsl() -> &'static str {
+pub(crate) fn alpha_lif_fma_wgsl() -> &'static str {
     ALPHA_LIF_FMA_WGSL
         .get_or_init(|| {
             let mut wgsl = ALPHA_LIF_WGSL_SOURCE.to_string();

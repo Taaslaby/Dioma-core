@@ -427,19 +427,19 @@ mod tests {
         }
     }
 
-    /// Стадия B: 300 нейронов (ядро 120 + VL 30 + VR 30 + ASSOC_E 90 +
-    /// ASSOC_I 30); регионы идут блоками — 0..6 ядро `avoidance_layout()`
-    /// БЕЗ изменений, 7=VL, 8=VR, 9=ASSOC_E, 10=ASSOC_I.
+    /// Стадия C-lite: 760 нейронов (ядро 120 + VL 60 + VR 60 + CORTEX_E 400 +
+    /// CORTEX_I 120); регионы идут блоками — 0..6 ядро `avoidance_layout()`
+    /// БЕЗ изменений, 7=VL, 8=VR, 9=CORTEX_E, 10=CORTEX_I.
     #[test]
-    fn stage_b_layout_neuron_counts() {
-        let l = stage_b_layout();
+    fn stage_c_lite_layout_neuron_counts() {
+        let l = stage_c_lite_layout();
         let counts: Vec<usize> = l.regions.iter().map(|r| r.count).collect();
         assert_eq!(
             counts,
-            [20, 20, 12, 12, 16, 20, 20, 30, 30, 90, 30],
-            "состав регионов стадии B"
+            [20, 20, 12, 12, 16, 20, 20, 60, 60, 400, 120],
+            "состав регионов стадии C-lite"
         );
-        assert_eq!(l.n(), 300, "120 ядро + 30 VL + 30 VR + 90 ASSOC_E + 30 ASSOC_I");
+        assert_eq!(l.n(), 760, "120 ядро + 60 VL + 60 VR + 400 CORTEX_E + 120 CORTEX_I");
         // Ядро — дословная копия avoidance_layout() (чужие тесты не ломаем).
         let base = avoidance_layout();
         assert_eq!(l.regions.len(), base.regions.len() + 4);
@@ -449,22 +449,22 @@ mod tests {
         }
         assert_eq!(l.regions[7].tag, "VL");
         assert_eq!(l.regions[8].tag, "VR");
-        assert_eq!(l.regions[9].tag, "ASSOC_E");
-        assert_eq!(l.regions[10].tag, "ASSOC_I");
-        assert!(l.regions[10].inhibitory, "ASSOC_I — тормозной регион");
+        assert_eq!(l.regions[9].tag, "CORTEX_E");
+        assert_eq!(l.regions[10].tag, "CORTEX_I");
+        assert!(l.regions[10].inhibitory, "CORTEX_I — тормозной регион");
         assert!(
             l.regions[9]
                 .axons
                 .iter()
-                .any(|a| a.target == "ASSOC_E"),
-            "ASSOC_E рекуррентен на себя (самоаксонная петля)"
+                .any(|a| a.target == "CORTEX_E"),
+            "CORTEX_E рекуррентен на себя (самоаксонная петля)"
         );
         assert!(
             l.regions[9]
                 .axons
                 .iter()
-                .any(|a| a.target == "ASSOC_I"),
-            "ASSOC_E замыкает тормозной контур через ASSOC_I"
+                .any(|a| a.target == "CORTEX_I"),
+            "CORTEX_E замыкает тормозной контур через CORTEX_I"
         );
     }
 }
@@ -757,6 +757,120 @@ pub fn stage_b_layout() -> Layout {
             ("ASSOC_I", "ML"),
             ("ASSOC_I", "MR"),
             ("ASSOC_I", "I"),
+        ]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string())),
+    );
+    l
+}
+
+/// Стадия C-lite: `avoidance_layout()` целиком + зрение и рекуррентная кора,
+/// всего 760 нейронов.
+///
+/// Это «облегчённая стадия C» из дорожной карты: ядро рефлексов как в
+/// стадии B, зрительные бины укрупнены (60×2), а ассоциативный хаб заменён
+/// на полноценную рекуррентную кору:
+///
+/// - **VL/VR** (по 60): сенсорные «глаз-бины» — аксоны к CORTEX_E (короткие,
+///   слабо направленные) и напрямую к обоим моторам (ML/MR). Прямой путь
+///   существует в топологии, но существо собирает его с НУЛЕВЫМ гейном
+///   (см. `creature::assemble_impl`) — зрение учится через кору, а не
+///   прошивается в рефлекс;
+/// - **CORTEX_E** (400): возбуждающий рекуррентный хаб — самоаксонная петля
+///   (средняя дальность 60 мкм), тормозной контур через CORTEX_I и выход
+///   к моторам;
+/// - **CORTEX_I** (120): тормозной — ингибирует CORTEX_E (и моторы).
+///
+/// Регионы: 0..6 = ядро `avoidance_layout()` (SL/SR/WL/WR/I/ML/MR), 7 = VL,
+/// 8 = VR, 9 = CORTEX_E, 10 = CORTEX_I.
+///
+/// Append-only: индексы ядра 0..6 не сдвинуты, старые инстинкты/гейны
+/// рефлексов валидны. Стадия B (`stage_b_layout`) остаётся для виза и
+/// эталона 300 нейронов.
+pub fn stage_c_lite_layout() -> Layout {
+    let mut l = avoidance_layout();
+    // Зрительный конус — впереди (сенсоры арены стоят в -Y, моторы в +Y).
+    // Радиус вырос под 60 нейронов (объём ×2 от стадии B: 14 → ~18).
+    l.regions.push(RegionSpec {
+        tag: "VL",
+        center: [-45.0, -90.0, 0.0],
+        radius: 18.0,
+        count: 60,
+        inhibitory: false,
+        secrete: None,
+        axons: vec![
+            axon("CORTEX_E", 130.0),
+            axon("ML", 170.0),
+            axon("MR", 170.0),
+        ],
+    });
+    l.regions.push(RegionSpec {
+        tag: "VR",
+        center: [45.0, -90.0, 0.0],
+        radius: 18.0,
+        count: 60,
+        inhibitory: false,
+        secrete: None,
+        axons: vec![
+            axon("CORTEX_E", 130.0),
+            axon("ML", 170.0),
+            axon("MR", 170.0),
+        ],
+    });
+    // Кора — центральный хаб между сенсорами и моторами: рекуррентность
+    // на себя (аксон на собственный морфоген), тормозной контур через
+    // CORTEX_I, выход на моторы. Радиус 42 ≈ масштаб стадии B (26) × ∛(400/90).
+    // Самоаксон КОРОТКИЙ (30 мкм): с полным охватом (60 мкм) морфоген
+    // собирал бы все 400×400 пар (154k синапсов — квадратичный фан-аут),
+    // и CPU-путь не тянул бы ни одной особи. 30 мкм при шаге сомы ~9 мкм
+    // даёт разреженную рекуррентность (~15 соседей на нейрон) — хаб
+    // остаётся живой петлёй, но цена синапсов линейная.
+    l.regions.push(RegionSpec {
+        tag: "CORTEX_E",
+        center: [0.0, 0.0, 0.0],
+        radius: 42.0,
+        count: 400,
+        inhibitory: false,
+        secrete: Some("CORTEX_E".into()),
+        axons: vec![
+            axon("CORTEX_E", 30.0),
+            axon("CORTEX_I", 80.0),
+            axon("ML", 150.0),
+            axon("MR", 150.0),
+        ],
+    });
+    l.regions.push(RegionSpec {
+        tag: "CORTEX_I",
+        center: [0.0, -40.0, 30.0],
+        radius: 22.0,
+        count: 120,
+        inhibitory: true,
+        secrete: None,
+        axons: vec![
+            axon("CORTEX_E", 80.0),
+            axon("ML", 120.0),
+            axon("MR", 120.0),
+        ],
+    });
+    l.allowed_pairs.extend(
+        [
+            ("VL", "VL"),
+            ("VL", "CORTEX_E"),
+            ("VL", "ML"),
+            ("VL", "MR"),
+            ("VR", "VR"),
+            ("VR", "CORTEX_E"),
+            ("VR", "ML"),
+            ("VR", "MR"),
+            ("CORTEX_E", "CORTEX_E"),
+            ("CORTEX_E", "CORTEX_I"),
+            ("CORTEX_E", "I"),
+            ("CORTEX_E", "ML"),
+            ("CORTEX_E", "MR"),
+            ("CORTEX_I", "CORTEX_E"),
+            ("CORTEX_I", "ML"),
+            ("CORTEX_I", "MR"),
+            ("CORTEX_I", "I"),
         ]
         .iter()
         .map(|(a, b)| (a.to_string(), b.to_string())),

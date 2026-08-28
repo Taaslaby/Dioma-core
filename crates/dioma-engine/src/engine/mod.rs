@@ -22,6 +22,7 @@ pub mod biocell;
 pub mod biovm;
 pub mod genome;
 pub mod gpu;
+pub mod gpu_pool;
 pub mod graph;
 pub mod grow;
 pub mod instincts;

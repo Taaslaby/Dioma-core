@@ -12,7 +12,7 @@
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
 use crate::body::metabolism::Blood;
-use crate::engine::grow::{stage_b_layout, Steering};
+use crate::engine::grow::{stage_c_lite_layout, Steering};
 use crate::engine::instincts::Instinct;
 use crate::engine::rules::RuleGene;
 use crate::rng::XorShift;
@@ -273,7 +273,8 @@ fn crossover_metabolism(a: &MetabolismGene, b: &MetabolismGene, rng: &mut XorShi
 /// Инстинкт строится как блок pre-нейронов, затем блок post-нейронов
 /// (`creature::learned_instincts`), поэтому первый вход — начало pre-региона,
 /// последний — конец post-региона. Регион нейрона — по фиксированной
-/// раскладке `stage_b_layout` (все существа движка собираются по ней).
+/// раскладке `stage_c_lite_layout` (все существа движка собираются по ней;
+/// ядро 0..6 не сдвинуто — инстинкты рефлексов валидны).
 pub(crate) fn instinct_pair_key(i: &Instinct) -> (usize, usize) {
     let (Some(first), Some(last)) = (i.inputs.first(), i.inputs.last()) else {
         return (usize::MAX, usize::MAX);
@@ -281,9 +282,9 @@ pub(crate) fn instinct_pair_key(i: &Instinct) -> (usize, usize) {
     (neuron_region(first.0), neuron_region(last.0))
 }
 
-/// Регион нейрона по раскладке `stage_b_layout` (кумулятивные счётчики).
+/// Регион нейрона по раскладке `stage_c_lite_layout` (кумулятивные счётчики).
 fn neuron_region(n: usize) -> usize {
-    let layout = stage_b_layout();
+    let layout = stage_c_lite_layout();
     let mut acc = 0usize;
     for (i, r) in layout.regions.iter().enumerate() {
         if n < acc + r.count {

@@ -10,6 +10,8 @@
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
 use crate::creature::{Action, Creature, Sense};
+use crate::engine::gpu_pool::BrainPool;
+use crate::engine::neurons::BRAIN_STEPS_PER_TICK;
 use crate::engine::perf::flush_denormals;
 use crate::env::map::WorldMap;
 use crate::env::math::Vec2;
@@ -181,6 +183,12 @@ pub struct Arena {
     /// `step` уже собирала эти сенсоры (раньше они молча дропались) — поле
     /// только копирует их до конца тика; на симуляцию не влияет.
     last_senses: Vec<Option<Sense>>,
+    /// Батч-пул GPU-динамики (см. `engine::gpu_pool::BrainPool`): `Some` —
+    /// арена в пулевом режиме (`Arena::new_pooled`): мембрана ВСЕХ существ
+    /// считается одним GPU-шагом за тик, пластичность — на CPU. `None` —
+    /// обычный CPU-путь. Спавн на пулевой арене (`Arena::spawn`) автоматически
+    /// регистрирует существо в пуле.
+    pool: Option<BrainPool>,
 }
 
 impl Arena {
@@ -194,11 +202,54 @@ impl Arena {
             berry_regrow: BERRY_REGROW_TICKS,
             climate,
             last_senses: Vec::new(),
+            pool: None,
+        }
+    }
+
+    /// Арена в пулевом GPU-режиме: мембрана всех существ — общий батч-раннер
+    /// (`BrainPool`), пластичность — на CPU. Опт-ин (по умолчанию игра идёт
+    /// на CPU): без адаптера пул недоступен — арена тихо падает на CPU-путь
+    /// (как `GpuDynamics::try_new`), спавн `spawn_pooled` строит обычных
+    /// существ. Спавнить на пулевой арене — через `spawn`/`spawn_pooled`
+    /// (регистрируют существо в пуле); НЕ смешивать с не-пулевыми существами.
+    pub fn new_pooled(seed: u64, map: WorldMap) -> Self {
+        match BrainPool::try_new() {
+            Ok(pool) => {
+                let mut a = Arena::new(seed, map);
+                a.pool = Some(pool);
+                a
+            }
+            Err(e) => {
+                eprintln!("[dioma] GPU-пул недоступен ({e}), арена на CPU");
+                Arena::new(seed, map)
+            }
         }
     }
 
     pub fn spawn(&mut self, pos: Vec2, heading: f32, creature_seed: u64) -> AgentId {
-        self.spawn_creature(pos, heading, Creature::new(creature_seed))
+        if self.pool.is_some() {
+            // Пулевая арена: существо регистрируется в общем GPU-раннере.
+            self.spawn_pooled(pos, heading, creature_seed)
+        } else {
+            self.spawn_creature(pos, heading, Creature::new(creature_seed))
+        }
+    }
+
+    /// Пулевой спавн: существо с мозгом `Dynamics::Pooled` (мембрана — общий
+    /// GPU-раннер арены). На CPU-арене (пул недоступен) — обычное существо.
+    pub fn spawn_pooled(&mut self, pos: Vec2, heading: f32, creature_seed: u64) -> AgentId {
+        match &mut self.pool {
+            Some(pool) => {
+                let c = Creature::new_pooled(creature_seed, pool);
+                self.spawn_creature(pos, heading, c)
+            }
+            None => self.spawn(pos, heading, creature_seed),
+        }
+    }
+
+    /// Пул активен? (диагностика/примеры/GPU-тесты: SKIP без адаптера.)
+    pub fn has_pool(&self) -> bool {
+        self.pool.is_some()
     }
 
     /// Посадить готовое существо (контрольные протоколы: `lr = 0` и т.п.).
@@ -389,28 +440,114 @@ impl Arena {
             //    mutable-займ (disjoint per element). Спящие не получают Action
             //    ровно как в последовательном проходе (пачка содержит только
             //    бодрствующих в порядке индексов; filter_map порядок хранит).
-            let actions: Vec<(usize, Action)> = self
-                .critters
-                .par_iter_mut()
-                .enumerate()
-                .filter_map(|(i, c)| {
-                    flush_denormals();
-                    match &senses[i] {
-                        Some(sense) => {
-                            // Снимок зрения для оверлеев/тестов (поля Critter.vis_*).
-                            c.vis_l = sense.vis_l;
-                            c.vis_r = sense.vis_r;
-                            Some((i, c.creature.tick(sense)))
+            //
+            //    ПУЛЕВАЯ ФАЗА B (арена из `new_pooled`): мембрана ВСЕХ существ
+            //    считается ОДНИМ GPU-шагом (`BrainPool::step`), пластичность/
+            //    награды — по каждому существу на CPU. Семантика та же: ext
+            //    строится параллельно (фаза 1), пул гонит сеть и скачивает
+            //    историю спайков (фаза 2), каждый критик глотает СВОЙ блок
+            //    спайков и доигрывает тик (фаза 3). Детерминизм run-vs-run:
+            //    тик каждого существа — целиком на одном потоке, порядок
+            //    пачки сохранён; GPU-арифметика может отличаться от CPU в
+            //    1 ulp (допускается, см. отчёт), но не от запуска к запуску.
+            let actions: Vec<(usize, Action)> = {
+                let Arena { critters, pool, .. } = self;
+                match pool {
+                    Some(pool) => {
+                        // Фаза 1: ext каждого бодрствующего (параллельно).
+                        let reliefs: Vec<Option<f32>> = critters
+                            .par_iter_mut()
+                            .enumerate()
+                            .map(|(i, c)| {
+                                flush_denormals();
+                                match &senses[i] {
+                                    Some(sense) => {
+                                        c.vis_l = sense.vis_l;
+                                        c.vis_r = sense.vis_r;
+                                        Some(c.creature.prepare_tick(sense))
+                                    }
+                                    None => {
+                                        c.vis_l = 0.0;
+                                        c.vis_r = 0.0;
+                                        None
+                                    }
+                                }
+                            })
+                            .collect();
+                        // Фаза 2: dirty-зеркала весов → GPU, один шаг сети.
+                        {
+                            let mirrors: Vec<(&[f32], bool)> = critters
+                                .iter()
+                                .map(|c| c.creature.brain.pooled_weights())
+                                .collect();
+                            if let Err(e) = pool.sync_weights(&mirrors) {
+                                eprintln!("[dioma] пул: заливка весов — {e}");
+                            }
                         }
-                        None => {
-                            // Спящий не видит: снимок обнуляется, мозг не вызывается.
-                            c.vis_l = 0.0;
-                            c.vis_r = 0.0;
-                            None
+                        let spt = critters
+                            .first()
+                            .map(|c| c.creature.brain.steps_per_tick())
+                            .unwrap_or(BRAIN_STEPS_PER_TICK);
+                        let exts: Vec<Option<&[f32]>> = critters
+                            .iter()
+                            .enumerate()
+                            .map(|(i, c)| {
+                                if senses[i].is_some() {
+                                    Some(c.creature.pooled_ext())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        let (flat, slots) = pool.step(&exts, spt);
+                        for c in &mut **critters {
+                            c.creature.brain.pooled_clear_dirty();
                         }
+                        // Фаза 3: каждый критик — свой блок спайков + тело.
+                        critters
+                            .par_iter_mut()
+                            .enumerate()
+                            .filter_map(|(i, c)| {
+                                flush_denormals();
+                                match (&senses[i], &reliefs[i]) {
+                                    (Some(sense), Some(relief)) => Some((
+                                        i,
+                                        c.creature.tick_pooled(
+                                            sense,
+                                            *relief,
+                                            flat,
+                                            spt,
+                                            slots[i].neuron_off,
+                                        ),
+                                    )),
+                                    _ => None,
+                                }
+                            })
+                            .collect()
                     }
-                })
-                .collect();
+                    None => critters
+                        .par_iter_mut()
+                        .enumerate()
+                        .filter_map(|(i, c)| {
+                            flush_denormals();
+                            match &senses[i] {
+                                Some(sense) => {
+                                    // Снимок зрения для оверлеев/тестов.
+                                    c.vis_l = sense.vis_l;
+                                    c.vis_r = sense.vis_r;
+                                    Some((i, c.creature.tick(sense)))
+                                }
+                                None => {
+                                    // Спящий не видит: снимок обнуляется.
+                                    c.vis_l = 0.0;
+                                    c.vis_r = 0.0;
+                                    None
+                                }
+                            }
+                        })
+                        .collect(),
+                }
+            };
             // Сенсоры этого тика прожили фазы A/B — сохранить для наблюдателей
             // (последний шаг перед дропом: раньше они молча уничтожались).
             self.last_senses = senses;
@@ -902,6 +1039,12 @@ mod tests {
     /// Траектория: 25 ударов к 200, дальше существо спит/ест — 25 к 300
     /// (до ребаланса было 11/27). Эталон переснят после ребаланса
     /// (см. DIOMA_RECORD_TRACE).
+    /// СТАДИЯ C-LITE (переякорено): мозг 760 нейронов (кора 400+120 вместо
+    /// 90+30, зрение 60+60) — моторика богаче, траектория другая: GLUCOSE@200
+    /// 96.3, HUNGER@200 111.4 (голод к тику 200 не дожат — часть пути сна),
+    /// PAIN@200 210.5, FATIGUE@200 163.6 (замедленная экономика + поздний
+    /// сон), удары 24 к 200 и 31 к 300. Эталон переснят после подключения
+    /// стадии C-lite (см. DIOMA_RECORD_TRACE).
     #[test]
     fn biochemistry_trace_is_stable() {
         let mut map = WorldMap::default();
@@ -938,28 +1081,28 @@ mod tests {
         // Эталон после ребаланса утомления (×6): существо бодрствует дольше,
         // ест иначе — глюкоза 93.8 (было 122.4), голод 197.9 (было 135.5).
         assert!(
-            close(conc[chem::GLUCOSE], 93.838294983),
-            "GLUCOSE@200: {} ≠ 93.838294983", conc[chem::GLUCOSE]
+            close(conc[chem::GLUCOSE], 96.310821533),
+            "GLUCOSE@200: {} ≠ 96.310821533", conc[chem::GLUCOSE]
         );
         assert!(
-            close(conc[chem::HUNGER], 197.851943970),
-            "HUNGER@200: {} ≠ 197.851943970", conc[chem::HUNGER]
+            close(conc[chem::HUNGER], 111.399505615),
+            "HUNGER@200: {} ≠ 111.399505615", conc[chem::HUNGER]
         );
         assert!(
             close(conc[chem::PAIN], 210.526290894),
             "PAIN@200: {} ≠ 210.526290894", conc[chem::PAIN]
         );
         assert!(
-            close(conc[chem::FATIGUE], 60.389179230),
-            "FATIGUE@200: {} ≠ 60.389179230", conc[chem::FATIGUE]
+            close(conc[chem::FATIGUE], 163.586791992),
+            "FATIGUE@200: {} ≠ 163.586791992", conc[chem::FATIGUE]
         );
         assert!(
-            close(conc[chem::SEROTONIN], 39.547584534),
-            "SEROTONIN@200: {} ≠ 39.547584534", conc[chem::SEROTONIN]
+            close(conc[chem::SEROTONIN], 43.064628601),
+            "SEROTONIN@200: {} ≠ 43.064628601", conc[chem::SEROTONIN]
         );
         assert!(
-            close(conc[chem::ACETYLCHOLINE], 9.952473640),
-            "ACETYLCHOLINE@200: {} ≠ 9.952473640", conc[chem::ACETYLCHOLINE]
+            close(conc[chem::ACETYLCHOLINE], 9.223410606),
+            "ACETYLCHOLINE@200: {} ≠ 9.223410606", conc[chem::ACETYLCHOLINE]
         );
         // Тик 300: голод держится высоким (дефицитный синтез), внимание от еды.
         for _ in 200..300 {
@@ -967,24 +1110,24 @@ mod tests {
         }
         let conc = &a.critters[0].creature.blood.conc;
         assert!(
-            close(conc[chem::HUNGER], 109.003059387),
-            "HUNGER@300: {} ≠ 109.003059387", conc[chem::HUNGER]
+            close(conc[chem::HUNGER], 193.141052246),
+            "HUNGER@300: {} ≠ 193.141052246", conc[chem::HUNGER]
         );
         assert!(
-            close(conc[chem::SEROTONIN], 43.283123016),
-            "SEROTONIN@300: {} ≠ 43.283123016", conc[chem::SEROTONIN]
+            close(conc[chem::SEROTONIN], 46.128597260),
+            "SEROTONIN@300: {} ≠ 46.128597260", conc[chem::SEROTONIN]
         );
         assert!(
-            close(conc[chem::ACETYLCHOLINE], 21.619726181),
-            "ACETYLCHOLINE@300: {} ≠ 21.619726181", conc[chem::ACETYLCHOLINE]
+            close(conc[chem::ACETYLCHOLINE], 22.424747467),
+            "ACETYLCHOLINE@300: {} ≠ 22.424747467", conc[chem::ACETYLCHOLINE]
         );
         // Траектория эталона: с медленным утомлением существо бодрствует
         // дольше, к 200 успевает набрать 25 ударов в L-углу, дальше спит/ест —
         // к 300 счётчик не растёт (до ребаланса было 11 к 200 и 27 к 300).
         // Химия выше — основной сторож; счётчик фиксирует траекторию целиком.
         assert_eq!(
-            a.critters[0].wall_hits, 25,
-            "эталонная траектория стадии B: {} ударов", a.critters[0].wall_hits
+            a.critters[0].wall_hits, 31,
+            "эталонная траектория стадии C-lite: {} ударов", a.critters[0].wall_hits
         );
     }
 

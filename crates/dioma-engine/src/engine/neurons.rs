@@ -13,7 +13,8 @@
 //! Все методы, связанные с backend, должны сохранять одинаковую игровую
 //! семантику на CPU и GPU.
 
-use crate::engine::gpu::{GpuDynamics, LearnGpu};
+use crate::engine::gpu::GpuDynamics;
+use crate::engine::gpu::LearnGpu;
 use crate::Grown;
 use pillars::api::learn::brain::{Brain as PlastBrain, StdpConfig};
 use pillars::math::fast_exp::fast_exp;
@@ -118,12 +119,50 @@ impl Default for PlasticityParams {
     }
 }
 
-/// Подключаемая динамика мембраны: CPU (SIMD-раннер pillars-connectome) или
-/// GPU (wgpu-сеть pillars-wgpu, alpha-lif). Пластичность/гомеостаз/сон живут
-/// в `Brain` поверх — смена динамики не меняет семантику обучения.
+/// Подключаемая динамика мембраны: CPU (SIMD-раннер pillars-connectome), GPU
+/// (wgpu-сеть pillars-wgpu, alpha-lif) или «пул» — общий GPU-раннер всей
+/// арены (см. `engine::gpu_pool::BrainPool`). Пластичность/гомеостаз/сон
+/// живут в `Brain` поверх — смена динамики не меняет семантику обучения.
 enum Dynamics {
     Cpu(BrainRunner),
     Gpu(GpuDynamics),
+    /// Мембрана считается БАТЧ-пулом арены (блочно-диагональная сеть):
+    /// здесь только зеркало весов — источник правды для пластичности/
+    /// гомеостаза/сна/наследственности (смещения существа в общей сети
+    /// хранит пул, `gpu_pool::PoolSlot`). Спайки приходят через
+    /// `Brain::ingest_batched_flat`, а не из своего раннера.
+    Pooled(PooledDynamics),
+}
+
+/// Зеркало весов существа в батч-пуле (`Dynamics::Pooled`).
+pub struct PooledDynamics {
+    /// CSR-коннектом существа: `values` — каноническое зеркало весов
+    /// (источник правды для пластичности/гомеостаза/сна); перед шагом пул
+    /// перезаливает блок в GPU, если зеркало менялось.
+    conn: ConnectomeData,
+    /// Зеркало менялось с прошлого аплоада?
+    dirty: bool,
+}
+
+impl PooledDynamics {
+    fn values(&self) -> &[f32] {
+        &self.conn.values
+    }
+
+    fn values_mut(&mut self) -> &mut [f32] {
+        self.dirty = true;
+        &mut self.conn.values
+    }
+
+    fn import_values(&mut self, vals: &[f32]) -> Result<(), String> {
+        self.conn.import_values(vals)?;
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn save_baked<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
+        self.conn.save_baked(w)
+    }
 }
 
 impl Dynamics {
@@ -132,6 +171,13 @@ impl Dynamics {
         match self {
             Dynamics::Cpu(r) => r.run(1, ext),
             Dynamics::Gpu(g) => g.run_step(ext),
+            // Пул гоняет ВСЕХ существ одним шагом — одиночный подшаг тут
+            // недостижим (прожигание инстинктов в пуле не поддерживается);
+            // тихо молчим, как GpuDynamics при сбое.
+            Dynamics::Pooled(_) => {
+                debug_assert!(false, "Dynamics::Pooled::run_step — пул не умеет одиночных шагов");
+                EMPTY_SPIKES.get_or_init(Vec::new).as_slice()
+            }
         }
     }
 
@@ -151,6 +197,14 @@ impl Dynamics {
                 }
             }
             Dynamics::Gpu(g) => g.run_steps_into(ext, n, out),
+            Dynamics::Pooled(_) => {
+                debug_assert!(false, "Dynamics::Pooled::run_steps_into — пул не умеет пачек");
+                out.clear();
+                let nn = ext.len();
+                for _ in 0..n {
+                    out.push(vec![0i32; nn]);
+                }
+            }
         }
     }
 
@@ -159,6 +213,7 @@ impl Dynamics {
         match self {
             Dynamics::Cpu(r) => &r.connectome.values,
             Dynamics::Gpu(g) => g.values(),
+            Dynamics::Pooled(p) => p.values(),
         }
     }
 
@@ -166,6 +221,7 @@ impl Dynamics {
         match self {
             Dynamics::Cpu(r) => &mut r.connectome.values,
             Dynamics::Gpu(g) => g.values_mut(),
+            Dynamics::Pooled(p) => p.values_mut(),
         }
     }
 
@@ -177,6 +233,7 @@ impl Dynamics {
         match self {
             Dynamics::Cpu(r) => r.connectome.save_baked(w),
             Dynamics::Gpu(g) => g.save_baked(w),
+            Dynamics::Pooled(p) => p.save_baked(w),
         }
     }
 
@@ -184,24 +241,30 @@ impl Dynamics {
         match self {
             Dynamics::Cpu(r) => r.connectome.import_values(vals),
             Dynamics::Gpu(g) => g.import_values(vals),
+            Dynamics::Pooled(p) => p.import_values(vals),
         }
     }
 
-    /// Диагностические колонки HAAP (GPU-режим — только LIF → пусто).
+    /// Диагностические колонки HAAP (GPU/пул — только LIF → пусто).
     fn get_haap_param_column(&self, col: usize) -> Vec<f32> {
         match self {
             Dynamics::Cpu(r) => r.get_haap_param_column(col),
-            Dynamics::Gpu(_) => Vec::new(),
+            Dynamics::Gpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
     fn get_haap_state_column(&self, col: usize) -> Vec<f32> {
         match self {
             Dynamics::Cpu(r) => r.get_haap_state_column(col),
-            Dynamics::Gpu(_) => Vec::new(),
+            Dynamics::Gpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 }
+
+/// Переиспользуемый пустой буфер для тихих шагов пула.
+static EMPTY_SPIKES: std::sync::OnceLock<Vec<i32>> = std::sync::OnceLock::new();
+/// Пустое зеркало весов для `pooled_weights` не-пулевых мозгов.
+static EMPTY_WEIGHTS: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
 
 pub struct Brain {
     dynamics: Dynamics,
@@ -239,6 +302,9 @@ pub struct Brain {
     /// GPU-обучение целиком: eligibility/награды живут на GPU (dopamine.wgsl),
     /// ридбеки за тик — только моторные суммы. true = Dynamics::Gpu + learning.
     gpu_learn: bool,
+    /// Переиспользуемый буфер подшага для `ingest_batched_flat` (пул):
+    /// спайки из общего flat-буфера конвертируются u32 → i32 без аллокаций.
+    pool_spikes: Vec<i32>,
 }
 
 impl Brain {
@@ -276,38 +342,13 @@ impl Brain {
         // сбрасывает их в ноль (см. engine::perf). Один раз на поток.
         crate::engine::perf::flush_denormals();
         let n_regions = gains.len();
-        let n_total = grown.nt.len();
-        let mut per: Vec<Vec<(usize, f32)>> = vec![vec![]; n_total];
-        for &(pre, post, w) in &grown.edges {
-            let (rp, rq) = (grown.region_of[pre], grown.region_of[post]);
-            let gain = gains[rp][rq];
-            if gain > 0.0 {
-                per[pre].push((post, w * gain));
-            }
-        }
-        let mut row_ptr = vec![0i32; n_total + 1];
-        let mut ci = Vec::new();
-        let mut vals = Vec::new();
         let haap = model == BrainModel::Haap;
         let (syn_scale, syn_cap) = if haap {
             (params.haap_syn_scale, params.haap_syn_cap)
         } else {
             (1.0, f32::INFINITY)
         };
-        for (i, list) in per.iter().enumerate() {
-            row_ptr[i] = ci.len() as i32;
-            for &(post, w) in list {
-                ci.push(post as i32);
-                // Масштаб + клип хвоста: один синапс не может доминировать.
-                vals.push(if haap {
-                    (w * syn_scale).min(syn_cap)
-                } else {
-                    w
-                });
-            }
-        }
-        row_ptr[n_total] = ci.len() as i32;
-        let conn = ConnectomeData::new(row_ptr, ci, vals, grown.nt.clone(), vec![]);
+        let conn = build_connectome(grown, &gains, haap, syn_scale, syn_cap);
         let config = match model {
             BrainModel::LifAlpha => NeuronConfig::LifAlpha {
                 dt_ms: DT_MS,
@@ -324,13 +365,24 @@ impl Brain {
                 tau_syn: HAAP_TAU_SYN,
             },
         };
-        let (n_neurons, n_syn, rp, cc, vv) = (
-            conn.n_neurons,
-            conn.values.len(),
-            conn.row_ptr.clone(),
-            conn.col_indices.clone(),
-            conn.values.clone(),
-        );
+        // Эффективный lr: HAAP-дофамин домножается на syn_scale (иначе шаг
+        // обучения в LIF-единицах несовместим с масштабом HAAP-весов).
+        let eff_lr = if haap && params.haap_dopamine_scaled {
+            params.lr * syn_scale
+        } else {
+            params.lr
+        };
+        let dt_for_model = if model == BrainModel::Haap {
+            DT_MS_HAAP
+        } else {
+            DT_MS
+        };
+        // Plast-зеркало и маски — ДО передачи conn в динамику (движок
+        // забирает conn во владение: BrainRunner/GpuDynamics клонируют/едят
+        // его целиком); снапшот весов — для memory_lt (наследственность).
+        let (plast, pre_of, post_of, inh_syn, thaw_at, target_in_sum) =
+            plast_and_masks(&conn, grown, &params, eff_lr, dt_for_model, syn_scale);
+        let (n_neurons, memory_lt) = (conn.n_neurons, conn.values.clone());
         // Динамика: GPU (wgpu, только LIF) с тихим CPU-фолбэком, либо CPU SIMD.
         // GpuDynamics::try_new клонирует conn — цена один раз на сборку мозга.
         let mut dynamics = if gpu {
@@ -352,78 +404,6 @@ impl Brain {
             }
             Dynamics::Cpu(runner)
         };
-        let mut pre_of = vec![0usize; n_syn];
-        let mut post_of = vec![0usize; n_syn];
-        let mut inh_syn = vec![false; n_syn];
-        for i in 0..n_neurons {
-            for idx in rp[i] as usize..rp[i + 1] as usize {
-                pre_of[idx] = i;
-                post_of[idx] = cc[idx] as usize;
-                inh_syn[idx] = grown.nt[i] < 0.0;
-            }
-        }
-        // Пластичен с рождения (0); usize::MAX — навсегда заморожен
-        // (только явные frozen_pairs): дофамин и гомеостаз их не трогают.
-        // Тормозные пресинапсы (I→M) ОСТАЮТСЯ пластичными: награда ослабляет
-        // торможение через LTD — без этого усиленный S→I запирает моторы.
-        const THAW_NEVER: usize = usize::MAX;
-        let mut thaw_at = vec![0usize; n_syn];
-        for idx in 0..n_syn {
-            let pair = (grown.region_of[pre_of[idx]], grown.region_of[post_of[idx]]);
-            if params.frozen_pairs.contains(&pair) {
-                thaw_at[idx] = THAW_NEVER;
-                continue;
-            }
-            if let Some(&(_, _, thaw_tick)) = params
-                .critical_pairs
-                .iter()
-                .find(|&&(a, b, _)| (a, b) == pair)
-            {
-                thaw_at[idx] = thaw_tick.saturating_mul(BRAIN_STEPS_PER_TICK);
-            }
-        }
-        let mut target_in_sum = vec![0.0f32; n_neurons];
-        for idx in 0..n_syn {
-            if !inh_syn[idx]
-                && !params
-                    .homeo_exclude_pre
-                    .contains(&grown.region_of[pre_of[idx]])
-            {
-                target_in_sum[post_of[idx]] += vv[idx];
-            }
-        }
-        let dt_for_model = if model == BrainModel::Haap {
-            DT_MS_HAAP
-        } else {
-            DT_MS
-        };
-        // Эффективный lr: HAAP-дофамин домножается на syn_scale (иначе шаг
-        // обучения в LIF-единицах несовместим с масштабом HAAP-весов).
-        let eff_lr = if haap && params.haap_dopamine_scaled {
-            params.lr * syn_scale
-        } else {
-            params.lr
-        };
-        let pre_u32: Vec<u32> = pre_of.iter().map(|&p| p as u32).collect();
-        let post_u32: Vec<u32> = post_of.iter().map(|&p| p as u32).collect();
-        let plast = PlastBrain::new(
-            n_neurons,
-            &pre_u32,
-            &post_u32,
-            vv.clone(),
-            StdpConfig {
-                dt: dt_for_model,
-                tau_pre: 20.0,
-                tau_post: 20.0,
-                tau_e: 1000.0,
-                a_ltp: params.a_ltp,
-                a_ltd: params.a_ltd,
-                lr: eff_lr,
-                w_min: 0.0,
-                // Рабочий потолок: LIF — w_max, HAAP — w_max·syn_scale.
-                w_max: params.w_max * syn_scale,
-            },
-        );
         // GPU-обучение целиком: если динамика на GPU (LIF), включаем
         // dopamine-eligibility на GPU — те же константы распада, что CPU plast
         // (fast_exp, dt модели, tau из StdpConfig ниже). Ридбеки за тик —
@@ -464,8 +444,61 @@ impl Brain {
             haap_cache: if model == BrainModel::Haap { vec![0.0; n_neurons] } else { Vec::new() },
             norm_sums: Vec::new(),
             frozen_keep: Vec::new(),
-            memory_lt: vv.clone(),
+            memory_lt,
             gpu_learn,
+            pool_spikes: Vec::new(),
+        }
+    }
+
+    /// Мозг в батч-пуле арены (`engine::gpu_pool::BrainPool`): мембрана
+    /// считается ОБЩИМ GPU-раннером всех существ (блочно-диагональная сеть),
+    /// здесь — пластичность/гомеостаз/сон на CPU поверх зеркала весов.
+    /// `csr` регистрируется в пуле ВЫЗЫВАЮЩИМ (`BrainPool::register`, см.
+    /// `creature::assemble_pooled`); смещения блока хранит пул. Прожигание
+    /// инстинктов в пуле не поддерживается (одиночные шаги динамики
+    /// недостижимы — пул гоняет всех разом; у дефолтного генома инстинктов
+    /// нет, так что обычные существа пула рождаются «пустыми»).
+    pub fn new_pooled(
+        grown: &Grown,
+        gains: Vec<Vec<f32>>,
+        params: PlasticityParams,
+        csr: ConnectomeData,
+    ) -> Self {
+        crate::engine::perf::flush_denormals();
+        let n_regions = gains.len();
+        let eff_lr = params.lr;
+        // Пул — только LIF: syn_scale = 1 (как у CPU/GPU LIF-мозгов).
+        let (plast, pre_of, post_of, inh_syn, thaw_at, target_in_sum) =
+            plast_and_masks(&csr, grown, &params, eff_lr, DT_MS, 1.0);
+        let n = csr.n_neurons;
+        let dynamics = Dynamics::Pooled(PooledDynamics {
+            conn: csr,
+            dirty: false,
+        });
+        let memory_lt = plast.weights().to_vec();
+        Self {
+            dynamics,
+            plast,
+            pre_of,
+            post_of,
+            region_of: grown.region_of.clone(),
+            gains,
+            target_in_sum,
+            inh_syn,
+            thaw_at,
+            n,
+            n_regions,
+            model: BrainModel::LifAlpha,
+            params,
+            syn_scale: 1.0,
+            pending_reward: Vec::new(),
+            step_count: 0,
+            haap_cache: Vec::new(),
+            norm_sums: Vec::new(),
+            frozen_keep: Vec::new(),
+            memory_lt,
+            gpu_learn: false,
+            pool_spikes: Vec::new(),
         }
     }
 
@@ -485,16 +518,18 @@ impl Brain {
         self.params.w_max * self.syn_scale
     }
 
-    /// Динамика на GPU? (диагностика/пробы; HAAP всегда CPU).
+    /// Динамика на GPU? (диагностика/пробы; HAAP всегда CPU). `Pooled` тоже
+    /// считает мембрану на GPU (общий раннер арены).
     pub fn on_gpu(&self) -> bool {
-        matches!(self.dynamics, Dynamics::Gpu(_))
+        matches!(self.dynamics, Dynamics::Gpu(_) | Dynamics::Pooled(_))
     }
 
     /// DEBUG: CPU-столбец v (сверка с GPU в диагностике паритета).
     pub fn debug_cpu_v(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Cpu(r) => r.get_v().to_vec(),
-            Dynamics::Gpu(_) => Vec::new(),
+            // Пул: у мозга нет своего раннера — диагностические колонки пусты.
+            Dynamics::Gpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -502,7 +537,7 @@ impl Brain {
     pub fn debug_cpu_g(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Cpu(r) => r.get_alpha_g(),
-            Dynamics::Gpu(_) => Vec::new(),
+            Dynamics::Gpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -510,7 +545,7 @@ impl Brain {
     pub fn debug_cpu_refr(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Cpu(r) => r.get_alpha_refr(),
-            Dynamics::Gpu(_) => Vec::new(),
+            Dynamics::Gpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -518,7 +553,7 @@ impl Brain {
     pub fn debug_cpu_in(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Cpu(r) => r.get_alpha_debug_in(),
-            Dynamics::Gpu(_) => Vec::new(),
+            Dynamics::Gpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -526,7 +561,7 @@ impl Brain {
     pub fn debug_cpu_delay(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Cpu(r) => r.get_alpha_delay(),
-            Dynamics::Gpu(_) => Vec::new(),
+            Dynamics::Gpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -534,7 +569,7 @@ impl Brain {
     pub fn debug_cpu_fired(&self) -> Vec<usize> {
         match &self.dynamics {
             Dynamics::Cpu(r) => r.get_alpha_fired(),
-            Dynamics::Gpu(_) => Vec::new(),
+            Dynamics::Gpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -547,7 +582,7 @@ impl Brain {
     pub fn debug_cpu_delay_pos(&self) -> usize {
         match &self.dynamics {
             Dynamics::Cpu(r) => r.get_alpha_delay_pos(),
-            Dynamics::Gpu(_) => 0,
+            Dynamics::Gpu(_) | Dynamics::Pooled(_) => 0,
         }
     }
 
@@ -555,7 +590,7 @@ impl Brain {
     pub fn debug_gpu_ring(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Gpu(g) => g.debug_ring(),
-            Dynamics::Cpu(_) => Vec::new(),
+            Dynamics::Cpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -563,7 +598,7 @@ impl Brain {
     pub fn debug_gpu_spikes(&self) -> Vec<i32> {
         match &self.dynamics {
             Dynamics::Gpu(g) => g.debug_spikes(),
-            Dynamics::Cpu(_) => Vec::new(),
+            Dynamics::Cpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -571,7 +606,7 @@ impl Brain {
     pub fn debug_gpu_scatter_row(&self, post: usize) -> Vec<(u32, f32, f32, u32)> {
         match &self.dynamics {
             Dynamics::Gpu(g) => g.debug_scatter_row(post),
-            Dynamics::Cpu(_) => Vec::new(),
+            Dynamics::Cpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -579,7 +614,7 @@ impl Brain {
     pub fn debug_gpu_weights(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Gpu(g) => g.debug_weights(),
-            Dynamics::Cpu(_) => Vec::new(),
+            Dynamics::Cpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -587,7 +622,7 @@ impl Brain {
     pub fn debug_gpu_states(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Gpu(g) => g.debug_states(),
-            Dynamics::Cpu(_) => Vec::new(),
+            Dynamics::Cpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -595,7 +630,7 @@ impl Brain {
     pub fn debug_gpu_i_in(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Gpu(g) => g.debug_i_in(),
-            Dynamics::Cpu(_) => Vec::new(),
+            Dynamics::Cpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -603,7 +638,7 @@ impl Brain {
     pub fn debug_gpu_slot(&self) -> u32 {
         match &self.dynamics {
             Dynamics::Gpu(g) => g.debug_slot(),
-            Dynamics::Cpu(_) => 0,
+            Dynamics::Cpu(_) | Dynamics::Pooled(_) => 0,
         }
     }
 
@@ -611,7 +646,7 @@ impl Brain {
     pub fn debug_gpu_elig(&self) -> Vec<f32> {
         match &self.dynamics {
             Dynamics::Gpu(g) => g.debug_elig(),
-            Dynamics::Cpu(_) => Vec::new(),
+            Dynamics::Cpu(_) | Dynamics::Pooled(_) => Vec::new(),
         }
     }
 
@@ -619,7 +654,7 @@ impl Brain {
     pub fn debug_gpu_traces(&self) -> (Vec<f32>, Vec<f32>) {
         match &self.dynamics {
             Dynamics::Gpu(g) => g.debug_traces(),
-            Dynamics::Cpu(_) => (Vec::new(), Vec::new()),
+            Dynamics::Cpu(_) | Dynamics::Pooled(_) => (Vec::new(), Vec::new()),
         }
     }
 
@@ -801,6 +836,65 @@ impl Brain {
             mr_sum += v[mr.0..mr.1].iter().sum::<i32>();
         }
         (ml_sum, mr_sum)
+    }
+
+    /// Пулевой путь: проглотить `spt` подшагов спайков из ОБЩЕГО flat-буфера
+    /// батч-пула (все существа в одной сети; `neuron_off` — смещение этого
+    /// существа). Пластичность/счётчик/гомеостаз/отложенные награды — ровно
+    /// как в `step_batch` (CPU-путь), моторные суммы — из локальных границ.
+    /// Порядок применения подшагов бит-в-бит тот же, что у последовательного
+    /// тика, поэтому траектория обучения пула эквивалентна CPU-семантике
+    /// (спайки GPU могут отличаться в 1 ulp — см. отчёт).
+    pub fn ingest_batched_flat(
+        &mut self,
+        flat: &[u32],
+        spt: usize,
+        neuron_off: usize,
+        ml: (usize, usize),
+        mr: (usize, usize),
+    ) -> (i32, i32) {
+        let n_total = if spt > 0 {
+            flat.len() / spt
+        } else {
+            0
+        };
+        debug_assert!(neuron_off + self.n <= n_total, "смещение пула вне flat");
+        let mut ml_sum = 0i32;
+        let mut mr_sum = 0i32;
+        // Буфер вынимаем из self (post_substep требует &mut self, а спайки —
+        // займ из того же self): заполнение из flat, возврат после цикла —
+        // переиспользование без аллокации на подшаг.
+        let mut spikes = std::mem::take(&mut self.pool_spikes);
+        for k in 0..spt {
+            let base = k * n_total + neuron_off;
+            for &s in &flat[base + ml.0..base + ml.1] {
+                ml_sum += s as i32;
+            }
+            for &s in &flat[base + mr.0..base + mr.1] {
+                mr_sum += s as i32;
+            }
+            spikes.clear();
+            spikes.extend(flat[base..base + self.n].iter().map(|&s| s as i32));
+            self.post_substep(&spikes);
+        }
+        self.pool_spikes = spikes;
+        (ml_sum, mr_sum)
+    }
+
+    /// Зеркало весов для батч-пула + флаг «менялось» (арена передаёт пулу
+    /// перед шагом; см. `engine::gpu_pool::BrainPool::sync_weights`).
+    pub fn pooled_weights(&self) -> (&[f32], bool) {
+        match &self.dynamics {
+            Dynamics::Pooled(p) => (p.values(), p.dirty),
+            _ => (EMPTY_WEIGHTS.get_or_init(|| Vec::new()).as_slice(), false),
+        }
+    }
+
+    /// Сбросить флаг dirty пула после заливки весов в GPU.
+    pub fn pooled_clear_dirty(&mut self) {
+        if let Dynamics::Pooled(p) = &mut self.dynamics {
+            p.dirty = false;
+        }
     }
 
     /// Пост-обработка одного подшага: пластичность, счётчик, гомеостаз,
@@ -1262,6 +1356,127 @@ pub fn gains_from(n_regions: usize, rules: &[(usize, usize, f32)]) -> Vec<Vec<f3
         g[a][b] = v;
     }
     g
+}
+
+/// Построить CSR-коннектом из grown-проводки × гейны анатомии. Общий код
+/// сборки мозга: `Brain::with_model` (CPU/GPU/HAAP) и батч-пул арены
+/// (`engine::gpu_pool::BrainPool::register`). Рёбра с нулевым гейном
+/// выпадают; HAAP дополнительно масштабирует веса (`syn_scale`) и клипует
+/// хвост (`syn_cap`) — LIF-путь идёт без масштаба, бит-в-бит как раньше.
+pub(crate) fn build_connectome(
+    grown: &Grown,
+    gains: &[Vec<f32>],
+    haap: bool,
+    syn_scale: f32,
+    syn_cap: f32,
+) -> ConnectomeData {
+    let n_total = grown.nt.len();
+    let mut per: Vec<Vec<(usize, f32)>> = vec![vec![]; n_total];
+    for &(pre, post, w) in &grown.edges {
+        let (rp, rq) = (grown.region_of[pre], grown.region_of[post]);
+        let gain = gains[rp][rq];
+        if gain > 0.0 {
+            per[pre].push((post, w * gain));
+        }
+    }
+    let mut row_ptr = vec![0i32; n_total + 1];
+    let mut ci = Vec::new();
+    let mut vals = Vec::new();
+    for (i, list) in per.iter().enumerate() {
+        row_ptr[i] = ci.len() as i32;
+        for &(post, w) in list {
+            ci.push(post as i32);
+            // Масштаб + клип хвоста: один синапс не может доминировать.
+            vals.push(if haap {
+                (w * syn_scale).min(syn_cap)
+            } else {
+                w
+            });
+        }
+    }
+    row_ptr[n_total] = ci.len() as i32;
+    ConnectomeData::new(row_ptr, ci, vals, grown.nt.clone(), vec![])
+}
+
+/// Построить plast-зеркало и маски из готового CSR: `pre_of`/`post_of`/
+/// `inh_syn`/`thaw_at`/`target_in_sum` + `PlastBrain` (ленивый дофаминовый
+/// STDP). Общий код CPU/GPU/пула — смена динамики не меняет пластичность.
+/// `syn_scale` — рабочий масштаб весов модели (HAAP < 1, LIF/пул = 1):
+/// потолок `w_max` в конфиге plast домножается на него.
+fn plast_and_masks(
+    conn: &ConnectomeData,
+    grown: &Grown,
+    params: &PlasticityParams,
+    eff_lr: f32,
+    dt_for_model: f32,
+    syn_scale: f32,
+) -> (PlastBrain, Vec<usize>, Vec<usize>, Vec<bool>, Vec<usize>, Vec<f32>) {
+    let n_neurons = conn.n_neurons;
+    let n_syn = conn.values.len();
+    let rp = &conn.row_ptr;
+    let cc = &conn.col_indices;
+    let vv = &conn.values;
+    let mut pre_of = vec![0usize; n_syn];
+    let mut post_of = vec![0usize; n_syn];
+    let mut inh_syn = vec![false; n_syn];
+    for i in 0..n_neurons {
+        for idx in rp[i] as usize..rp[i + 1] as usize {
+            pre_of[idx] = i;
+            post_of[idx] = cc[idx] as usize;
+            inh_syn[idx] = grown.nt[i] < 0.0;
+        }
+    }
+    // Пластичен с рождения (0); usize::MAX — навсегда заморожен
+    // (только явные frozen_pairs): дофамин и гомеостаз их не трогают.
+    // Тормозные пресинапсы (I→M) ОСТАЮТСЯ пластичными: награда ослабляет
+    // торможение через LTD — без этого усиленный S→I запирает моторы.
+    const THAW_NEVER: usize = usize::MAX;
+    let mut thaw_at = vec![0usize; n_syn];
+    for idx in 0..n_syn {
+        let pair = (grown.region_of[pre_of[idx]], grown.region_of[post_of[idx]]);
+        if params.frozen_pairs.contains(&pair) {
+            thaw_at[idx] = THAW_NEVER;
+            continue;
+        }
+        if let Some(&(_, _, thaw_tick)) = params
+            .critical_pairs
+            .iter()
+            .find(|&&(a, b, _)| (a, b) == pair)
+        {
+            thaw_at[idx] = thaw_tick.saturating_mul(BRAIN_STEPS_PER_TICK);
+        }
+    }
+    let mut target_in_sum = vec![0.0f32; n_neurons];
+    for idx in 0..n_syn {
+        if !inh_syn[idx]
+            && !params
+                .homeo_exclude_pre
+                .contains(&grown.region_of[pre_of[idx]])
+        {
+            target_in_sum[post_of[idx]] += vv[idx];
+        }
+    }
+    let pre_u32: Vec<u32> = pre_of.iter().map(|&p| p as u32).collect();
+    let post_u32: Vec<u32> = post_of.iter().map(|&p| p as u32).collect();
+    let plast = PlastBrain::new(
+        n_neurons,
+        &pre_u32,
+        &post_u32,
+        vv.clone(),
+        StdpConfig {
+            dt: dt_for_model,
+            tau_pre: 20.0,
+            tau_post: 20.0,
+            tau_e: 1000.0,
+            a_ltp: params.a_ltp,
+            a_ltd: params.a_ltd,
+            lr: eff_lr,
+            w_min: 0.0,
+            // Рабочий потолок: LIF — w_max, HAAP — w_max·syn_scale.
+            w_max: params.w_max * syn_scale,
+        },
+    );
+    (plast, pre_of, post_of, inh_syn, thaw_at, target_in_sum)
 }
 
 #[cfg(test)]

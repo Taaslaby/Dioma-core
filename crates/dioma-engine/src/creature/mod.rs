@@ -7,7 +7,7 @@
 //! Координаты, столкновения, еда и социальное наблюдение принадлежат хосту
 //! (`crate::sim::Arena`).
 use crate::body::metabolism::{chem, locus, Blood};
-use crate::engine::grow::{grow, grow_gpu, stage_b_layout};
+use crate::engine::grow::{grow, grow_gpu, stage_c_lite_layout};
 use crate::engine::instincts::Instinct;
 use crate::engine::neurons::{gains_from, Brain, PlasticityParams, BRAIN_STEPS_PER_TICK};
 use crate::rng::XorShift;
@@ -19,14 +19,15 @@ pub mod memory;
 pub mod metrics;
 
 pub use builder::CreatureBuilder;
+pub use builder::BrainLayout;
 pub use genome::{CreatureGenome, MetabolismGene, Sex};
 pub use metrics::{BloodState, BrainStats, CreatureEvent, CreatureMetrics};
 
-/// Регионы stage_b_layout (см. engine::grow::stage_b_layout).
-/// Индексы регионов мозга в layout'е стадии B (см. [`crate::engine::grow::stage_b_layout`]).
+/// Регионы stage_c_lite_layout (см. engine::grow::stage_c_lite_layout).
+/// Индексы регионов мозга в layout'е стадии C-lite (см. [`crate::engine::grow::stage_c_lite_layout`]).
 /// Публичные: научные тулзы ([`crate::sci`]) и оверлеи группируют нейроны по регионам.
-/// Ядро 0..6 — как в avoidance_layout; зрение и ассоциативный слой добавлены
-/// В КОНЕЦ (append-only): старые индексы не сдвинуты.
+/// Ядро 0..6 — как в avoidance_layout; зрение и кора добавлены В КОНЕЦ
+/// (append-only): старые индексы не сдвинуты.
 pub const REGION_SL: usize = 0; // запах слева
 pub const REGION_SR: usize = 1; // запах справа
 pub const REGION_WL: usize = 2; // стена слева
@@ -36,8 +37,8 @@ pub const REGION_ML: usize = 5; // мотор слева (поворот вле�
 pub const REGION_MR: usize = 6; // мотор справа (поворот вправо)
 pub const REGION_VL: usize = 7; // зрение слева (глаз-бин)
 pub const REGION_VR: usize = 8; // зрение справа (глаз-бин)
-pub const REGION_ASSOC_E: usize = 9; // ассоциативный хаб (возбуждающий)
-pub const REGION_ASSOC_I: usize = 10; // тормозной контур хаба
+pub const REGION_CORTEX_E: usize = 9; // кора (рекуррентный хаб, возбуждающий)
+pub const REGION_CORTEX_I: usize = 10; // тормозной контур коры
 
 /// Базовый фоновый ток мозга (тонус нейронов).
 const BASAL_EXT: f32 = 0.12;
@@ -71,11 +72,11 @@ const LEARNED_DOPAMINE_SCALE: f32 = 100.0;
 const LEARNED_PRE_DRIVE: f32 = 4.0;
 /// Ток ко-активации post-региона при прожигании выученного инстинкта.
 const LEARNED_POST_DRIVE: f32 = 8.0;
-/// Прямые рефлекторные пары «сенсор → мотор» (регионы stage_b_layout):
+/// Прямые рефлекторные пары «сенсор → мотор» (регионы stage_c_lite_layout):
 /// только они сворачиваются в инстинкты. Тормозные пути через I не
 /// передаются — рефлекс это стимул→действие, а не тонкая настройка.
-/// Зрения (VL/VR) здесь НЕТ намеренно: зрение учится через ассоциативный
-/// хаб обычным STDP и в инстинкт-гены не сворачивается («зрение учится,
+/// Зрения (VL/VR) здесь НЕТ намеренно: зрение учится через кору
+/// обычным STDP и в инстинкт-гены не сворачивается («зрение учится,
 /// а не прошивается — ради гибкой охоты», см. гейны в `assemble_impl`).
 const REFLEX_PAIRS: [(usize, usize); 4] = [(0, 5), (1, 6), (2, 6), (3, 5)]; // SL→ML, SR→MR, WL→MR, WR→ML
 /// Масштаб «запах [0..1] → ток сенсорного региона».
@@ -232,7 +233,7 @@ impl Creature {
     /// `lr = 0` отключает обучение — мозг-«камень» для сравнения).
     pub fn new_with_params(seed: u64, params: PlasticityParams) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow(&stage_b_layout(), &genome.steering, seed);
+        let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
         Self::assemble(grown, genome, seed, params)
     }
 
@@ -242,7 +243,7 @@ impl Creature {
     /// (см. `engine::neurons::Brain::new_gpu`).
     pub fn new_gpu(seed: u64) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow(&stage_b_layout(), &genome.steering, seed);
+        let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
         Self::assemble_gpu(grown, genome, seed)
     }
 
@@ -251,8 +252,17 @@ impl Creature {
     /// тихо падает на CPU (прометей сам выбирает бэкенд).
     pub fn new_gpu_grown(seed: u64) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow_gpu(&stage_b_layout(), &genome.steering, seed);
+        let grown = grow_gpu(&stage_c_lite_layout(), &genome.steering, seed);
         Self::assemble_gpu(grown, genome, seed)
+    }
+
+    /// Существо для батч-пула арены (`Arena::new_pooled`): мембрана считается
+    /// общим GPU-раннером ВСЕХ существ пула (один шаг на тик), пластичность —
+    /// на CPU. Вызывает `assemble_pooled` (регистрирует коннектом в пуле).
+    pub fn new_pooled(seed: u64, pool: &mut crate::engine::gpu_pool::BrainPool) -> Self {
+        let genome = CreatureGenome::default();
+        let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
+        Self::assemble_pooled(grown, genome, seed, pool)
     }
 
     /// Существо из явного генома (наследственность): коннектом растёт из
@@ -265,7 +275,7 @@ impl Creature {
     /// grown-весов), не движковый дефолт 6: иначе обучение не могло бы
     /// потенцировать пути, и эффект Болдуина был бы невозможен.
     pub fn from_genome(genome: CreatureGenome, seed: u64) -> Self {
-        let grown = grow(&stage_b_layout(), &genome.steering, seed);
+        let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
         Self::from_genome_grown(genome, seed, grown)
     }
 
@@ -408,62 +418,72 @@ impl Creature {
         // где пол выбирается случайно при наследовании.
         let mut genome = genome;
         genome.sex = Sex::from_seed(seed);
-        // Стадия B: исходящие рёбра ассоциативного хаба выведены из мягкого
-        // гомеостаза ядра (см. `PlasticityParams::homeo_exclude_pre`) — хаб
-        // учится дофамином, но не участвует в защите рефлексов от наказания.
+        // Стадия C-lite: исходящие рёбра коры выведены из мягкого гомеостаза
+        // ядра (см. `PlasticityParams::homeo_exclude_pre`) — кора учится
+        // дофамином, но не участвует в защите рефлексов от наказания.
         let mut params = params;
-        params.homeo_exclude_pre = vec![REGION_ASSOC_E, REGION_ASSOC_I];
-        // Гейны анатомии (стадия B, 11 регионов). Ядро 0..6 — как раньше.
+        params.homeo_exclude_pre = vec![REGION_CORTEX_E, REGION_CORTEX_I];
+        // Гейны анатомии (стадия C-lite, 11 регионов). Ядро 0..6 — как раньше.
         // Зрение учится, а не прошивается — ради гибкой охоты: прямые
-        // VL/VR→ML/MR аксоны схемы (stage_b_layout) получают НУЛЕВОЙ гейн и
-        // выпадают при сборке мозга; зрение входит в моторы ТОЛЬКО через
-        // ассоциативный хаб (VL/VR→ASSOC_E→ML/MR) обычным STDP — eligibility
-        // глобальная, дофамин сам решает, какой «зрительный руль» нажить.
+        // VL/VR→ML/MR аксоны схемы (stage_c_lite_layout) получают НУЛЕВОЙ гейн
+        // и выпадают при сборке мозга; зрение входит в моторы ТОЛЬКО через
+        // кору (VL/VR→CORTEX_E→ML/MR) обычным STDP — eligibility глобальная,
+        // дофамин сам решает, какой «зрительный руль» нажить.
         // В REFLEX_PAIRS зрение не добавляем (инстинктом не рождается).
         //
-        // Масштабы гейнов хаба (замерено на стадии B, см. отчёт):
-        // - выход хаб→моторы 0.1: у новорождённого необученные веса хаба
-        //   (90 нейронов × медиана 2) не должны ни глушить рефлексы, ни
+        // Масштабы гейнов коры (перетюнены на стадии C-lite, см. отчёт):
+        // - выход кора→моторы 0.1: у новорождённого необученные веса коры
+        //   (400 нейронов × медиана 2) не должны ни глушить рефлексы, ни
         //   раздувать цель мягкого гомеостаза (target_in_sum) — иначе наказание
         //   стеной больше не перераспределяется на гоминг (гоминг гас).
         //   Слабый, но живой путь: STDP донашивает его за жизнь;
-        // - рекуррентность ASSOC_E→ASSOC_E 0.4: без неё хаб не звенит
-        //   (1194 спайка/тик на виз. сигнале → помеха моторам), а с полным
-        //   1.0 петля самовозбуждается;
-        // - хаб→ядро (I) 0.2: тоже живёт вне цели гомеостаза ядра.
-        let gains = gains_from(
-            11,
-            &[
-                // ── Ядро рефлексов (как в avoidance_layout) ──
-                (REGION_SL, REGION_ML, 1.0),
-                (REGION_SR, REGION_MR, 1.0),
-                (REGION_SL, REGION_I, 0.8),
-                (REGION_SR, REGION_I, 0.8),
-                (REGION_WL, REGION_MR, WALL_AVOID_GAIN),
-                (REGION_WR, REGION_ML, WALL_AVOID_GAIN),
-                (REGION_I, REGION_ML, 1.0),
-                (REGION_I, REGION_MR, 1.0),
-                // ── Зрение → ассоциативный хаб (без прямых VL/VR→мотор) ──
-                (REGION_VL, REGION_ASSOC_E, 1.0),
-                (REGION_VR, REGION_ASSOC_E, 1.0),
-                // ── Хаб: рекуррентность, E/I-контур, слабый выход на моторы ──
-                (REGION_ASSOC_E, REGION_ASSOC_E, 0.4),
-                (REGION_ASSOC_E, REGION_ASSOC_I, 1.0),
-                (REGION_ASSOC_I, REGION_ASSOC_E, 1.0),
-                (REGION_ASSOC_E, REGION_ML, 0.1),
-                (REGION_ASSOC_E, REGION_MR, 0.1),
-                (REGION_ASSOC_I, REGION_ML, 0.1),
-                (REGION_ASSOC_I, REGION_MR, 0.1),
-                // Тормозной контур хаба в ядро — слабый (вне цели гомеостаза).
-                (REGION_ASSOC_E, REGION_I, 0.2),
-                (REGION_ASSOC_I, REGION_I, 0.2),
-            ],
-        );
+        // - рекуррентность CORTEX_E→CORTEX_E: кора почти полносвязна
+        //   (фан-аут растёт квадратично с числом нейронов: морфоген собирает
+        //   концы аксонов всех сом в яблочко, каждая пара замыкается).
+        //   Петля с медианным весом 2 самовозбуждается тем раньше, чем больше
+        //   нейронов: стадия B (90 сом, 7.9k синапсов) держала гейн 0.4,
+        //   C-lite (400 сом, 154k синапсов) — 0.02 (0.4 дал бы судорогу всего
+        //   хаба). Гейн выбирается по фактическому числу сом региона 9:
+        //   эталонные stage_b-существа (бенчмарки) остаются би-в-бит прежними;
+        // - кора→ядро (I) 0.2: тоже живёт вне цели гомеостаза ядра.
+        let gains = assemble_gains(&grown);
         let brain = if gpu {
             Brain::new_gpu(&grown, gains, params)
         } else {
             Brain::new(&grown, gains, params)
         };
+        Self::finish_assemble(grown, genome, seed, brain)
+    }
+
+    /// Сборка существа для батч-пула арены: та же голова, что `assemble_impl`,
+    /// но мозг строится на `Dynamics::Pooled` (мембрана — общий GPU-раннер
+    /// арены, пластичность — CPU). Дефолтный геном (без инстинктов) рождается
+    /// «пустым» — прожигание в пуле не поддерживается (см. `Brain::new_pooled`).
+    pub(crate) fn assemble_pooled(
+        grown: Grown,
+        genome: CreatureGenome,
+        seed: u64,
+        pool: &mut crate::engine::gpu_pool::BrainPool,
+    ) -> Self {
+        let mut genome = genome;
+        genome.sex = Sex::from_seed(seed);
+        let mut params = PlasticityParams {
+            w_max: PLASTICITY_W_MAX,
+            ..Default::default()
+        };
+        params.homeo_exclude_pre = vec![REGION_CORTEX_E, REGION_CORTEX_I];
+        let gains = assemble_gains(&grown);
+        let csr = crate::engine::neurons::build_connectome(&grown, &gains, false, 1.0, f32::INFINITY);
+        // Регистрируем блок CSR в общем GPU-раннере (смещения хранит пул),
+        // затем строим мозг на зеркале весов.
+        pool.register(&csr);
+        let brain = Brain::new_pooled(&grown, gains, params, csr);
+        Self::finish_assemble(grown, genome, seed, brain)
+    }
+
+    /// Хвост сборки (общий для всех путей): кровь по генам метаболизма,
+    /// границы регионов, структура существа и «первый сон» новорождённого.
+    fn finish_assemble(grown: Grown, genome: CreatureGenome, seed: u64, brain: Brain) -> Self {
         let brain_n = brain.n;
         let mut blood = Blood::creature(false);
         genome.metabolism.apply_to(&mut blood);
@@ -550,21 +570,41 @@ impl Creature {
     /// Вызов обновляет внутреннюю физиологию и пластичность. Хост отвечает
     /// за применение возвращённого движения и за отправку событий мира.
     pub fn tick(&mut self, sense: &Sense) -> Action {
+        let relief = self.prepare_tick(sense);
+        // 2. Мозг: подшаги тика, сумма спайков моторных пулов. Батч-путь:
+        // все подшаги гонятся одним вызовом (GPU — без ожиданий на подшаг,
+        // ридбек — только моторные суммы), пластичность — по каждому вектору
+        // после (или на GPU, если обучение целиком на GPU).
+        let spt = self.brain.steps_per_tick();
+        let (ml, mr) = self.brain.step_batch_motor(
+            &self.ext,
+            spt,
+            self.bounds.ml,
+            self.bounds.mr,
+            &mut self.spike_hist,
+        );
+        self.finish_tick(sense, relief, ml, mr)
+    }
+
+    /// Фаза 1 тика (общая для CPU и батч-пула): сенсоры мира +
+    /// чувствительность тела → внешний ток мозга (`self.ext`). Возвращает
+    /// relief — сигнал облегчения (стена отодвинулась за прошлый тик).
+    ///
+    /// Переиспользуемый `self.ext`: бафф на месте (нет аллокации на тик).
+    /// Полный пересчёт на каждом тике (эталон 2550cae): попытка
+    /// «инкрементального» обновления дельтами от prev_sense давала
+    /// систематический дрейф — дельта `(s_t - s_{t-1})·g_t` вычитала
+    /// старое значение, посчитанное с ПРЕЖНИМ гейном `g_{t-1}`, и ошибка
+    /// `s·Δg` накапливалась, когда сенсорный гейн двигался (голод/урон/
+    /// глюкоза). Мозг получал искажённый запах/стену → охота ломалась
+    /// (детур-тест: 141 удар о стену, голод до нуля).
+    pub fn prepare_tick(&mut self, sense: &Sense) -> f32 {
         // 0. Облегчение: стена отодвинулась за прошлый тик → поощрение побега.
         //    Дофамин кредитует именно тот отворот, который убрал стену из поля
         //    (eligibility прошлого тика ещё горячая).
         let prox = sense.wall_l.max(sense.wall_r);
         let relief = (self.prev_wall - prox).max(0.0);
 
-        // 1. Сенсоры мира + чувствительность тела → внешний ток мозга.
-        // Переиспользуемый `self.ext`: бафф на месте (нет аллокации на тик).
-        // Полный пересчёт на каждом тике (эталон 2550cae): попытка
-        // «инкрементального» обновления дельтами от prev_sense давала
-        // систематический дрейф — дельта `(s_t - s_{t-1})·g_t` вычитала
-        // старое значение, посчитанное с ПРЕЖНИМ гейном `g_{t-1}`, и ошибка
-        // `s·Δg` накапливалась, когда сенсорный гейн двигался (голод/урон/
-        // глюкоза). Мозг получал искажённый запах/стену → охота ломалась
-        // (детур-тест: 141 удар о стену, голод до нуля).
         let gain = self.blood.sensor_gain();
         // Пейсмейкер берётся заранее: `ext` — mutable-займ `self.ext`, а
         // `self.pacemaker` — отдельное поле, disjoint borrow (без клона на тик).
@@ -607,20 +647,40 @@ impl Creature {
                 ext[i] += tonic;
             }
         }
+        relief
+    }
 
-        // 2. Мозг: подшаги тика, сумма спайков моторных пулов. Батч-путь:
-        // все подшаги гонятся одним вызовом (GPU — без ожиданий на подшаг,
-        // ридбек — только моторные суммы), пластичность — по каждому вектору
-        // после (или на GPU, если обучение целиком на GPU).
-        let spt = self.brain.steps_per_tick();
-        let (ml, mr) = self.brain.step_batch_motor(
-            ext,
+    /// Фаза 2 (батч-пул): проглотить спайки тика из ОБЩЕГО flat-буфера пула
+    /// (мембрана всех существ посчитана одним GPU-шагом) и доиграть тик
+    /// (кровь/награды/действие) — семантика ровно как в `tick`, но динамика
+    /// пришла из пула. `relief` — из `prepare_tick` (фаза 1), `neuron_off` —
+    /// смещение существа в общей сети (`BrainPool::slots()`).
+    pub fn tick_pooled(
+        &mut self,
+        sense: &Sense,
+        relief: f32,
+        flat: &[u32],
+        spt: usize,
+        neuron_off: usize,
+    ) -> Action {
+        let (ml, mr) = self.brain.ingest_batched_flat(
+            flat,
             spt,
+            neuron_off,
             self.bounds.ml,
             self.bounds.mr,
-            &mut self.spike_hist,
         );
+        self.finish_tick(sense, relief, ml, mr)
+    }
 
+    /// Текущий внешний ток (для пула: собрать ext всех существ перед шагом).
+    pub fn pooled_ext(&self) -> &[f32] {
+        &self.ext
+    }
+
+    /// Фаза 3 тика (общая): тело, награды, действие. Моторные суммы `(ml, mr)`
+    /// приходят из мозга (свой раннер или пул).
+    fn finish_tick(&mut self, sense: &Sense, relief: f32, ml: i32, mr: i32) -> Action {
         // 3. Тело: моторная активность, дефицит глюкозы и события — в кровь.
         self.blood.loci[locus::RATE_MOTOR] = (ml + mr) as f32;
         self.blood.loci[locus::GLUCOSE_DEFICIT] = (150.0 - self.blood.conc[chem::GLUCOSE]).max(0.0);
@@ -659,7 +719,7 @@ impl Creature {
         if relief > RELIEF_MIN {
             self.brain.reward_now(relief * RELIEF_DOPAMINE);
         }
-        self.prev_wall = prox;
+        self.prev_wall = sense.wall_l.max(sense.wall_r);
 
         // 5. Действия: асимметрия моторов → поворот; моторный тон → драйв.
         let mut steer =
@@ -801,6 +861,62 @@ impl Creature {
     pub fn alive(&self) -> bool {
         self.blood.organ.damage < 1.0
     }
+}
+
+/// Гейны анатомии (стадия C-lite, 11 регионов). Ядро 0..6 — как раньше.
+/// Зрение учится, а не прошивается — ради гибкой охоты: прямые
+/// VL/VR→ML/MR аксоны схемы (stage_c_lite_layout) получают НУЛЕВОЙ гейн
+/// и выпадают при сборке мозга; зрение входит в моторы ТОЛЬКО через
+/// кору (VL/VR→CORTEX_E→ML/MR) обычным STDP — eligibility глобальная,
+/// дофамин сам решает, какой «зрительный руль» нажить.
+/// В REFLEX_PAIRS зрение не добавляем (инстинктом не рождается).
+///
+/// Масштабы гейнов коры (перетюнены на стадии C-lite, см. отчёт):
+/// - выход кора→моторы 0.1: у новорождённого необученные веса коры
+///   (400 нейронов × медиана 2) не должны ни глушить рефлексы, ни
+///   раздувать цель мягкого гомеостаза (target_in_sum) — иначе наказание
+///   стеной больше не перераспределяется на гоминг (гоминг гас).
+///   Слабый, но живой путь: STDP донашивает его за жизнь;
+/// - рекуррентность CORTEX_E→CORTEX_E: кора почти полносвязна
+///   (фан-аут растёт квадратично с числом нейронов: морфоген собирает
+///   концы аксонов всех сом в яблочко, каждая пара замыкается).
+///   Петля с медианным весом 2 самовозбуждается тем раньше, чем больше
+///   нейронов: стадия B (90 сом, 7.9k синапсов) держала гейн 0.4,
+///   C-lite (400 сом, 154k синапсов) — 0.02 (0.4 дал бы судорогу всего
+///   хаба). Гейн выбирается по фактическому числу сом региона 9:
+///   эталонные stage_b-существа (бенчмарки) остаются би-в-бит прежними;
+/// - кора→ядро (I) 0.2: тоже живёт вне цели гомеостаза ядра.
+fn assemble_gains(grown: &Grown) -> Vec<Vec<f32>> {
+    let cortex_n = grown.region_of.iter().filter(|&&r| r == REGION_CORTEX_E).count();
+    let cortex_recur = if cortex_n >= 200 { 0.02 } else { 0.4 };
+    gains_from(
+        11,
+        &[
+            // ── Ядро рефлексов (как в avoidance_layout) ──
+            (REGION_SL, REGION_ML, 1.0),
+            (REGION_SR, REGION_MR, 1.0),
+            (REGION_SL, REGION_I, 0.8),
+            (REGION_SR, REGION_I, 0.8),
+            (REGION_WL, REGION_MR, WALL_AVOID_GAIN),
+            (REGION_WR, REGION_ML, WALL_AVOID_GAIN),
+            (REGION_I, REGION_ML, 1.0),
+            (REGION_I, REGION_MR, 1.0),
+            // ── Зрение → кора (без прямых VL/VR→мотор) ──
+            (REGION_VL, REGION_CORTEX_E, 1.0),
+            (REGION_VR, REGION_CORTEX_E, 1.0),
+            // ── Кора: рекуррентность, E/I-контур, слабый выход на моторы ──
+            (REGION_CORTEX_E, REGION_CORTEX_E, cortex_recur),
+            (REGION_CORTEX_E, REGION_CORTEX_I, 1.0),
+            (REGION_CORTEX_I, REGION_CORTEX_E, 1.0),
+            (REGION_CORTEX_E, REGION_ML, 0.1),
+            (REGION_CORTEX_E, REGION_MR, 0.1),
+            (REGION_CORTEX_I, REGION_ML, 0.1),
+            (REGION_CORTEX_I, REGION_MR, 0.1),
+            // Тормозной контур коры в ядро — слабый (вне цели гомеостаза).
+            (REGION_CORTEX_E, REGION_I, 0.2),
+            (REGION_CORTEX_I, REGION_I, 0.2),
+        ],
+    )
 }
 
 #[cfg(test)]
