@@ -101,6 +101,88 @@ const SLEEP_TICKS: u32 = 12;
 /// 120 > порога wants_food (40) с запасом, но ниже панического порога 240.
 pub const ARENA_NEWBORN_HUNGER: f32 = 120.0;
 
+// ─── Смерть (C3-minimal) ────────────────────────────────────────────────
+// Семантика как в Creatures 3: голод/старость → урон → агония (умирает,
+// ещё спасаем сытостью) → смерть → труп → уборка. Единая ручка жестокости
+// — HARSHNESS: поднять — мир злее (старение и лечение масштабируются им;
+// голодный урон и его цена живут в крови — metabolism::BrainOrgan).
+//
+/// Единая ручка жестокости мира (1.0 = эталонный баланс). Масштабирует
+/// старческий урон и естественное лечение: поднять — мир злее (старость
+/// догоняет быстрее, изобилие лечит слабее). Голодный урон НЕ масштабирует
+/// им: его копит сама кровь (organ.starve_damage), чтобы не дублировать.
+pub const HARSHNESS: f32 = 1.0;
+/// Порог умирания в очках урона (суммарный: старческая копилка существа +
+/// голодный урон крови × DAMAGE_SCALE). Порог достигнут — начинается агония.
+pub const DEATH_DAMAGE: f32 = 100.0;
+/// Голодное истощение (очки/тик при glucose == 0): базовый катаболизм —
+/// тело поедает само себя. НЕ дублирует кровь: кровь копит свой урон только
+/// за моторную активность (organ.starve_damage при цене активности > 0,
+/// см. metabolism::Blood::update), поэтому ЗАТИШЕЕ голодающее существо
+/// кровью не калечится (замер: у стены LTD глушит моторы → act=0 → вечный
+/// «бессмертный» голодный зомби). Арена добавляет базовый гейн всегда при
+/// пустой глюкозе; активные голодные получают оба вклада (мозг горит от
+/// работы + тело истощается) — это два механизма, а не двойной учёт.
+pub const STARVE_DAMAGE_RATE: f32 = 0.25 * HARSHNESS;
+/// Длительность агонии в тиках (200 × 50 мс = 10 с): «существо умирает —
+/// 10 секунд на спасение едой». Во время агонии сенсоры нули (арена не даёт
+/// умирающему действий), движение/еда отключены; если глюкоза поднялась выше
+/// RECOVER_GLUCOSE — спасение, иначе счётчик тикает вниз до die().
+pub const DYING_TICKS: u32 = 200;
+/// Сколько тиков труп лежит в арене (200 × 50 мс = 10 с; рендер рисует
+/// серым по alive=false), затем убирается из `self.critters` (retain).
+/// ПУЛЕВАЯ арена трупы не убирает: слоты GPU-пула фиксированы порядком
+/// регистрации, удаление сдвинуло бы маппинг — труп остаётся (мёртвые не
+/// сенсорятся, пул гонит их мембраны нулевым током).
+pub const CORPSE_TICKS: u32 = 200;
+/// Глюкоза спасения: глюкоза ≥ этого порога в тик агонии спасает умирающего
+/// (dying=false, урон −RESCUE_HEAL очков). Поднимает глюкозу хост (тело
+/// умирающего не ест само — «10 секунд на спасение едой»).
+pub const RECOVER_GLUCOSE: f32 = 50.0;
+/// Частичное исцеление при спасении (в очках урона): обе копилки — и
+/// старческая, и кровяная (пропорционально) — тают на эту величину.
+pub const RESCUE_HEAL: f32 = 40.0;
+/// Базовый потолок жизни (72 000 тиков = 3 игровых дня); индивидуальный
+/// потолок `max_age` = BASE × (0.7 + 0.6 × jitter(сид)) — ±30% от сида,
+/// считается один раз при спавне (`critter_max_age`) и хранится в Critter.
+pub const BASE_MAX_AGE_TICKS: u64 = 72_000;
+/// Старческий урон (очки/тик) после порога старости (max_age / 2 — стадия
+/// OLD). С max_age урон растёт втрое быстрее этого же гейна (см. фазу
+/// смертности в `step`): тело разваливается ускоренно.
+pub const SENESCENT_RATE: f32 = 0.02 * HARSHNESS;
+/// Естественное лечение (очки/тик): изобилие лечит — глюкоза выше
+/// HEAL_GLUCOSE тает старческий урон с тем же гейном, каким он растёт
+/// (сытый старик держит линию, голодный — сдаёт). Голодный урон крови
+/// лечит сама кровь (organ.heal_rate, порог 150) — не дублируем.
+pub const HEAL_RATE: f32 = 0.02 * HARSHNESS;
+/// Порог изобилия для естественного лечения (концентрация глюкозы).
+pub const HEAL_GLUCOSE: f32 = 200.0;
+/// Порог старости — доля от индивидуального max_age (стадия OLD в C3).
+const OLD_AGE_DIV: u64 = 2;
+/// Ускорение старческого урона при age ≥ max_age (×SENESCENT_RATE).
+const SENESCENT_ENDGAME: f32 = 3.0;
+
+// ─── Любопытство (анти-аттрактор) ───────────────────────────────────────
+// Замер late-life аттрактора: motors на полном газу, руль зажат в стену
+// (wall_hit_rate 631/1000t, еда 3.2/1000t против 18 ранней жизни). Причина —
+// LTD-насыщение: веса у стены сидят на w_min, градиента коррекции нет.
+// Лекарство — детерминированная «встряска любопытства»: раз в период руль
+// застрявшего получает добавку из чистой функции (сид, тик, индекс) —
+// БЕЗ ГСЧ и без касания rng-состояния симуляции.
+//
+/// Сколько тиков без награды (не ел сам и не видел едущего) существо
+/// считается застрявшим, прежде чем его начнёт трясти любопытство.
+pub const CURIOSITY_AFTER_TICKS: u64 = 600;
+/// Период встряски: каждые столько тиков (внутри окна застревания) руль
+/// получает добавку CURIOSITY_STEER × jitter.
+pub const CURIOSITY_PERIOD: u64 = 25;
+/// Амплитуда встряски руля (× jitter ∈ [−1, 1]): примерно половина MAX_TURN —
+/// заметный рывок курса, не выкручивающий руль в упор.
+///
+/// Любопытство — встряска застрявшего: не награда, а шанс выйти из
+/// осцилляции; дальше путь к еде закрепит STDP.
+pub const CURIOSITY_STEER: f32 = 0.6;
+
 // ─── Ягода: класс (1, 2) — «съедобное» ────────────────────────────────────
 pub const BERRY_FAMILY: u8 = 1;
 pub const BERRY_GENUS: u8 = 2;
@@ -144,11 +226,24 @@ pub struct Critter {
     pub sleep_ticks: u32,
     /// Тиков бодрствования подряд (сторож принудительного отдыха).
     pub awake_ticks: u64,
+    /// Последний drive (для внешнего замера моторов — emergence).
+    pub last_drive: f32,
+    /// Последний RATE_MOTOR (локус из кровяных локаусов).
+    pub last_rate_motor: f32,
     /// Зрение прошлого такта (0..1, левый/правый глаз-бин): копия
     /// `Sense::{vis_l, vis_r}` для оверлеев и интеграционных тестов
     /// (проводка зрения жива). У спящего — 0.
     pub vis_l: f32,
     pub vis_r: f32,
+    /// Тиков с последней награды (сам поел или видел едущего): растёт у
+    /// бодрствующих, сбрасывается в 0 наградой. Драйв «любопытства» —
+    /// анти-аттрактор для застрявших у стены (см. CURIOSITY_*). Во сне
+    /// и в агонии замерает вместе с телом.
+    pub ticks_since_reward: u64,
+    /// Индивидуальный потолок жизни (тики): BASE_MAX_AGE_TICKS ± 30% от
+    /// сида существа — считается ОДИН раз при спавне (`critter_max_age`).
+    /// После max_age / 2 — старческий урон, после max_age — ускоренный.
+    pub max_age: u64,
 }
 
 /// Арена: мир объектов (ягоды, карта) + существа. Детерминирована по сиду.
@@ -251,6 +346,8 @@ impl Arena {
     /// первого тика: двойного накопления нет, применяется одно значение.
     pub fn spawn_creature(&mut self, pos: Vec2, heading: f32, mut creature: Creature) -> AgentId {
         creature.blood.conc[crate::biology::metabolism::chem::HUNGER] = ARENA_NEWBORN_HUNGER;
+        // Индивидуальный потолок жизни — жребий сида, один раз при спавне.
+        let max_age = critter_max_age(creature.seed);
         let id = AgentId(self.next_id);
         self.next_id += 1;
         self.critters.push(        Critter {
@@ -263,8 +360,12 @@ impl Arena {
             sleeping: false,
             sleep_ticks: 0,
             awake_ticks: 0,
+            last_drive: 0.0,
+            last_rate_motor: 0.0,
             vis_l: 0.0,
             vis_r: 0.0,
+            ticks_since_reward: 0,
+            max_age,
         });
         id
     }
@@ -379,7 +480,19 @@ impl Arena {
         //    консолидация выученного дня). Будит только таймер — раннего
         //    пробуждения при критической глюкозе нет (простота; см. tranche 1).
         //    Проснулся — действует с этого тика.
+        //
+        //    Смерть (C3-minimal): трупы (dead) не тикают вовсе — ни счётчиков
+        //    сна, ни возраста; возраст тикает у живых (и во сне — старение не
+        //    спит); агония (dying) замораживает тело: сон/усталость/бодрость
+        //    не тикают, управлять ею будет фаза смертности ниже.
         for c in &mut self.critters {
+            if c.creature.dead {
+                continue; // труп: счётчики не тикают (рендер серым по alive=false)
+            }
+            c.creature.age += 1; // живой тикает возраст (бодрствующий и спящий)
+            if c.creature.dying {
+                continue; // агония: тело замерло — сон не приходит и не спасает
+            }
             if c.sleeping {
                 c.awake_ticks = 0;
                 if c.sleep_ticks == 0 {
@@ -417,14 +530,17 @@ impl Arena {
         //    поэтому каждая closure выставляет флаг вручную (см. brain::perf:
         //    без FTZ STDP-следы в денормалях замедляют SIMD ~×10 и меняют
         //    семантику распада). 2 инструкции, дёшево.
-        let actions: Vec<(usize, Action)> = sim_pool().install(|| {
+        let mut actions: Vec<(usize, Action)> = sim_pool().install(|| {
             let senses: Vec<Option<Sense>> = {
                 let Arena { critters, world, .. } = self;
                 critters
                     .par_iter()
                     .map(|c| {
                         flush_denormals();
-                        if c.sleeping {
+                        if c.sleeping || c.creature.dying || c.creature.dead {
+                            // Спящий не чувствует; умирающий в агонии —
+                            // сенсоры нули (тело замерло, спасает хост);
+                            // труп не сенсорится вовсе.
                             None
                         } else {
                             Some(Self::sense_world(world, c.pos, c.heading, c.see_eat))
@@ -555,6 +671,40 @@ impl Arena {
             actions
         });
 
+        // 1.5. Любопытство (анти-аттрактор «стенная осцилляция»): бодрствующее
+        //    существо без награды (сам не ел и не видел едущего) дольше
+        //    CURIOSITY_AFTER_TICKS застряло — с LTD-насыщением у стены
+        //    коррекционного градиента нет, и моторы осциллируют на полном
+        //    газу в стену. Раз в CURIOSITY_PERIOD тиков руль такого существа
+        //    получает добавку CURIOSITY_STEER × jitter(сид, тик, индекс) —
+        //    ЛЮБОПЫТСТВО — ВСТРЯСКА ЗАСТРЯВШЕГО: НЕ НАГРАДА, А ШАНС ВЫЙТИ
+        //    ИЗ ОСЦИЛЛЯЦИИ; ДАЛЬШЕ ПУТЬ К ЕДЕ ЗАКРЕПИТ STDP. Тряска — чистая
+        //    функция (сид, тик, индекс): rng-состояние симуляции не трогает,
+        //    бит-в-бит детерминизм соблюдён. Спящие/умирающие/трупы не
+        //    участвуют — их просто нет в пачке действий.
+        //    Счётчик награды: сам поел (action.eat — рот открылся по-настоящему)
+        //    или видел едущего (сенсор see_eat этого тика) — сброс в 0,
+        //    иначе +1. Во сне/агонии счётчик замерает вместе с телом.
+        let saw_eat: Vec<bool> = self
+            .last_senses
+            .iter()
+            .map(|s| s.map_or(false, |s| s.see_eat))
+            .collect();
+        for &mut (i, ref mut action) in actions.iter_mut() {
+            let c = &mut self.critters[i];
+            if action.eat || saw_eat[i] {
+                c.ticks_since_reward = 0;
+            } else {
+                c.ticks_since_reward += 1;
+            }
+            if c.ticks_since_reward >= CURIOSITY_AFTER_TICKS
+                && c.ticks_since_reward % CURIOSITY_PERIOD == 0
+            {
+                let j = jitter_scalar(c.creature.seed, self.tick, i as u64);
+                action.steer = (action.steer + CURIOSITY_STEER * j).clamp(-1.0, 1.0);
+            }
+        }
+
         // 2. Движение по комнатам (стены/переходы — физика мира).
         //    Удар о стену = кандидат вне всех комнат: позиция зажимается на
         //    край, а существу сообщается удар (боль + негативный дофамин).
@@ -564,6 +714,8 @@ impl Arena {
             let dir = Vec2::new(c.heading.cos(), c.heading.sin());
             // (×2: тик 50 мс) — шаг за тик удвоен: за секунду та же дистанция.
             let step = dir * (action.drive * c.creature.speed() * MOVE_STEP_PER_TICK);
+        c.last_drive = action.drive;
+        c.last_rate_motor = c.creature.blood.loci[crate::biology::metabolism::locus::RATE_MOTOR];
             let cand = c.pos + step;
             if self.world.map.room_at(cand).is_some() {
                 c.pos = cand;
@@ -608,7 +760,7 @@ impl Arena {
         // «не видна»; двери — пока нет (транш 2).
         if !eaters.is_empty() {
             for c in &mut self.critters {
-                if c.sleeping || c.see_eat {
+                if c.sleeping || c.see_eat || c.creature.dying || c.creature.dead {
                     continue;
                 }
                 let my_room = self.world.map.room_at(c.pos);
@@ -618,6 +770,85 @@ impl Arena {
                     c.see_eat = true;
                 }
             }
+        }
+
+        // 3.4. Смерть (C3-minimal): урон → агония → труп → уборка.
+        //    Урон копят только ЖИВЫЕ и БОДРСТВУЮЩИЕ (умирающие и спящие не
+        //    копят ничего сверх обычного; у трупов тикает лишь счётчик
+        //    лежания). Две копилки урона: голодная — у крови (organ.damage
+        //    за моторную активность при glucose == 0, лечится organ.heal_rate
+        //    при изобилии > 150) и арена — базовый катаболизм при пустой
+        //    глюкозе + старческий урон, лечимый при изобилии > HEAL_GLUCOSE.
+        //    Порог умирания считает СУММУ (очки крови × DAMAGE_SCALE + очки
+        //    арены); спасение лечит обе копилки частично (rescue).
+        for c in &mut self.critters {
+            if c.creature.dead {
+                // Труп: тикает только лежание (уборка — retain ниже).
+                c.creature.corpse_ticks = c.creature.corpse_ticks.saturating_sub(1);
+                continue;
+            }
+            if c.creature.dying {
+                // Агония: спасение сытостью (глюкозу поднимает хост — тело
+                // умирающего не ест само) либо умирание по таймеру.
+                if c.creature.glucose() >= RECOVER_GLUCOSE {
+                    c.creature.rescue(RESCUE_HEAL);
+                } else {
+                    c.creature.dying_ticks = c.creature.dying_ticks.saturating_sub(1);
+                    if c.creature.dying_ticks == 0 {
+                        c.creature.die();
+                        c.creature.corpse_ticks = CORPSE_TICKS;
+                    }
+                }
+                continue;
+            }
+            if c.sleeping {
+                continue; // спящий не копит урон: метаболизм стоит (старение age уже тикнуло)
+            }
+            // Голодное истощение: пустая глюкоза — базовый катаболизм
+            // (STARVE_DAMAGE_RATE за тик, независимо от активности; кровь
+            // при этом калечит только за моторную работу — см. константу).
+            if c.creature.glucose() == 0.0 {
+                c.creature.damage += STARVE_DAMAGE_RATE;
+            }
+            // Старческий урон: после порога старости (max_age / OLD_AGE_DIV —
+            // стадия OLD) копится по SENESCENT_RATE за тик, с max_age — втрое
+            // быстрее (тело разваливается ускоренно).
+            if c.creature.age > c.max_age / OLD_AGE_DIV {
+                c.creature.damage += SENESCENT_RATE;
+            }
+            if c.creature.age >= c.max_age {
+                c.creature.damage += SENESCENT_RATE * SENESCENT_ENDGAME;
+            }
+            // Естественное лечение: изобилие (глюкоза > HEAL_GLUCOSE) тает
+            // старческую копилку; голодную копилку лечит сама кровь.
+            if c.creature.glucose() > HEAL_GLUCOSE {
+                c.creature.damage = (c.creature.damage - HEAL_RATE).max(0.0);
+            }
+            // Порог умирания: суммарный урон (старческий + голодный, в очках)
+            // достигнут — начинается агония («10 секунд на спасение едой»).
+            if c.creature.damage_points() >= DEATH_DAMAGE {
+                c.creature.start_dying(DYING_TICKS);
+            }
+        }
+        // Уборка трупов (только CPU-арена: слоты GPU-пула фиксированы
+        // порядком регистрации — на пулевой труп остаётся, мембрана гонится
+        // нулевым током). last_senses перевыравнивается: он индексируется
+        // теми же индексами, что и critters.
+        if self.pool.is_none() {
+            let mut kept = Vec::with_capacity(self.critters.len());
+            let mut kept_senses = Vec::with_capacity(self.last_senses.len());
+            for (c, s) in self
+                .critters
+                .drain(..)
+                .zip(self.last_senses.drain(..))
+            {
+                if !(c.creature.dead && c.creature.corpse_ticks == 0) {
+                    kept.push(c);
+                    kept_senses.push(s);
+                }
+            }
+            self.critters = kept;
+            self.last_senses = kept_senses;
         }
 
         // 3.5. Климат: комнаты кормят поле, диффузия разносит тепло/свет/
@@ -862,16 +1093,36 @@ fn sim_pool() -> &'static rayon::ThreadPool {
     })
 }
 
+/// Детерминированный хэш слова в [−1, 1] — без ГСЧ и без состояния.
+/// Общий зерно для [`deterministic_jitter`] и [`jitter_scalar`] (старшие
+/// биты умножения на золотое сечение + поворот).
+fn jitter11(s: u64) -> f32 {
+    let x = s.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ s.rotate_right(17);
+    ((x >> 40) & 0xFFFF) as f32 / 65536.0 * 2.0 - 1.0
+}
+
 /// Детерминированный разброс потомства из (id родителя, такт) — без ГСЧ.
 fn deterministic_jitter(a: u64, b: u64, spread: f32) -> Vec2 {
-    let h = |s: u64| -> f32 {
-        let x = s.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ s.rotate_right(17);
-        ((x >> 40) & 0xFFFF) as f32 / 65536.0 * 2.0 - 1.0
-    };
     Vec2::new(
-        h(a ^ b) * spread,
-        h(a.rotate_left(23) ^ b.rotate_left(7)) * spread,
+        jitter11(a ^ b) * spread,
+        jitter11(a.rotate_left(23) ^ b.rotate_left(7)) * spread,
     )
+}
+
+/// Детерминированный скаляр в [−1, 1] из трёх слов (сид/такт/индекс) —
+/// тот же хэш, что у разброса ягод ([`deterministic_jitter`]): чистая
+/// функция входов, ГСЧ-состояние симуляции не трогает. Потребители —
+/// встряска любопытства и жребий потолка жизни ([`critter_max_age`]).
+fn jitter_scalar(a: u64, b: u64, c: u64) -> f32 {
+    jitter11(a ^ b.rotate_left(19) ^ c.rotate_left(41))
+}
+
+/// Индивидуальный потолок жизни существа из его сида: BASE_MAX_AGE_TICKS
+/// с разбросом ±30% (`0.7 + 0.6 × jitter(сид, 0)`). Детерминированно:
+/// один сид — один потолок. Считается один раз при спавне и хранится в
+/// `Critter.max_age`.
+pub fn critter_max_age(seed: u64) -> u64 {
+    (BASE_MAX_AGE_TICKS as f32 * (0.7 + 0.6 * jitter_scalar(seed, 0, 0))) as u64
 }
 
 #[cfg(test)]

@@ -119,7 +119,7 @@ fn regrow_flags(arena: &Arena) -> Vec<(dioma_engine::env::AgentId, bool)> {
         .map(|&id| {
             let regrowing = arena
                 .berry_info(id)
-                .map(|b| b.regrow > 0.0)
+                .map(|b| b.state.regrow > 0.0)
                 .unwrap_or(false);
             (id, regrowing)
         })

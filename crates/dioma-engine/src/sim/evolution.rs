@@ -10,7 +10,7 @@
 //!              врождённым рефлексом охоты. Детерминированно по сиду.
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
-use super::{Arena, Critter};
+use super::{critter_max_age, Arena, Critter};
 use crate::biology::metabolism::chem;
 use crate::creature::genome::instinct_pair_key;
 use crate::creature::{Creature, Genome};
@@ -142,11 +142,17 @@ impl Evolution {
         }
     }
 
-    /// Один такт: мир + существа, затем голодные (урон ≥ 1) убираются.
-    /// Умершие не едят и не размножаются — это и есть естественный отбор.
+    /// Один такт: мир + существа, затем умирающие/мёртвые убираются.
+    /// Голодный урон (кровь ≥ 1.0) в тот же тик переводит существо в агонию
+    /// (см. фазу смертности `Arena::step`) — агонизирующий уже выбыл из
+    /// борьбы (не двигается, не ест), ждать его трупа здесь незачем: отбор
+    /// снимает его с арены немедленно, как и раньше. Умершие не едят и не
+    /// размножаются — это и есть естественный отбор.
     pub fn step(&mut self) {
         self.arena.step();
-        self.arena.critters.retain(|c| c.creature.alive());
+        self.arena
+            .critters
+            .retain(|c| c.creature.alive() && !c.creature.dying);
     }
 
     /// Прогнать одно поколение: `generation_ticks` шагов естественного
@@ -321,8 +327,12 @@ impl Evolution {
             sleeping: false,
             sleep_ticks: 0,
             awake_ticks: 0,
+            last_drive: 0.0,
+            last_rate_motor: 0.0,
             vis_l: 0.0,
             vis_r: 0.0,
+            ticks_since_reward: 0,
+            max_age: critter_max_age(child_seed),
         });
         *child_idx += 1;
     }
@@ -354,8 +364,12 @@ impl Evolution {
             sleeping: false,
             sleep_ticks: 0,
             awake_ticks: 0,
+            last_drive: 0.0,
+            last_rate_motor: 0.0,
             vis_l: 0.0,
             vis_r: 0.0,
+            ticks_since_reward: 0,
+            max_age: critter_max_age(child_seed),
         });
         *child_idx += 1;
     }
@@ -586,6 +600,12 @@ mod tests {
         for s in &stats {
             assert!(s.survivors > 0, "поколение {} вымерло", s.generation);
         }
+        // Смерть-транш: к финалу оставшиеся на арене живы (retain снимает
+        // умирающих) — новое течение смерти не коснулось здоровой охоты.
+        assert!(
+            evo.arena.critters.iter().all(|c| c.creature.alive()),
+            "оставшиеся в эволюции существа должны быть живы"
+        );
 
         // Врождённый рефлекс растёт: к последнему поколению ВСЕ существа
         // носят инстинкт с дофамином у потолка (рефлекс материализован).

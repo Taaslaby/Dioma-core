@@ -225,7 +225,7 @@ fn compute_retina(arena: &Arena, obs: usize) -> [f32; IN_DIM] {
     // Ягодность: съедобные ягоды в конусе, та же комната, в бине луча.
     for &bid in &arena.berries() {
         let Some(b) = arena.berry_info(bid) else { continue };
-        if !b.edible {
+        if !b.state.is_edible() {
             continue;
         }
         if let Some(room) = my_room {
@@ -301,7 +301,7 @@ fn compute_targets(arena: &Arena, obs: usize, sense: &Sense) -> [f32; OUT_DIM] {
     let mut best: Option<(f32, f32)> = None; // (дистанция, пеленг) ближайшей
     for &bid in &arena.berries() {
         let Some(b) = arena.berry_info(bid) else { continue };
-        if !b.edible {
+        if !b.state.is_edible() {
             continue;
         }
         if let Some(room) = my_room {

@@ -122,6 +122,12 @@
                 "объезд почти без ударов: {} ударов",
                 a.critters[0].wall_hits - h0
             );
+            // Смерть-транш: здоровый охотник за время детюра жив и не в
+            // агонии — урон копят только голод/старость (см. фазу смертности).
+            assert!(
+                a.critters[0].creature.alive() && !a.critters[0].creature.dying,
+                "здоровое существо не должно умирать за время детюра"
+            );
             a.critters[0].pos = Vec2::new(5.0, 5.0);
             a.critters[0].heading = 0.0;
         }
@@ -803,5 +809,278 @@
         assert!(
             night_fert < day_fert * 0.7,
             "ночь должна заметно снизить плодородие: {day_fert} → {night_fert}"
+        );
+    }
+
+    // ─── Смерть (C3-minimal): голод → агония → труп → уборка ─────────────
+
+    /// Сцена истощения: глюкоза зажата пином на 0 (форс; сон больше не может
+    /// подкинуть +15), панический голод 255 — моторы гремят у стен, активность
+    /// стоит глюкозы, и кровь копит голодный урон на каждом активном тике
+    /// (metabolism::BrainOrgan; арена его не дублирует).
+    fn starvation_scene() -> Arena {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        let mut arena = Arena::new(11, map);
+        arena.spawn(Vec2::new(20.0, 10.0), 0.0, 11);
+        arena.critters[0].creature.blood.conc[chem::HUNGER] = 255.0;
+        arena
+            .critters[0]
+            .creature
+            .blood
+            .pins
+            .push((chem::GLUCOSE, 0.0));
+        arena
+    }
+
+    /// Голод убивает, если существо не спасли: урон крови растёт → суммарный
+    /// урон достигает DEATH_DAMAGE → агония (сенсоры нули, движение замерло,
+    /// счётчик DYING_TICKS тикает вниз) → die() → труп лежит CORPSE_TICKS →
+    /// убирается из self.critters. ВАРИАНТ СПАСЕНИЯ: глюкоза, поднятая
+    /// хостом выше RECOVER_GLUCOSE в тик агонии, отменяет смерть — урон
+    /// частично лечится (−RESCUE_HEAL очков), существо живо.
+    #[test]
+    fn starvation_dies_unless_rescued() {
+        // ВАРИАНТ СПАСЕНИЯ: в агонии хост поднимает глюкозу — смерть отменена.
+        {
+            let mut a = starvation_scene();
+            let mut was_dying = false;
+            for _ in 0..1200u32 {
+                a.step();
+                if a.critters[0].creature.dying {
+                    was_dying = true;
+                    break;
+                }
+            }
+            assert!(was_dying, "голодное существо должно войти в агонию");
+            assert!(
+                a.critters[0].creature.damage_points() >= DEATH_DAMAGE,
+                "агония начинается от суммарного урона ≥ порога"
+            );
+            // Агония: тело замерло — сенсоров нет, движения нет.
+            let frozen = a.critters[0].pos;
+            a.step();
+            assert_eq!(
+                a.critters[0].pos, frozen,
+                "умирающий не должен двигаться"
+            );
+            // Спасение: хост поднимает глюкозу выше RECOVER_GLUCOSE (пин не
+            // мешает: тело умирающего не тикает — кровь заморожена, пин
+            // применяется только внутри blood.update).
+            a.critters[0].creature.blood.conc[chem::GLUCOSE] = 100.0;
+            a.step();
+            assert!(
+                !a.critters[0].creature.dying && a.critters[0].creature.alive(),
+                "сытое спасение отменяет смерть"
+            );
+            assert!(
+                a.critters[0].creature.damage_points() < DEATH_DAMAGE,
+                "спасение лечит частично: урон ниже порога"
+            );
+        }
+
+        // БАЗОВЫЙ ВАРИАНТ: без спасения — агония → смерть → труп → уборка.
+        {
+            let mut a = starvation_scene();
+            let mut died = false;
+            for _ in 0..1500u32 {
+                a.step();
+                if a.critters[0].creature.dead {
+                    died = true;
+                    break;
+                }
+            }
+            assert!(died, "голодное существо должно умереть за 1500 тиков");
+            assert!(
+                !a.critters[0].creature.alive(),
+                "после die() живых не бывает"
+            );
+            // Труп лежит CORPSE_TICKS тиков, затем убирается из арены.
+            for _ in 0..CORPSE_TICKS / 2 {
+                a.step();
+            }
+            assert_eq!(a.critters.len(), 1, "труп ещё лежит в арене");
+            for _ in 0..CORPSE_TICKS {
+                a.step();
+            }
+            assert!(
+                a.critters.is_empty(),
+                "труп должен убираться из арены после CORPSE_TICKS"
+            );
+        }
+    }
+
+    /// Старость убивает: age ≥ max_age → старческий урон (SENESCENT_RATE,
+    /// с max_age — утроенный гейн) копится → DEATH_DAMAGE → агония → смерть;
+    /// труп убирается через CORPSE_TICKS. Глюкоза зажата пином на 30: кровь
+    /// голодный урон НЕ копит (30 ≥ цены активности) и лечения нет (30 < 200)
+    /// — урон в этой сцене ТОЛЬКО старческий (сторож «химия не задета»:
+    /// organ.damage крови остаётся нулём до самой смерти).
+    #[test]
+    fn aging_kills_and_corpse_is_removed() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        let mut arena = Arena::new(13, map);
+        arena.spawn(Vec2::new(20.0, 10.0), 0.0, 13);
+        // Форс старости: возраст на индивидуальном потолке max_age (старческий
+        // урон идёт с утроенным гейном с первого тика). Пин держит глюкозу на
+        // 30 — «нищий, но не голодающий» старик.
+        arena.critters[0].creature.age = arena.critters[0].max_age;
+        arena
+            .critters[0]
+            .creature
+            .blood
+            .pins
+            .push((chem::GLUCOSE, 30.0));
+
+        arena.step();
+        assert!(
+            arena.critters[0].creature.damage > 0.0,
+            "старческий урон должен копиться после max_age: {}",
+            arena.critters[0].creature.damage
+        );
+
+        let mut died = false;
+        for _ in 0..5000u32 {
+            arena.step();
+            if arena.critters[0].creature.dead {
+                died = true;
+                break;
+            }
+        }
+        assert!(died, "существо должно умереть от старости за 5000 тиков");
+        assert!(!arena.critters[0].creature.alive(), "после die() живых нет");
+        // Сторож «урон только по своей причине»: кровь цела — калечила
+        // именно старость, а не голод.
+        assert_eq!(
+            arena.critters[0].creature.blood.organ.damage, 0.0,
+            "голодный урон крови не должен расти при зажатой глюкозе"
+        );
+        // Труп убирается через CORPSE_TICKS.
+        for _ in 0..CORPSE_TICKS {
+            arena.step();
+        }
+        assert!(arena.critters.is_empty(), "труп старика убирается из арены");
+    }
+
+    // ─── Любопытство (анти-аттрактор застрявшего) ─────────────────────────
+
+    /// Счётчик награды: собственная еда сбрасывает ticks_since_reward,
+    /// чужой обед в поле зрения (see_eat) — тоже; тики без награды копят
+    /// счётчик. Семантика драйва любопытства (встряска — ниже).
+    #[test]
+    fn ticks_since_reward_reset_on_eat() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        let mut arena = Arena::new(5, map);
+        arena.spawn(Vec2::new(10.0, 10.0), 0.0, 5);
+        arena.critters[0].creature.blood.conc[chem::HUNGER] = 200.0;
+        // Наблюдатель В ТОЙ ЖЕ КОМНАТЕ в радиусе зеркала (10), но за
+        // радиусом рта (2) — чужую еду сам не съест.
+        arena.spawn(Vec2::new(14.0, 10.0), 0.0, 6);
+        let berry = arena.add_berry(Vec2::new(10.5, 10.0));
+
+        arena.step(); // едок съедает (ягода у рта), зеркало раздаёт see_eat
+        assert!(
+            arena
+                .world
+                .agent(berry)
+                .map(|a| a.vars[1] > 0.0)
+                .unwrap_or(false),
+            "ягода должна быть съедена первым же тактом"
+        );
+        assert_eq!(
+            arena.critters[0].ticks_since_reward, 0,
+            "собственная еда сбрасывает счётчик"
+        );
+        assert!(arena.critters[1].see_eat, "зеркало увидело едущего");
+        arena.step(); // сенсор see_eat доходит до наблюдателя с задержкой зеркала
+        assert_eq!(
+            arena.critters[1].ticks_since_reward, 0,
+            "виденный чужой обед тоже награда: счётчик наблюдателя сброшен"
+        );
+        // Дальше награды нет (ягода отрастает) — счётчик копится.
+        for _ in 0..30 {
+            arena.step();
+        }
+        assert!(
+            arena.critters[0].ticks_since_reward >= 30,
+            "без награды счётчик растёт: {}",
+            arena.critters[0].ticks_since_reward
+        );
+    }
+
+    /// Встряска любопытства: застрявшее без награды (600+ тиков бодрствования)
+    /// существо получает периодическую добавку к рулю — траектория отличается
+    /// от существа, которому «везёт» с наградами (счётчик всё время ниже
+    /// порога). Тряска детерминирована: тот же сид — бит-в-бит та же судьба,
+    /// rng-состояние симуляции не трогается. (Счётчик тикает только у
+    /// бодрствующих — сторож сна MAX_AWAKE_TICKS замораживает его во сне,
+    /// поэтому прогон гоним до фактического пересечения порога, а не до
+    /// фиксированного числа тиков.)
+    #[test]
+    fn curiosity_shakes_stuck_creature() {
+        // Сцена без ягод: естественную награду взять неоткуда. Глюкоза зажата
+        // пином на 100: никто не голодает насмерть за прогон (смерть здесь
+        // проверяют отдельные тесты).
+        let scene = || -> Arena {
+            let mut map = WorldMap::default();
+            map.add_room(0.0, 0.0, 40.0, 20.0);
+            let mut arena = Arena::new(21, map);
+            arena.spawn(Vec2::new(20.0, 10.0), 0.0, 21);
+            arena.critters[0].creature.blood.conc[chem::HUNGER] = 200.0;
+            arena
+                .critters[0]
+                .creature
+                .blood
+                .pins
+                .push((chem::GLUCOSE, 100.0));
+            arena
+        };
+        let mut a = scene();
+        let mut b = scene();
+        // A копит тики без награды, пока счётчик не перешагнёт 626 — к этому
+        // моменту встряска на 600 И на 625 уже случились. B живёт в мире
+        // постоянных «наград» (счётчик сбрасывается у порога) — встрясок нет.
+        let (mut a_max, mut b_max) = (0u64, 0u64);
+        for _ in 0..3000u32 {
+            a.step();
+            b.step();
+            a_max = a_max.max(a.critters[0].ticks_since_reward);
+            b.critters[0].ticks_since_reward %= 595;
+            b_max = b_max.max(b.critters[0].ticks_since_reward);
+            if a.critters[0].ticks_since_reward >= 626 {
+                break;
+            }
+        }
+        assert!(
+            a_max >= CURIOSITY_AFTER_TICKS + 26,
+            "застрявшее существо должно дойти до окна встряски: {a_max}"
+        );
+        assert!(
+            b_max < CURIOSITY_AFTER_TICKS,
+            "«награждённое» существо не доходит до порога встряски: {b_max}"
+        );
+        // Встряска изменила траекторию A: руль получал добавку на 600/625.
+        assert!(
+            a.critters[0].pos != b.critters[0].pos
+                || a.critters[0].heading != b.critters[0].heading,
+            "встряска любопытства должна менять траекторию застрявшего"
+        );
+        // Детерминизм: два прогона того же сида — бит-в-бит одна судьба.
+        let mut c = scene();
+        let mut d = scene();
+        for _ in 0..1000u32 {
+            c.step();
+            d.step();
+        }
+        assert_eq!(
+            c.critters[0].pos,
+            d.critters[0].pos,
+            "один сид — одна траектория (встряска детерминирована)"
+        );
+        assert_eq!(
+            c.critters[0].ticks_since_reward,
+            d.critters[0].ticks_since_reward
         );
     }
