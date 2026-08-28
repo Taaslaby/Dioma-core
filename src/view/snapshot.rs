@@ -59,6 +59,24 @@ pub struct CritterView {
     /// Зрение (0..1): ягода в левом/правом поле зрения (снимок `Critter.vis_*`).
     pub vis_l: f32,
     pub vis_r: f32,
+    /// Спит ли существо (химия усталости/сторож бодрствования — арена).
+    pub sleeping: bool,
+    /// Дофамин 0..1 (кровь REWARD): вспышка радости после еды/зеркальной еды.
+    pub dopamine: f32,
+    /// Серотонин 0..1 — настроение.
+    pub serotonin: f32,
+    /// Кортизол 0..1 — стресс (высокий → дрожь/болезненность).
+    pub cortisol: f32,
+    /// Окрас из расширяющегося генома (`dna.coat()`), RGB 0..1 — «рендер-ген»:
+    /// мутации и кроссовер окраса видны на экране напрямую.
+    pub coat: [f32; 3],
+    /// Активность мозга 0..1: доля нейронов, спайкнувших за тик (spike_hist),
+    /// растянутая в читаемый диапазон.
+    pub spike_rate: f32,
+    /// Сколько мест с едой существо помнит (гиппокамп, MIN_HITS=3).
+    pub memory_places: usize,
+    /// Моторный тон последнего тика (`Critter.last_rate_motor`) — жажда движения.
+    pub moto_tone: f32,
 }
 
 /// Ягода: позиция + фаза роста 0..1 (1 = спелая).
@@ -104,6 +122,26 @@ impl SimView {
                     sex: cr.sex(),
                     vis_l: c.vis_l,
                     vis_r: c.vis_r,
+                    sleeping: c.sleeping,
+                    dopamine: (cr.dopamine_level() / 255.0).clamp(0.0, 1.0),
+                    serotonin: (cr.serotonin() / 255.0).clamp(0.0, 1.0),
+                    cortisol: (cr.cortisol() / 255.0).clamp(0.0, 1.0),
+                    coat: cr
+                        .dna
+                        .coat()
+                        .map(|c| [c.r.clamp(0.0, 1.0), c.g.clamp(0.0, 1.0), c.b.clamp(0.0, 1.0)])
+                        .unwrap_or([1.0, 1.0, 1.0]),
+                    // Доля спайкнувших нейронов за тик; ×8 — «читаемая» шкала
+                    // (типичные значения — единицы процентов).
+                    spike_rate: {
+                        let stats = cr.brain_stats();
+                        let steps = cr.spike_hist().len().max(1);
+                        let total: usize = cr.spike_hist().iter().map(|s| s.len()).sum();
+                        ((total as f32 / (stats.neuron_count * steps).max(1) as f32) * 8.0)
+                            .clamp(0.0, 1.0)
+                    },
+                    memory_places: cr.places_remembered(),
+                    moto_tone: c.last_rate_motor.clamp(0.0, 1.0),
                 }
             })
             .collect();

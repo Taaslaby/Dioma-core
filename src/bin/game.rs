@@ -473,10 +473,15 @@ fn game_ui(
             ui.separator();
             ui.heading("Существа");
             egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                let sleeping = view.critters.iter().filter(|c| c.sleeping).count();
+                if sleeping > 0 {
+                    ui.label(format!("💤 спит: {sleeping}"));
+                }
                 for c in &view.critters {
-                    let label = format!("#{id} · {sex} · {state}", id = c.id.0,
+                    let label = format!("#{id} · {sex} · {state}{zzz}", id = c.id.0,
                         sex = if matches!(c.sex, Sex::Male) { "M" } else { "F" },
-                        state = if c.alive { "живо" } else { "мертво" });
+                        state = if c.alive { "живо" } else { "мертво" },
+                        zzz = if c.sleeping { " 💤" } else { "" });
                     if ui.selectable_label(*selected == Some(c.id), label).clicked() {
                         *selected = if *selected == Some(c.id) { None } else { Some(c.id) };
                     }
@@ -497,6 +502,18 @@ fn game_ui(
                         if matches!(c.sex, Sex::Male) { "M" } else { "F" },
                     ));
                     ui.label(format!("видит еду: L {:.2} · R {:.2}", c.vis_l, c.vis_r));
+                    ui.separator();
+                    ui.label("Настроение (дофамин/серотонин/кортизол)");
+                    need_bar(ui, "Дофамин", c.dopamine);
+                    need_bar(ui, "Серот.", c.serotonin);
+                    need_bar(ui, "Стресс", c.cortisol);
+                    need_bar(ui, "Мозг", c.spike_rate);
+                    ui.label(format!(
+                        "сон: {} · память мест: {} · мотор: {:.2}",
+                        if c.sleeping { "спит 💤" } else { "бодрствует" },
+                        c.memory_places,
+                        c.moto_tone,
+                    ));
                 }
             }
         });

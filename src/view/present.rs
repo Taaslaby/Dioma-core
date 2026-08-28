@@ -26,7 +26,7 @@
 use crate::view::snapshot::{CritterView, RoomView, SimView};
 use dioma_engine::env::{Substance, SUBSTANCES};
 use dioma_render::tilemap::LAYER_TILE;
-use dioma_render::{atlas, Sprite, SpriteAtlas, TilesetUv};
+use dioma_render::{atlas, Sprite, SpriteAtlas, SpriteFx, TilesetUv};
 
 /// Радиус тела существа в мировых единицах (диаметр ~1.2). Пикинг использует
 /// тот же радиус (+допуск) — см. [`crate::view::input`].
@@ -205,11 +205,16 @@ impl Presenter {
         }
     }
 
-    /// Существо: тень снизу, тело-круг с тинтом по состоянию, лицо поверх.
+    /// Существо: тень, тело (окрас из генома × состояние), лицо поверх.
+    ///
+    /// Живые сигналы движка → визуал:
+    /// * мёртвое — серый + `Grayscale`, без пульса;
+    /// * спит — приглушённый, медленный пульс, лицо «усталое» (глаза закрыты);
+    /// * дофамин + активность мозга — золотое свечение (`Glow`): съел —
+    ///   вспыхнул, думать — слегка светится;
+    /// * кортизол > 0.7 — болезненная дрожь (`Wobble`).
     fn build_critter(&self, c: &CritterView, scene: &mut DrawScene) {
         let pos = [c.pos.x, c.pos.y];
-        // «Фаза жизни» на этапе 1 — константа: живое 1.0, мёртвое 0.6
-        // (съёжилось). Возраст/сон придут на этапе 2.
         let life = if c.alive { 1.0 } else { 0.6 };
         let diameter = BODY_RADIUS * 2.0 * (0.8 + 0.4 * life);
         let depth = -c.pos.y;
@@ -224,25 +229,60 @@ impl Presenter {
         sh.layer = LAYER_SHADOW;
         scene.shadows.push(sh);
 
-        // Тело: тинт по состоянию (таблица в доке модуля).
-        let (tint, pulse): ([f32; 4], bool) = if !c.alive {
-            ([0.52, 0.52, 0.56, 1.0], false) // серый, без пульса
-        } else if c.wants_food {
-            ([0.86, 0.82, 0.42, 1.0], true) // теплеет
+        // Тело: окрас из ДНК как база (0.35..0.95 — без пересвета), сверху —
+        // модификаторы состояния. Мёртвое — серое и обесцвеченное.
+        let coat = [
+            0.35 + c.coat[0] * 0.6,
+            0.35 + c.coat[1] * 0.6,
+            0.35 + c.coat[2] * 0.6,
+        ];
+        let mut tint = if c.alive {
+            let warm = c.wants_food;
+            [
+                coat[0] + if warm { 0.25 } else { 0.0 },
+                coat[1] + if warm { -0.05 } else { 0.05 },
+                coat[2] - if warm { 0.05 } else { 0.0 },
+                1.0,
+            ]
         } else {
-            ([0.42, 0.92, 0.52, 1.0], true) // зелёный
+            [0.52, 0.52, 0.56, 1.0]
         };
+        if c.sleeping {
+            // Спит: притушить и дышать медленно.
+            for t in &mut tint[..3] {
+                *t *= 0.7;
+            }
+        }
         let mut body = Sprite::new(pos, [diameter, diameter], self.body.uv).with_tint(tint);
         body.layer = LAYER_BODY;
         body.depth = depth;
-        if pulse {
-            body.pulse = [0.96, 1.04, 2.2, c.pos.x]; // фаза — от позиции (детерминированно)
+        if c.sleeping {
+            body.pulse = [0.99, 1.01, 0.8, c.pos.x]; // медленное «дыхание» сна
+        } else if c.alive {
+            body.pulse = [0.96, 1.04, 2.2, c.pos.x]; // фаза — от позиции
+        }
+        // Эффекты: мёртвое — серость; живое — свечение радости/мысли, дрожь стресса.
+        if !c.alive {
+            body.fx = SpriteFx::Grayscale { amount: 1.0 };
+        } else {
+            let glow = (c.dopamine * 0.85 + c.spike_rate * 0.3).clamp(0.0, 1.0);
+            if glow > 0.12 {
+                body.fx = SpriteFx::Glow {
+                    radius: diameter * 0.9,
+                    intensity: glow,
+                    color: [1.0, 0.85, 0.4, 1.0],
+                };
+            } else if c.cortisol > 0.7 {
+                body.fx = SpriteFx::Wobble { amplitude: 1.2, frequency: 0.35, speed: 9.0 };
+            }
         }
         scene.bodies.push(body);
 
-        // Лицо: приоритет мёртвое > голод > усталость > спокойное.
+        // Лицо: мёртвое > спит (глаза закрыты) > голод > усталость > спокойное.
         let face = if !c.alive {
             3
+        } else if c.sleeping {
+            2
         } else if c.wants_food {
             1
         } else if c.fatigue > 0.7 {
