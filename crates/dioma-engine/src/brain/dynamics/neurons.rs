@@ -999,7 +999,7 @@ impl Brain {
         if self.tick_spike_count.len() != n || self.tick_trace_pre_hist.len() != n * spt {
             return;
         }
-        let (dt, tau_pre, tau_post, tau_e, a_ltp, a_ltd) = {
+        let (dt, _tau_pre, _tau_post, tau_e, a_ltp, a_ltd) = {
             let c = self.plast.stdp_config();
             (c.dt, c.tau_pre, c.tau_post, c.tau_e, c.a_ltp, c.a_ltd)
         };

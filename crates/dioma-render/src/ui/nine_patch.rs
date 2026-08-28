@@ -66,7 +66,7 @@ pub fn panel_rgba(border: [u8; 4], fill: [u8; 4]) -> (u32, u32, Vec<u8>) {
 /// растягиваются по обеим осям (прогресс-бары) — искажений не бывает.
 pub fn rect_rgba() -> (u32, u32, Vec<u8>) {
     let s = 8u32;
-    let mut px = vec![255u8; (s * s * 4) as usize];
+    let px = vec![255u8; (s * s * 4) as usize];
     // Край 1px оставляем мягким, чтобы без рамки не было лесенки при растяжении.
     (s, s, px)
 }

@@ -13,7 +13,7 @@
 use super::{Arena, Critter};
 use crate::biology::metabolism::chem;
 use crate::creature::genome::instinct_pair_key;
-use crate::creature::CreatureGenome;
+use crate::creature::{Creature, Genome};
 use crate::env::map::WorldMap;
 use crate::env::math::Vec2;
 use crate::env::AgentId;
@@ -398,8 +398,8 @@ impl Evolution {
         for i in 0..n {
             for j in (i + 1)..n {
                 sum += genome_distance(
-                    &critters[i].creature.genome,
-                    &critters[j].creature.genome,
+                    &critters[i].creature,
+                    &critters[j].creature,
                 );
                 pairs += 1;
             }
@@ -408,24 +408,29 @@ impl Evolution {
     }
 }
 
-/// Нормализованное расстояние двух геномов [0..1] — доля различий по трём
-/// классам генов, усреднённая (документированная формула метрики
+/// Нормализованное расстояние двух геномов [0..1] — доля различий по
+/// ЧЕТЫРЁМ классам генов, усреднённая (документированная формула метрики
 /// `population_diversity`):
 ///
 /// ```text
-/// d = ⅓·(доля различающихся параметров Steering)
-///   + ⅓·(доля различающихся параметров rule-генов; слоты выровнены по
+/// d = ¼·(доля различающихся параметров Steering)
+///   + ¼·(доля различающихся параметров rule-генов; слоты выровнены по
 ///        индексу, отсутствующий ген длинного родителя = все параметры
 ///        «разные»)
-///   + ⅓·(1 − Жаккар множеств пар (pre_region, post_region) инстинктов;
+///   + ¼·(1 − Жаккар множеств пар (pre_region, post_region) инстинктов;
 ///        оба пусты → 0)
+///   + ¼·(доля различающихся классов НОВЫХ генов ДНК — расширяемый геном
+///        (creature::dna): Coat/Eye/Memory/Raw; класс различен, если
+///        различается хоть один параметр; отсутствие класса у одного из
+///        родителей = все параметры «разные»)
 /// ```
 ///
 /// 0 = клоны (одинаковые геномы), 1 = всё различно.
-fn genome_distance(a: &CreatureGenome, b: &CreatureGenome) -> f32 {
+fn genome_distance(a: &Creature, b: &Creature) -> f32 {
+    let (ga, gb) = (&a.genome, &b.genome);
     // Steering: 8 f64-параметров + grow_steps (usize) = 9 параметров.
     let steering_total = 9usize;
-    let (s, t) = (&a.steering, &b.steering);
+    let (s, t) = (&ga.steering, &gb.steering);
     let steering_diff = [
         s.noise_weight != t.noise_weight,
         s.gradient_weight != t.gradient_weight,
@@ -444,10 +449,10 @@ fn genome_distance(a: &CreatureGenome, b: &CreatureGenome) -> f32 {
 
     // Rule-гены: слот по индексу; параметр = шаблон + 8 значений p.
     let rule_params = 9usize;
-    let rule_slots = a.rule_genes.len().max(b.rule_genes.len());
+    let rule_slots = ga.rule_genes.len().max(gb.rule_genes.len());
     let mut rule_diff = 0usize;
     for i in 0..rule_slots {
-        match (a.rule_genes.get(i), b.rule_genes.get(i)) {
+        match (ga.rule_genes.get(i), gb.rule_genes.get(i)) {
             (Some(x), Some(y)) => {
                 rule_diff += (x.template != y.template) as usize;
                 rule_diff += x.p.iter().zip(&y.p).filter(|(p, q)| p != q).count();
@@ -464,8 +469,8 @@ fn genome_distance(a: &CreatureGenome, b: &CreatureGenome) -> f32 {
     // Инстинкты: 1 − Жаккар множеств пар (pre, post). Пустые наборы
     // идентичны по построению — расстояние 0.
     let instinct_dissim = {
-        let ka: Vec<(usize, usize)> = a.instincts.iter().map(instinct_pair_key).collect();
-        let kb: Vec<(usize, usize)> = b.instincts.iter().map(instinct_pair_key).collect();
+        let ka: Vec<(usize, usize)> = ga.instincts.iter().map(instinct_pair_key).collect();
+        let kb: Vec<(usize, usize)> = gb.instincts.iter().map(instinct_pair_key).collect();
         let inter = ka.iter().filter(|k| kb.contains(k)).count();
         let union = ka.len() + kb.len() - inter;
         if union == 0 {
@@ -475,7 +480,33 @@ fn genome_distance(a: &CreatureGenome, b: &CreatureGenome) -> f32 {
         }
     };
 
-    (steering_frac + rules_frac + instinct_dissim) / 3.0
+    // Новые классы расширяемого генома (Coat/Eye/Memory/Raw): по-классовое
+    // сравнение, доля различающихся классов из 4 (см. доку функции).
+    let dna_diff = [
+        a.dna.coat() != b.dna.coat(),
+        a.dna.eye() != b.dna.eye(),
+        a.dna.memory() != b.dna.memory(),
+        raw_lists_differ(&a.dna, &b.dna),
+    ]
+    .iter()
+    .filter(|&&d| d)
+    .count();
+    let dna_frac = dna_diff as f32 / 4.0;
+
+    (steering_frac + rules_frac + instinct_dissim + dna_frac) / 4.0
+}
+
+/// Списки Raw-генов (data-векторы в порядке появления в геноме) различаются.
+fn raw_lists_differ(a: &Genome, b: &Genome) -> bool {
+    let mut ia = a.raw_data();
+    let mut ib = b.raw_data();
+    loop {
+        match (ia.next(), ib.next()) {
+            (None, None) => return false,
+            (Some(x), Some(y)) if x == y => {}
+            _ => return true,
+        }
+    }
 }
 
 /// Детерминированный начальный курс из сида.

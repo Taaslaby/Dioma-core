@@ -26,15 +26,21 @@
 //! только по `\n`.
 
 pub mod layout;
+pub mod motion;
 pub mod nine_patch;
 pub mod text;
+pub mod theme;
+
+use std::time::Instant;
 
 use crate::scene::atlas::SpriteAtlas;
 use crate::scene::batch::SpriteBatch;
 use crate::scene::sprite::Sprite;
 pub use layout::{anchored_rect, Anchor, Rect};
+pub use motion::Motion;
 pub use nine_patch::{panel_rgba, rect_rgba, NinePatch, MARGIN as PATCH_MARGIN, PATCH_RADIUS, PATCH_SIZE};
 pub use text::{UiFont, BASE_PX};
+pub use theme::{Size, UiTheme};
 
 /// Вместимость UI-батча (спрайтов): панели + глифы с запасом.
 const UI_BATCH_CAPACITY: usize = 8192;
@@ -44,33 +50,11 @@ pub const LAYER_PANEL: f32 = 1000.0;
 pub const LAYER_WIDGET: f32 = 1001.0;
 /// (текст — внутри [`text::LAYER_TEXT`]).
 
-/// Отступ содержимого от края панели (px).
-const CONTENT_MARGIN: f32 = 12.0;
-/// Отступ панелей от края экрана (px) в [`UiFrame::panel`].
+/// Отступ панелей от края экрана (px) по умолчанию (тема может
+/// переопределить: `theme.screen_margin`).
 pub const SCREEN_MARGIN: f32 = 16.0;
-/// Высота кнопки (px).
-const BUTTON_H: f32 = 36.0;
-/// Высота прогресс-бара (px).
-const BAR_H: f32 = 14.0;
-/// Шаг вертикального стека содержимого (px).
-const ROW_GAP: f32 = 10.0;
-/// Базовый масштаб текста (от [`BASE_PX`]): глиф 16 px.
-const TEXT_SCALE: f32 = 0.5;
-
-/// Цвета каркаса (tint поверх процедурных текстур).
-mod colors {
-    /// Кнопка обычная / под курсором / нажатая (текстура светлая, tint темнит).
-    pub const BTN: [f32; 4] = [0.86, 0.88, 0.92, 1.0];
-    pub const BTN_HOVER: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-    pub const BTN_PRESSED: [f32; 4] = [0.70, 0.73, 0.80, 1.0];
-    /// Текст: тёплый белый.
-    pub const TEXT: [f32; 4] = [0.95, 0.96, 0.92, 1.0];
-    /// Текст на светлых виджетах (кнопка): тёмный.
-    pub const BTN_TEXT: [f32; 4] = [0.12, 0.14, 0.18, 1.0];
-    /// Бар: тёмная подложка, зелёная заливка.
-    pub const BAR_BG: [f32; 4] = [0.16, 0.17, 0.20, 1.0];
-    pub const BAR_FILL: [f32; 4] = [0.45, 0.85, 0.45, 1.0];
-}
+/// Длительность переходов hover/значений по умолчанию (как в gpui-component).
+pub const TRANSITION_MS: u64 = 160;
 
 /// Ввод UI за кадр (из winit-событий; экранная система координат, Y вниз).
 #[derive(Clone, Copy, Debug, Default)]
@@ -86,12 +70,14 @@ pub struct UiInput {
 }
 
 /// Результат взаимодействия с виджетом за кадр.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Response {
-    /// Курсор над виджетом в этом кадре.
+    /// Курсор над виджетом в этом кадре (у disabled — всегда false).
     pub hovered: bool,
     /// Клик завершён на виджете (нажатие и отпускание внутри).
     pub clicked: bool,
+    /// Виджет недоступен: интерактив заглушён.
+    pub disabled: bool,
 }
 
 /// Долгоживущие ресурсы UI: шрифт, процедурные регионы, батч и состояние
@@ -112,6 +98,14 @@ pub struct UiSystem {
     /// id виджета, на котором началось нажатие (клик = нажать и отпустить
     /// на одном виджете).
     pressed: Option<u64>,
+    /// Тема (роли цветов + отступы); переключается `set_theme`.
+    pub(crate) theme: UiTheme,
+    /// Keyed-анимации (transition/spring) между кадрами.
+    pub(crate) motion: Motion,
+    /// Момент начала текущего кадра (для анимаций).
+    pub(crate) now: Instant,
+    /// Глобальное отключение анимаций (доступность/скриншоты).
+    pub reduced_motion: bool,
 }
 
 impl UiSystem {
@@ -150,6 +144,10 @@ impl UiSystem {
             batch: SpriteBatch::new(device, UI_BATCH_CAPACITY),
             cursor: [0.0, 0.0],
             pressed: None,
+            theme: UiTheme::dark(),
+            motion: Motion::new(),
+            now: Instant::now(),
+            reduced_motion: false,
         }
     }
 
@@ -157,6 +155,18 @@ impl UiSystem {
     /// [`UiFrame`], например в тестах).
     pub fn batch(&self) -> &SpriteBatch {
         &self.batch
+    }
+
+    /// Сменить тему (роли цветов, отступы). Вступает в силу со следующего
+    /// кадра; анимации не сбрасываются.
+    pub fn set_theme(&mut self, theme: UiTheme) {
+        self.theme = theme;
+    }
+
+    /// Доступ к текущей теме (например, чтобы рисовать своим виджетом в
+    /// цветах темы).
+    pub fn theme(&self) -> &UiTheme {
+        &self.theme
     }
 
     /// Начинает кадр UI. `atlas` и `queue` нужны для ленивой растеризации
@@ -168,6 +178,9 @@ impl UiSystem {
         input: UiInput,
         viewport: [f32; 2],
     ) -> UiFrame<'a> {
+        self.now = Instant::now();
+        let theme = self.theme.clone();
+        self.now = Instant::now();
         self.cursor = input.cursor;
         // Клик «нажать-отпустить на виджете»: pressed живёт до кадра ПОСЛЕ
         // отпускания (в кадре отпускания just_released ещё обрабатывается).
@@ -188,6 +201,7 @@ impl UiSystem {
             input,
             sprites: Vec::with_capacity(256),
             next_id: 0,
+            theme,
         }
     }
 }
@@ -201,17 +215,19 @@ pub struct UiFrame<'a> {
     input: UiInput,
     sprites: Vec<Sprite>,
     next_id: u64,
+    /// Тема кадра (снимок ролей на момент begin).
+    theme: UiTheme,
 }
 
 impl<'a> UiFrame<'a> {
     /// Панель, приколоченная якорем `anchor` к краю экрана; содержимое —
     /// вертикальный стек внутри замыкания ([`Panel`]).
     pub fn panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
-        let rect = anchored_rect(anchor, size, self.viewport, SCREEN_MARGIN);
-        let panel_sprites = self.ui.patch.sprites(rect, self.viewport, [1.0; 4], LAYER_PANEL);
+        let rect = anchored_rect(anchor, size, self.viewport, self.theme.screen_margin);
+        let panel_sprites = self.ui.patch.sprites(rect, self.viewport, self.theme.panel, LAYER_PANEL);
         self.sprites.extend(panel_sprites);
 
-        let mut cursor_y = rect.y + CONTENT_MARGIN;
+        let mut cursor_y = rect.y + self.theme.content_margin;
         let mut panel = Panel {
             ui: &mut *self.ui,
             atlas: &mut *self.atlas,
@@ -219,9 +235,10 @@ impl<'a> UiFrame<'a> {
             sprites: &mut self.sprites,
             viewport: self.viewport,
             input: self.input,
-            content: rect.inner(CONTENT_MARGIN),
-            cursor_y: &mut cursor_y,
+            theme: &self.theme,
             next_id: &mut self.next_id,
+            content: rect.inner(self.theme.content_margin),
+            cursor_y: &mut cursor_y,
         };
         content(&mut panel);
     }
@@ -251,6 +268,44 @@ impl<'a> UiFrame<'a> {
     }
 }
 
+/// Спецификация кнопки (builder): `p.button(Button::new("X").small().disabled())`
+/// или просто `p.button("X")`.
+pub struct Button<'l> {
+    label: &'l str,
+    size: Size,
+    disabled: bool,
+}
+
+impl<'l> Button<'l> {
+    pub fn new(label: &'l str) -> Self {
+        Self { label, size: Size::Medium, disabled: false }
+    }
+
+    /// Компактная кнопка (см. [`Size`]).
+    pub fn small(mut self) -> Self {
+        self.size = Size::Small;
+        self
+    }
+
+    /// Крупная кнопка (меню/диалоги).
+    pub fn large(mut self) -> Self {
+        self.size = Size::Large;
+        self
+    }
+
+    /// Недоступная кнопка: приглушена, hover/клик игнорируются.
+    pub fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+}
+
+impl<'l> From<&'l str> for Button<'l> {
+    fn from(label: &'l str) -> Self {
+        Button::new(label)
+    }
+}
+
 /// Вертикальный стек содержимого панели. Виджеты добавляются сверху вниз;
 /// `cursor_y` — верх следующей строки.
 pub struct Panel<'a> {
@@ -260,19 +315,22 @@ pub struct Panel<'a> {
     sprites: &'a mut Vec<Sprite>,
     viewport: [f32; 2],
     input: UiInput,
+    theme: &'a UiTheme,
+    next_id: &'a mut u64,
     /// Область содержимого (панель минус поля).
     content: Rect,
     /// Верх следующей строки (экранные px).
     cursor_y: &'a mut f32,
-    next_id: &'a mut u64,
 }
 
 impl<'a> Panel<'a> {
     /// Уникальный id виджета: hash подписи + порядковый номер кадра.
+    ///
+    /// Контракт (заимствовано из gpui-component, «Keyed element state»):
+    /// подпись — часть интерфейса. Переименование сбрасывает анимации
+    /// виджета; один id никогда не используется для разных каналов.
     fn next_id(&mut self, label: &str) -> u64 {
         *self.next_id += 1;
-        // FNV-1a по подписи, чтобы id не «съезжал» при изменении числа
-        // виджетов выше по стеку (в пределах одного текста подписи).
         let mut h: u64 = 0xcbf29ce484222325 ^ (*self.next_id << 32);
         for b in label.bytes() {
             h ^= b as u64;
@@ -281,99 +339,145 @@ impl<'a> Panel<'a> {
         h
     }
 
+    /// Плавно едет к `target` по каналу `channel` (см. [`motion`]).
+    fn animate(&mut self, id: u64, channel: u8, target: f32) -> f32 {
+        self.ui.motion.animate(
+            id,
+            channel,
+            target,
+            std::time::Duration::from_millis(TRANSITION_MS),
+            self.ui.now,
+            self.ui.reduced_motion,
+        )
+    }
+
     /// Строка текста слева, во всю ширину содержимого.
     pub fn label(&mut self, text: &str) {
-        let h = self.ui.font.line_height(TEXT_SCALE);
+        self.label_sized(text, self.theme.text, Size::Medium);
+    }
+
+    /// Приглушённая строка (второстепенное).
+    pub fn label_muted(&mut self, text: &str) {
+        self.label_sized(text, self.theme.text_muted, Size::Small);
+    }
+
+    /// Строка текста с явным цветом/размером (для нестандартных случаев).
+    pub fn label_sized(&mut self, text: &str, color: [f32; 4], size: Size) {
+        let scale = size.text_scale();
+        let h = self.ui.font.line_height(scale);
         self.ui.font.push_text(
             self.sprites,
             self.queue,
             self.atlas,
             text,
             [self.content.x, *self.cursor_y],
-            TEXT_SCALE,
-            colors::TEXT,
+            scale,
+            color,
             self.viewport,
         );
-        *self.cursor_y += h + ROW_GAP;
+        *self.cursor_y += h + self.theme.row_gap;
     }
 
-    /// Кнопка во всю ширину содержимого с текстом по центру.
-    pub fn button(&mut self, label: &str) -> Response {
+    /// Кнопка во всю ширину содержимого. Принимает `&str` или [`Button`].
+    pub fn button(&mut self, spec: impl Into<Button<'a>>) -> Response {
+        let Button { label, size, disabled } = spec.into();
         let id = self.next_id(label);
-        let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, BUTTON_H);
-        let hovered = rect.contains(self.ui.cursor);
+        let h = size.button_h();
+        // Если кнопка недоступна, она не участвует в hit-test вовсе
+        // (заимствовано из gpui-component: «Disabled interaction appearance»).
+        let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, h);
+        let hovered = !disabled && rect.contains(self.ui.cursor);
         if self.input.just_pressed && hovered {
             self.ui.pressed = Some(id);
         }
         let clicked = hovered && self.input.just_released && self.ui.pressed == Some(id);
 
-        // Кнопка — свой nine-patch: углы не растягиваются ни при какой
-        // ширине/высоте. Состояния — тинтом (норма 0.86 → hover 1.0 →
-        // нажатая 0.7): умножение может только темнить, поэтому база светлее.
-        let tint = if hovered && self.input.down {
-            colors::BTN_PRESSED
-        } else if hovered {
-            colors::BTN_HOVER
+        // Подсветка hover плавно едет к цели (keyed transition); у disabled
+        // она всегда 0 — disabled глушит hover/active визуально.
+        let hover_target = if hovered { 1.0 } else { 0.0 };
+        let hover = self.animate(id, motion::channels::HOVER, hover_target);
+        let tint = lerp_tint(self.theme.button, self.theme.button_hover, hover);
+        let tint = if disabled {
+            self.theme.button_disabled
+        } else if self.ui.pressed == Some(id) && self.input.down {
+            self.theme.button_pressed
         } else {
-            colors::BTN
+            tint
         };
+
         let cells = self.ui.button_patch.sprites(rect, self.viewport, tint, LAYER_WIDGET);
         self.sprites.extend(cells);
 
         // Подпись по центру кнопки.
-        let tw = self
-            .ui
-            .font
-            .text_width(self.queue, self.atlas, label, TEXT_SCALE);
-        let th = self.ui.font.line_height(TEXT_SCALE);
+        let scale = size.text_scale();
+        let tw = self.ui.font.text_width(self.queue, self.atlas, label, scale);
+        let th = self.ui.font.line_height(scale);
+        let text_color = if disabled {
+            self.theme.button_text_faded()
+        } else {
+            self.theme.button_text
+        };
         self.ui.font.push_text(
             self.sprites,
             self.queue,
             self.atlas,
             label,
             [rect.x + (rect.w - tw) * 0.5, rect.y + (rect.h - th) * 0.5],
-            TEXT_SCALE,
-            colors::BTN_TEXT,
+            scale,
+            text_color,
             self.viewport,
         );
 
-        *self.cursor_y += BUTTON_H + ROW_GAP;
-        Response { hovered, clicked }
+        *self.cursor_y += h + self.theme.row_gap;
+        Response { hovered, clicked, disabled }
     }
 
     /// Подпись + горизонтальный бар `0..=1` во всю ширину содержимого.
+    ///
+    /// Отображаемое значение плавно догоняет фактическое (keyed transition
+    /// по каналу FILL) — резкие скачки данных не дёргают интерфейс.
     pub fn progress_bar(&mut self, caption: &str, progress: f32) {
+        self.progress_bar_sized(caption, progress, Size::Medium);
+    }
+
+    /// Бар с явным размером.
+    pub fn progress_bar_sized(&mut self, caption: &str, progress: f32, size: Size) {
         let progress = progress.clamp(0.0, 1.0);
+        let id = self.next_id(caption);
+
         // Подпись мелкая над баром.
-        let cap_h = self.ui.font.line_height(0.375);
+        let cap_scale = size.text_scale() * 0.75;
+        let cap_h = self.ui.font.line_height(cap_scale);
         self.ui.font.push_text(
             self.sprites,
             self.queue,
             self.atlas,
             caption,
             [self.content.x, *self.cursor_y],
-            0.375,
-            colors::TEXT,
+            cap_scale,
+            self.theme.text_muted,
             self.viewport,
         );
         *self.cursor_y += cap_h + 4.0;
 
-        let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, BAR_H);
+        let bar_h = size.bar_h();
+        let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, bar_h);
         let mut bg = Sprite::new(rect.world_center(self.viewport), [rect.w, rect.h], self.ui.rect_uv);
-        bg.tint = colors::BAR_BG;
+        bg.tint = self.theme.bar_bg;
         bg.layer = LAYER_WIDGET;
         self.sprites.push(bg);
 
-        if progress > 0.0 {
-            let w = (rect.w - 2.0) * progress;
+        let shown = self.animate(id, motion::channels::FILL, progress);
+        if shown > 0.0 {
+            let w = (rect.w - 2.0) * shown;
             let fill = Rect::new(rect.x + 1.0, rect.y + 1.0, w, rect.h - 2.0);
             let mut s = Sprite::new(fill.world_center(self.viewport), [fill.w, fill.h], self.ui.rect_uv);
-            s.tint = colors::BAR_FILL;
+            s.tint = self.theme.bar_fill;
             s.layer = LAYER_WIDGET;
             self.sprites.push(s);
         }
 
-        *self.cursor_y += BAR_H + ROW_GAP;
+        *self.cursor_y += bar_h + self.theme.row_gap;
     }
 
     /// Свободное место (px) в стеке.
@@ -385,4 +489,14 @@ impl<'a> Panel<'a> {
     pub fn content_rect(&self) -> Rect {
         self.content
     }
+}
+
+/// Линейная интерполяция tint'а (для плавной подсветки hover).
+fn lerp_tint(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
 }

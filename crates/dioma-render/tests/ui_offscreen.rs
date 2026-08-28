@@ -36,7 +36,7 @@ fn setup() -> Option<UiGpu> {
 
 /// Один кадр: панель (метка + кнопка + бар); возвращает ответ кнопки.
 fn frame(g: &mut UiGpu, input: UiInput) -> dioma_render::ui::Response {
-    let mut btn = dioma_render::ui::Response::default();
+    let mut btn = dioma_render::ui::Response { hovered: false, clicked: false, disabled: false };
     let mut f = g.ui.begin(&mut g.atlas, &g.gpu.queue, input, VP);
     f.panel(layout::Anchor::TopLeft, [110.0, 126.0], |p| {
         p.label("Тест");

@@ -14,12 +14,14 @@ use crate::rng::XorShift;
 use crate::Grown;
 
 pub mod builder;
+pub mod dna;
 pub mod genome;
 pub mod memory;
 pub mod metrics;
 
 pub use builder::CreatureBuilder;
 pub use builder::BrainLayout;
+pub use dna::Genome;
 pub use genome::{CreatureGenome, MetabolismGene, Sex};
 pub use metrics::{BloodState, BrainStats, CreatureEvent, CreatureMetrics};
 
@@ -203,6 +205,13 @@ pub struct Creature {
     grown: Grown,
     /// Наследуемое: рост + инстинкты + гены метаболизма.
     pub genome: CreatureGenome,
+    /// Параллельный РАСШИРЯЕМЫЙ геном ([`dna::Genome`], см. dna.rs): зеркала
+    /// legacy-классов синхронизируются из `genome` при каждом размножении
+    /// (`Genome::sync_legacy`), новые классы-органеллы (Coat/Eye/Memory) и
+    /// Raw живут только здесь. Единственный носитель расцветки (рендер-транш);
+    /// мутация/кроссовер — машиной ДНК, ПОСЛЕ всех легаси-потреблений rng
+    /// (поведение игры бит-в-бит не меняется).
+    pub dna: Genome,
     bounds: Bounds,
     /// Переиспользуемые буферы мозга (без аллокаций на тик / подшаг).
     /// `ext` — внешний ток (сенсоры) на тик; `spike_hist` — пачка векторов
@@ -333,7 +342,17 @@ impl Creature {
         for w in grown.edges.iter_mut() {
             w.2 = (w.2 as f64 * (1.0 + rng.gauss() * INHERIT_WEIGHT_SIGMA)).max(0.1) as f32;
         }
-        Self::from_genome_grown(genome, child_seed, grown)
+        // Расширяемый геном: мутация машиной — ПОСЛЕ всех легаси-потреблений
+        // rng (выше), чтобы число и порядок draw'ов существующего кода не
+        // менялись (поведение бит-в-бит). Новые классы (Coat/Eye/Memory/Raw)
+        // эволюционируют свежими позициями сида потомка; зеркала legacy
+        // классов синхронизируются с мутированным легаси-геномом (единственный
+        // источник правды на переходный период).
+        let mut dna = self.dna.mutate(&mut rng);
+        dna.sync_legacy(&genome);
+        let mut child = Self::from_genome_grown(genome, child_seed, grown);
+        child.dna = dna;
+        child
     }
 
     /// Потомок ПАРЫ родителей (половое размножение): геном — кроссовер
@@ -365,7 +384,16 @@ impl Creature {
         for w in grown.edges.iter_mut() {
             w.2 = (w.2 as f64 * (1.0 + rng.gauss() * INHERIT_WEIGHT_SIGMA)).max(0.1) as f32;
         }
-        Self::from_genome_grown(genome, child_seed, grown)
+        // Расширяемый геном: кроссовер + мутация машиной — ПОСЛЕ всех
+        // легаси-потреблений rng (бит-в-бит поведение). Coat/Eye/Memory/Raw
+        // наследуются по правилам машины (по-канальный кроссовер расцветки
+        // и т.д.), зеркала legacy-классов синхронизируются с легаси-геномом.
+        let mut dna = self.dna.crossover(&other.dna, &mut rng);
+        dna = dna.mutate(&mut rng);
+        dna.sync_legacy(&genome);
+        let mut child = Self::from_genome_grown(genome, child_seed, grown);
+        child.dna = dna;
+        child
     }
 
     /// Проводка, с которой существо родилось (топология + базовые веса).
@@ -497,11 +525,17 @@ impl Creature {
             ml: brain.region_bounds(REGION_ML),
             mr: brain.region_bounds(REGION_MR),
         };
+        // Расширяемый геном: дефолтный полный набор классов (зеркала legacy
+        // + дефолтные органеллы). Потомки (`spawn_child*`) перезаписывают его
+        // результатом машины — здесь это базовый «дикий тип» для
+        // конструкторов `new*`/`from_genome`.
+        let dna = Genome::from_creature_genome(&genome);
         let mut c = Creature {
             brain,
             blood,
             seed,
             genome,
+            dna,
             grown,
             bounds,
             ext: vec![BASAL_EXT; brain_n],
@@ -923,6 +957,7 @@ fn assemble_gains(grown: &Grown) -> Vec<Vec<f32>> {
 mod tests {
     use super::*;
     use crate::brain::instincts::Instinct;
+    use crate::creature::dna::CoatGene;
 
     #[test]
     fn pacemaker_fires_rhythmically() {
@@ -1494,6 +1529,61 @@ mod tests {
         assert!(
             (total_weight(&child) - w1).abs() > 1.0,
             "потомок не копирует выученные веса родителя"
+        );
+    }
+
+    /// Расширяемый геном наследуется: потомок получает расцветку родителя
+    /// (мутация машины дрейфует каналы, не сбрасывая к дефолту), а зеркала
+    /// legacy-классов остаются в синхроне с легаси-геномом (инвариант
+    /// параллельного пути).
+    #[test]
+    fn spawn_child_carries_coat_gene() {
+        let mut parent = Creature::new(7);
+        parent.dna.set_coat(CoatGene::new(0.9, 0.4, 0.1));
+        let child = parent.spawn_child(99);
+        let coat = child.dna.coat().expect("потомок несёт ген расцветки");
+        assert!(
+            (coat.r - 0.9).abs() < 0.15
+                && (coat.g - 0.4).abs() < 0.15
+                && (coat.b - 0.1).abs() < 0.15,
+            "расцветка наследуется с мягким дрейфом: {coat:?}"
+        );
+        assert!(
+            coat != CoatGene::default(),
+            "потомок не сбрасывается к дефолту (белый): {coat:?}"
+        );
+        // Инвариант зеркал: dna-адаптер восстанавливает легаси-геном.
+        let mirrored = child.dna.to_creature_genome(0);
+        assert_eq!(mirrored.steering, child.genome.steering);
+        assert_eq!(mirrored.rule_genes, child.genome.rule_genes);
+        assert_eq!(mirrored.instincts, child.genome.instincts);
+        assert_eq!(mirrored.metabolism, child.genome.metabolism);
+    }
+
+    /// Потомок ПАРЫ: по-канальный кроссовер расцветки — ребёнок несёт каналы
+    /// обоих родителей (+ мутационный дрейф), зеркала синхронны.
+    #[test]
+    fn spawn_child_pair_mixes_coat() {
+        let mut a = Creature::new(1);
+        a.dna.set_coat(CoatGene::new(0.9, 0.1, 0.9));
+        let mut b = Creature::new(2);
+        b.dna.set_coat(CoatGene::new(0.1, 0.9, 0.1));
+        let child = a.spawn_child_pair(&b, 42);
+        let coat = child.dna.coat().expect("потомок пары несёт расцветку");
+        let from_a = (coat.r - 0.9).abs() < 0.2
+            || (coat.g - 0.1).abs() < 0.2
+            || (coat.b - 0.9).abs() < 0.2;
+        let from_b = (coat.r - 0.1).abs() < 0.2
+            || (coat.g - 0.9).abs() < 0.2
+            || (coat.b - 0.1).abs() < 0.2;
+        assert!(
+            from_a && from_b,
+            "потомок пары содержит каналы обоих родителей: {coat:?}"
+        );
+        assert_eq!(
+            child.dna.to_creature_genome(0).steering,
+            child.genome.steering,
+            "зеркала legacy-классов синхронны после кроссовера"
         );
     }
 
