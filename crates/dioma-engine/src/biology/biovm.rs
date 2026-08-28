@@ -5,7 +5,7 @@
 //! Existing TNMT opcodes remain the execution backend; this module gives the
 //! generic subset a stable biological vocabulary.
 
-use super::vm::Opcode;
+use crate::logic::vm::Opcode;
 
 /// Errors raised while compiling a biological program.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -454,7 +454,7 @@ impl BioProgram {
         assert!(states.len() >= self.state_count * n_cells);
         assert!(params.len() >= self.parameter_count * n_cells);
         unsafe {
-            super::vm::execute(
+            crate::logic::vm::execute(
                 states.as_mut_ptr(),
                 params.as_ptr(),
                 n_cells,

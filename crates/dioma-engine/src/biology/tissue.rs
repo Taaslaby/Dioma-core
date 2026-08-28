@@ -1,7 +1,7 @@
 //! Local tissue chemistry between cell secretion and systemic blood.
 
-use crate::body::metabolism::Blood;
-use crate::engine::biovm::{BioEvent, BioEventKind, SubstanceId};
+use crate::biology::metabolism::Blood;
+use crate::biology::biovm::{BioEvent, BioEventKind, SubstanceId};
 
 /// Canonical mapping from neutral BioVM substance ids to Blood channels.
 ///
@@ -193,7 +193,7 @@ mod tests {
 
     fn cortisol_map() -> SubstanceMap {
         let mut map = SubstanceMap::new(2);
-        map.bind(SubstanceId(0), crate::body::metabolism::chem::CORTISOL);
+        map.bind(SubstanceId(0), crate::biology::metabolism::chem::CORTISOL);
         map
     }
 
@@ -203,12 +203,12 @@ mod tests {
         let mut tissue = TissueChemistry::new(1, 2.0, 0.25);
         tissue.concentration[0] = 4.0;
         let mut blood = Blood::creature(true);
-        blood.conc[crate::body::metabolism::chem::CORTISOL] = 0.0;
+        blood.conc[crate::biology::metabolism::chem::CORTISOL] = 0.0;
         let before = tissue.concentration(substance) * 2.0;
 
         let moved = tissue.transport_to_blood(&mut blood, 4.0, 1.0, &cortisol_map());
         let after = tissue.concentration(substance) * 2.0
-            + blood.conc[crate::body::metabolism::chem::CORTISOL] * 4.0;
+            + blood.conc[crate::biology::metabolism::chem::CORTISOL] * 4.0;
 
         assert!((moved - 2.0).abs() < 1e-6);
         assert!((before - after).abs() < 1e-6);
@@ -219,7 +219,7 @@ mod tests {
         let mut tissue = TissueChemistry::new(1, 1.0, 1.0);
         tissue.concentration[0] = 10.0;
         let mut blood = Blood::creature(true);
-        blood.conc[crate::body::metabolism::chem::CORTISOL] = 255.0;
+        blood.conc[crate::biology::metabolism::chem::CORTISOL] = 255.0;
 
         let moved = tissue.transport_to_blood(&mut blood, 1.0, 1.0, &cortisol_map());
 
@@ -231,13 +231,13 @@ mod tests {
     fn exchange_replenishes_tissue_from_blood() {
         let mut tissue = TissueChemistry::new(1, 1.0, 0.5);
         let mut blood = Blood::creature(true);
-        blood.conc[crate::body::metabolism::chem::CORTISOL] = 4.0;
+        blood.conc[crate::biology::metabolism::chem::CORTISOL] = 4.0;
 
         let moved = tissue.step_exchange(&mut blood, 2.0, 1.0, &cortisol_map());
 
         assert!((moved - 2.0).abs() < 1e-6);
         assert!((tissue.concentration(SubstanceId(0)) - 2.0).abs() < 1e-6);
-        assert!((blood.conc[crate::body::metabolism::chem::CORTISOL] - 3.0).abs() < 1e-6);
+        assert!((blood.conc[crate::biology::metabolism::chem::CORTISOL] - 3.0).abs() < 1e-6);
     }
 
     #[test]

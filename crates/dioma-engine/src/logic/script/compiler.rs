@@ -9,9 +9,9 @@
 //! `wait <тики>`,
 //! `stop`. Переменные: локальные `va0..va99`, глобальные мира `vg0..vg99`.
 
-use crate::script::lexer::{lex, Tok};
-use crate::script::registry::CommandSet;
-use crate::script::value::Value;
+use crate::logic::script::lexer::{lex, Tok};
+use crate::logic::script::registry::CommandSet;
+use crate::logic::script::value::Value;
 
 /// Область переменных.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -256,7 +256,7 @@ fn parse_var(name: &str) -> Option<(Scope, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::script::registry::CommandSet;
+    use crate::logic::script::registry::CommandSet;
 
     #[test]
     fn vars() {

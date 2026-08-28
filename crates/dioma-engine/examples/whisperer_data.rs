@@ -45,7 +45,7 @@
 //! датасет теряет весь eat-канал и мотивационную динамику. Цикл возвращает
 //! охоту: eat-события и драйв реально присутствуют в записи (см. `main`).
 
-use dioma_engine::body::metabolism::chem;
+use dioma_engine::biology::metabolism::chem;
 use dioma_engine::env::map::WorldMap;
 use dioma_engine::env::{Substance, SUBSTANCES};
 use dioma_engine::env::Vec2;

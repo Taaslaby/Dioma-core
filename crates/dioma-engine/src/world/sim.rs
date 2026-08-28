@@ -17,7 +17,7 @@ use crate::env::map::WorldMap;
 use crate::env::math::Vec2;
 use crate::env::{AgentId, Tick};
 use crate::rng::XorShift;
-use crate::script::{CommandDef, CommandSet, Ctx, Flow, GVars, Machine, Services};
+use crate::logic::script::{CommandDef, CommandSet, Ctx, Flow, GVars, Machine, Services};
 use crate::world::agent::{slot, Agent, Cls, Message, Script};
 use std::collections::HashMap;
 
@@ -86,7 +86,7 @@ impl World {
     /// Компилирует исходник и прикрепляет программу к слоту агента.
     /// Машина запускается заново для каждого нового события этого слота.
     pub fn attach_script(&mut self, id: AgentId, slot_idx: u8, src: &str) -> Result<(), String> {
-        let prog = crate::script::compile(src, &self.cmds)?;
+        let prog = crate::logic::script::compile(src, &self.cmds)?;
         let ag = self
             .inner
             .agents
@@ -305,7 +305,7 @@ impl World {
     /// Глобальная переменная скриптов `vgN` как целое (для тестов/отладки).
     pub fn gvar(&self, n: usize) -> i64 {
         match &self.gvars.0[n] {
-            crate::script::Value::Int(i) => *i,
+            crate::logic::script::Value::Int(i) => *i,
             _ => 0,
         }
     }
@@ -414,7 +414,7 @@ impl Services for WorldSvc<'_> {
 // ── команды движка (аналог хендлеров CAOS) ─────────────────────────────
 
 fn engine_commands() -> Vec<CommandDef> {
-    use crate::script::Value;
+    use crate::logic::script::Value;
     vec![
         // позиция цели: posx / posy
         CommandDef {

@@ -9,8 +9,8 @@
 //!
 //! Запуск: cargo run --release --example pythia_vm_bench
 // -------------------------------------------------------------------------
-use dioma::engine::pythia_vm::{compile_program, execute_cells};
-use dioma::engine::rules::{Op, Var};
+use dioma::brain::pythia_vm::{compile_program, execute_cells};
+use dioma::brain::rules::{Op, Var};
 
 /// Интегратор: Act = Act·leak + Inp·gain (без Fire — чистая арифметика).
 fn integrator_prog() -> Vec<Op> {

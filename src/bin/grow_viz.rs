@@ -2,12 +2,12 @@
 //! Filename:    src/bin/grow_viz.rs
 //! Class:       SemantikaEngine
 //! Purpose:     покадровый фильм роста мозга агента в прометеусе
-//! Description: тот же сетап, что engine::grow::grow() для agent_layout,
+//! Description: тот же сетап, что brain::grow::grow() для agent_layout,
 //!              но шагаем порциями и рисуем вид сверху (x-y):
 //!              сомы буквами региона, аксоны точками, конусы роста '@'.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use dioma_engine::engine::grow::{agent_layout, Steering};
+use dioma_engine::brain::grow::{agent_layout, Steering};
 use dioma_engine::rng::XorShift;
 use prometheus_grow::{
     ArtificialGradient, Bounds, CellType, ChemoAttraction, Grid, Secretor, Substance, World,

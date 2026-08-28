@@ -1,6 +1,6 @@
 //! # brain_viz — презентационный HTML-вьюер мозга агента
 //!
-//! Экспортирует визуальные данные выращенного мозга (`engine::viz`) в ОДИН
+//! Экспортирует визуальные данные выращенного мозга (`brain::viz`) в ОДИН
 //! самодостаточный HTML-файл: никаких внешних библиотек и сети, работает
 //! офлайн через `file://`. В файле всегда три вкладки:
 //!
@@ -17,15 +17,15 @@
 //! cargo run --release --example brain_viz -- --seed 42 --tab zones --out brain_zones.html
 //! ```
 //!
-//! Данные: формат `dioma_brain_viz_v2` (см. `engine::viz`; v2 = v1 + `zones`).
+//! Данные: формат `dioma_brain_viz_v2` (см. `brain::viz`; v2 = v1 + `zones`).
 //! Позиции нейронов — РЕАЛЬНЫЕ финальные сомы из ростового мира
 //! (`grow::grow_with_positions`), активность — замер на настоящем LIF-мозге
 //! под смешанным стимульным паттерном. Концепт-вкладки: регионы не выращены,
 //! связей и активности нет (честно помечено в `meta.note`).
 
 use dioma_engine::creature::genome::CreatureGenome;
-use dioma_engine::engine::grow::{avoidance_layout, grow_with_positions};
-use dioma_engine::engine::viz::{
+use dioma_engine::brain::grow::{avoidance_layout, grow_with_positions};
+use dioma_engine::brain::viz::{
     avoidance_layout_future, brain_viz, brain_viz_stage_b, brain_viz_stage_c, BrainViz,
     AVOIDANCE_LABELS, FUTURE_EXTRA_LABELS,
 };
@@ -203,7 +203,7 @@ fn build_html(cur: &BrainViz, stage_b: &BrainViz, zones: &BrainViz, active_tab: 
     let mut s = String::with_capacity(768 * 1024);
     s.push_str(HEAD);
     s.push_str("\n<script>\n\"use strict\";\n");
-    s.push_str("// Данные: формат dioma_brain_viz_v2 (генерирует engine::viz::BrainViz::to_json)\n");
+    s.push_str("// Данные: формат dioma_brain_viz_v2 (генерирует brain::viz::BrainViz::to_json)\n");
     s.push_str("const BRAIN_CURRENT = ");
     s.push_str(&cur.to_json());
     s.push_str(";\n\nconst BRAIN_STAGEB = ");

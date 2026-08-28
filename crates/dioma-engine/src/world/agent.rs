@@ -10,7 +10,7 @@
 
 use crate::env::math::Vec2;
 use crate::env::AgentId;
-use crate::script::{Machine, Program};
+use crate::logic::script::{Machine, Program};
 
 /// scripts slots
 pub mod slot {

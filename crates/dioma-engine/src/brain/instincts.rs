@@ -8,7 +8,7 @@
 //!              pathway постоянным (снимок памяти обновляется).
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use crate::engine::neurons::Brain;
+use crate::brain::neurons::Brain;
 use crate::rng::XorShift;
 
 /// Один инстинкт генома.
@@ -78,8 +78,8 @@ impl Instinct {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::genome::Grown;
-    use crate::engine::neurons::{gains_from, PlasticityParams};
+    use crate::brain::genome::Grown;
+    use crate::brain::neurons::{gains_from, PlasticityParams};
 
     fn weak_grown() -> Grown {
         // Диагональ S→M слишком слаба для надёжной реакции (0.35),

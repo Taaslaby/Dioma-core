@@ -1,7 +1,9 @@
-//! # Neural engine
+//! # Brain — мозги
 //!
 //! Низкоуровневое ядро Dioma. Здесь нет карты, объектов и рендера: только
 //! нейроны, коннектом, генетические параметры и вычислительные правила.
+//! Биология клетки — в [`crate::biology`], общая регистровая ВМ — в
+//! [`crate::logic::vm`].
 //!
 //! Основной поток данных:
 //!
@@ -12,14 +14,11 @@
 //! - [`grow`] строит или восстанавливает проводку;
 //! - [`neurons`] исполняет динамику и пластичность;
 //! - [`baked`] грузит запечённые веса DBW1 и исполняет MLP/GRU-инференс;
-//! - [`behavior`] и [`biovm`] исполняют программы клеточного поведения;
 //! - [`graph`] меняет живую топологию по активности;
 //! - [`gpu`] содержит GPU-специфичный путь, сохраняя CPU fallback;
 //! - [`instincts`] и [`rules`] описывают наследуемые поведенческие правила.
 pub mod behavior;
 pub mod baked;
-pub mod biocell;
-pub mod biovm;
 pub mod genome;
 pub mod gpu;
 pub mod gpu_pool;
@@ -32,13 +31,7 @@ pub mod pythia_vm;
 pub mod regulatory;
 pub mod rules;
 pub mod viz;
-/// Низкоуровневый SIMD-executor: приватный, используйте biovm/pythia_vm.
-pub(crate) mod vm;
 
-pub use biocell::BioCellRuntime;
-pub use biovm::{BioEvent, BioEventKind, BioPopulation, BioProgram, SubstanceId};
-/// Запечённые веса DBW1 и инференс-раннеры (см. `docs/BRAIN_ROADMAP.md`,
-/// раздел «Пайплайн обучения»): Python учит → `.dbw` → игра исполняет.
 pub use baked::{BakedGru, BakedMlp, BakedTensors, DBW_MAGIC};
 /// Ключевые типы ядра на один импорт.
 pub use genome::Grown;

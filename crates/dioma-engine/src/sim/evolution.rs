@@ -11,7 +11,7 @@
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
 use super::{Arena, Critter};
-use crate::body::metabolism::chem;
+use crate::biology::metabolism::chem;
 use crate::creature::genome::instinct_pair_key;
 use crate::creature::CreatureGenome;
 use crate::env::map::WorldMap;
@@ -487,7 +487,7 @@ fn deterministic_heading(seed: u64, i: u64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::rules::RuleGene;
+    use crate::brain::rules::RuleGene;
     use crate::env::Substance;
 
     /// Конфиг, на котором эволюция стабильно улучшает охоту (проверен в

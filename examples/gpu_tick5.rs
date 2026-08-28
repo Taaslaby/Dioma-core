@@ -103,8 +103,8 @@ fn main() {
                 }
             }
         }
-        c.blood.loci[dioma::body::metabolism::locus::RATE_MOTOR] = (mlc + mrc) as f32;
-        g.blood.loci[dioma::body::metabolism::locus::RATE_MOTOR] = (mlg + mrg) as f32;
+        c.blood.loci[dioma::biology::metabolism::locus::RATE_MOTOR] = (mlc + mrc) as f32;
+        g.blood.loci[dioma::biology::metabolism::locus::RATE_MOTOR] = (mlg + mrg) as f32;
         c.blood.update();
         g.blood.update();
         // фаза 4: relief-награда (prev_wall=0.9 → relief=0.9)

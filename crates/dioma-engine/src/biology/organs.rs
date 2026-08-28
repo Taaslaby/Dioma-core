@@ -12,7 +12,7 @@
 // -------------------------------------------------------------------------
 use pillars_connectome::{BrainConfig, BrainRunner, ConnectomeData};
 
-use crate::engine::neurons::{Brain, PlasticityParams};
+use crate::brain::neurons::{Brain, PlasticityParams};
 use crate::Grown;
 
 /// Мировой тик (мс) — общий для всех органов.
@@ -75,7 +75,7 @@ impl OrganId {
 
     fn substeps(self) -> usize {
         match self {
-            OrganId::Cortex => crate::engine::neurons::BRAIN_STEPS_PER_TICK,
+            OrganId::Cortex => crate::brain::neurons::BRAIN_STEPS_PER_TICK,
             _ => SUBSTEPS_FINE,
         }
     }
@@ -168,11 +168,11 @@ impl OrganBrain {
             BrainConfig::haap_synaptic(DT_FINE, 12.0),
         )
         .expect("midbrain runner");
-        let cols = crate::body::physiology::pacemaker_mix_columns(
+        let cols = crate::biology::physiology::pacemaker_mix_columns(
             midbrain_n,
-            &crate::body::physiology::PhysioGenes::default(),
+            &crate::biology::physiology::PhysioGenes::default(),
         );
-        crate::body::physiology::apply_haap_columns(&mut midbrain, &cols);
+        crate::biology::physiology::apply_haap_columns(&mut midbrain, &cols);
 
         let cortex = Brain::new(&cortex_grown, cortex_gains, cortex_params);
         Self {

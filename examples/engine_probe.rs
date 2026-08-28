@@ -1,5 +1,5 @@
 //! Проба: объезд L-стены на движке SiMuse — ест ли существо вообще.
-use dioma::body::metabolism::{chem, Blood};
+use dioma::biology::metabolism::{chem, Blood};
 use dioma::env::map::WorldMap;
 use dioma::env::Vec2;
 use dioma::sim::Arena;

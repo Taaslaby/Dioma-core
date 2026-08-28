@@ -1,13 +1,13 @@
 //! Orchestration between programmable cells, tissue and blood.
 //!
-//! Canonical flow: `engine::biocell` runs cell programs and emits
+//! Canonical flow: `biology::biocell` runs cell programs and emits
 //! [`BioEvent`]s; this module owns how those events enter organism
 //! chemistry (tissue compartment, then blood).
 
-use crate::body::metabolism::{chem, Blood};
-use crate::body::tissue::{SubstanceMap, TissueChemistry};
-use crate::engine::biocell::BioCellRuntime;
-use crate::engine::biovm::{BioEvent, BioEventKind, SubstanceId};
+use crate::biology::metabolism::{chem, Blood};
+use crate::biology::tissue::{SubstanceMap, TissueChemistry};
+use crate::biology::biocell::BioCellRuntime;
+use crate::biology::biovm::{BioEvent, BioEventKind, SubstanceId};
 
 /// Starting substance bindings for creature physiology.
 ///

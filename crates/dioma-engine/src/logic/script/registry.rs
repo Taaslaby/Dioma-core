@@ -2,7 +2,7 @@
 //! мире: команды получают только `Ctx` с сырыми id и ссылку на `Services`,
 //! который реализует верхний слой (агенты или приложение).
 
-use crate::script::value::Value;
+use crate::logic::script::value::Value;
 use std::collections::HashMap;
 
 /// Что команда может попросить у мира. Реализуется хостом.

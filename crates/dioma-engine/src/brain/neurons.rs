@@ -13,8 +13,8 @@
 //! Все методы, связанные с backend, должны сохранять одинаковую игровую
 //! семантику на CPU и GPU.
 
-use crate::engine::gpu::GpuDynamics;
-use crate::engine::gpu::LearnGpu;
+use crate::brain::gpu::GpuDynamics;
+use crate::brain::gpu::LearnGpu;
 use crate::Grown;
 use pillars::api::learn::brain::{Brain as PlastBrain, StdpConfig};
 use pillars::math::fast_exp::fast_exp;
@@ -121,7 +121,7 @@ impl Default for PlasticityParams {
 
 /// Подключаемая динамика мембраны: CPU (SIMD-раннер pillars-connectome), GPU
 /// (wgpu-сеть pillars-wgpu, alpha-lif) или «пул» — общий GPU-раннер всей
-/// арены (см. `engine::gpu_pool::BrainPool`). Пластичность/гомеостаз/сон
+/// арены (см. `brain::gpu_pool::BrainPool`). Пластичность/гомеостаз/сон
 /// живут в `Brain` поверх — смена динамики не меняет семантику обучения.
 enum Dynamics {
     Cpu(BrainRunner),
@@ -325,7 +325,7 @@ impl Brain {
         grown: &Grown,
         gains: Vec<Vec<f32>>,
         params: PlasticityParams,
-        columns: &[[f32; crate::body::physiology::N_COLS]],
+        columns: &[[f32; crate::biology::physiology::N_COLS]],
     ) -> Self {
         Self::with_model(grown, gains, params, BrainModel::Haap, columns, false)
     }
@@ -335,12 +335,12 @@ impl Brain {
         gains: Vec<Vec<f32>>,
         params: PlasticityParams,
         model: BrainModel,
-        haap_columns: &[[f32; crate::body::physiology::N_COLS]],
+        haap_columns: &[[f32; crate::biology::physiology::N_COLS]],
         gpu: bool,
     ) -> Self {
         // STDP-следы затухают в денормали → SIMD замедляется ×10; FTZ+DAZ
-        // сбрасывает их в ноль (см. engine::perf). Один раз на поток.
-        crate::engine::perf::flush_denormals();
+        // сбрасывает их в ноль (см. brain::perf). Один раз на поток.
+        crate::brain::perf::flush_denormals();
         let n_regions = gains.len();
         let haap = model == BrainModel::Haap;
         let (syn_scale, syn_cap) = if haap {
@@ -392,7 +392,7 @@ impl Brain {
                     eprintln!("[dioma] GPU-динамика недоступна ({e}), фолбэк на CPU");
                     let mut runner = BrainRunner::new(conn, config).expect("BrainRunner init");
                     if model == BrainModel::Haap {
-                        crate::body::physiology::apply_haap_columns(&mut runner, haap_columns);
+                        crate::biology::physiology::apply_haap_columns(&mut runner, haap_columns);
                     }
                     Dynamics::Cpu(runner)
                 }
@@ -400,7 +400,7 @@ impl Brain {
         } else {
             let mut runner = BrainRunner::new(conn, config).expect("BrainRunner init");
             if model == BrainModel::Haap {
-                crate::body::physiology::apply_haap_columns(&mut runner, haap_columns);
+                crate::biology::physiology::apply_haap_columns(&mut runner, haap_columns);
             }
             Dynamics::Cpu(runner)
         };
@@ -450,7 +450,7 @@ impl Brain {
         }
     }
 
-    /// Мозг в батч-пуле арены (`engine::gpu_pool::BrainPool`): мембрана
+    /// Мозг в батч-пуле арены (`brain::gpu_pool::BrainPool`): мембрана
     /// считается ОБЩИМ GPU-раннером всех существ (блочно-диагональная сеть),
     /// здесь — пластичность/гомеостаз/сон на CPU поверх зеркала весов.
     /// `csr` регистрируется в пуле ВЫЗЫВАЮЩИМ (`BrainPool::register`, см.
@@ -464,7 +464,7 @@ impl Brain {
         params: PlasticityParams,
         csr: ConnectomeData,
     ) -> Self {
-        crate::engine::perf::flush_denormals();
+        crate::brain::perf::flush_denormals();
         let n_regions = gains.len();
         let eff_lr = params.lr;
         // Пул — только LIF: syn_scale = 1 (как у CPU/GPU LIF-мозгов).
@@ -882,7 +882,7 @@ impl Brain {
     }
 
     /// Зеркало весов для батч-пула + флаг «менялось» (арена передаёт пулу
-    /// перед шагом; см. `engine::gpu_pool::BrainPool::sync_weights`).
+    /// перед шагом; см. `brain::gpu_pool::BrainPool::sync_weights`).
     pub fn pooled_weights(&self) -> (&[f32], bool) {
         match &self.dynamics {
             Dynamics::Pooled(p) => (p.values(), p.dirty),
@@ -1360,7 +1360,7 @@ pub fn gains_from(n_regions: usize, rules: &[(usize, usize, f32)]) -> Vec<Vec<f3
 
 /// Построить CSR-коннектом из grown-проводки × гейны анатомии. Общий код
 /// сборки мозга: `Brain::with_model` (CPU/GPU/HAAP) и батч-пул арены
-/// (`engine::gpu_pool::BrainPool::register`). Рёбра с нулевым гейном
+/// (`brain::gpu_pool::BrainPool::register`). Рёбра с нулевым гейном
 /// выпадают; HAAP дополнительно масштабирует веса (`syn_scale`) и клипует
 /// хвост (`syn_cap`) — LIF-путь идёт без масштаба, бит-в-бит как раньше.
 pub(crate) fn build_connectome(

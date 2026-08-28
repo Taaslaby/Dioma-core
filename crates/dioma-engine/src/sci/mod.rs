@@ -6,8 +6,8 @@
 //!
 //! * спайки — [`crate::creature::Creature::tick`] → [`spike_hist`](crate::creature::Creature::spike_hist)
 //!   (по одному вектору на подшаг мозга);
-//! * мембранный потенциал — [`Brain::debug_cpu_v`](crate::engine::neurons::Brain::debug_cpu_v);
-//! * регионы — [`Brain::region_bounds`](crate::engine::neurons::Brain::region_bounds).
+//! * мембранный потенциал — [`Brain::debug_cpu_v`](crate::brain::neurons::Brain::debug_cpu_v);
+//! * регионы — [`Brain::region_bounds`](crate::brain::neurons::Brain::region_bounds).
 //!
 //! ## Что внутри
 //!

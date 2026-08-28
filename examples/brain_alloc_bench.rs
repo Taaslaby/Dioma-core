@@ -6,8 +6,8 @@
 //!
 //! Run: `cargo run --release --example brain_alloc_bench`
 
-use dioma::engine::genome::Grown;
-use dioma::engine::neurons::{gains_from, Brain, PlasticityParams};
+use dioma::brain::genome::Grown;
+use dioma::brain::neurons::{gains_from, Brain, PlasticityParams};
 use std::hint::black_box;
 use std::time::Instant;
 

@@ -29,7 +29,7 @@
 //! нашими же писателями (рекордер `whisperer_data.rs`, тренер
 //! `train_whisperer.py`).
 
-use dioma_engine::engine::baked::{BakedGru, BakedMlp, BakedTensors};
+use dioma_engine::brain::baked::{BakedGru, BakedMlp, BakedTensors};
 use std::fs;
 use std::path::PathBuf;
 

@@ -3,8 +3,8 @@
 //! спайков → трассы и eligibility должны совпадать бит-в-бит.
 //!
 //! Запуск: `cargo run --release --example gpu_elig_check`
-use dioma::engine::genome::Grown;
-use dioma::engine::neurons::{gains_from, PlasticityParams};
+use dioma::brain::genome::Grown;
+use dioma::brain::neurons::{gains_from, PlasticityParams};
 
 fn grown() -> Grown {
     // Той-коннектом с рекуррентными петлями (обе фазы LTP/LTD в один шаг).
@@ -37,9 +37,9 @@ fn main() {
     let params = PlasticityParams::default();
 
     // CPU-мозг: пластичность живёт на CPU (эталон).
-    let mut cpu = dioma::engine::neurons::Brain::new(&grown, gains.clone(), params.clone());
+    let mut cpu = dioma::brain::neurons::Brain::new(&grown, gains.clone(), params.clone());
     // GPU-мозг: обучение целиком на GPU.
-    let mut gpu = dioma::engine::neurons::Brain::new_gpu(&grown, gains, params);
+    let mut gpu = dioma::brain::neurons::Brain::new_gpu(&grown, gains, params);
     if !gpu.on_gpu() {
         println!("GPU недоступен — пропуск");
         return;

@@ -4,7 +4,7 @@
 
 mod common;
 
-use dioma::body::metabolism::chem;
+use dioma::biology::metabolism::chem;
 use dioma::creature::Creature;
 use dioma::env::map::{Rect, WorldMap};
 use dioma::env::Vec2;

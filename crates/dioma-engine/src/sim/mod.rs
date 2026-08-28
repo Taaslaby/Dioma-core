@@ -10,9 +10,9 @@
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
 use crate::creature::{Action, Creature, Sense};
-use crate::engine::gpu_pool::BrainPool;
-use crate::engine::neurons::BRAIN_STEPS_PER_TICK;
-use crate::engine::perf::flush_denormals;
+use crate::brain::gpu_pool::BrainPool;
+use crate::brain::neurons::BRAIN_STEPS_PER_TICK;
+use crate::brain::perf::flush_denormals;
 use crate::env::map::WorldMap;
 use crate::env::math::Vec2;
 use crate::env::{AgentId, Season, Substance, TimeOfDay, WorldClock};
@@ -183,7 +183,7 @@ pub struct Arena {
     /// `step` уже собирала эти сенсоры (раньше они молча дропались) — поле
     /// только копирует их до конца тика; на симуляцию не влияет.
     last_senses: Vec<Option<Sense>>,
-    /// Батч-пул GPU-динамики (см. `engine::gpu_pool::BrainPool`): `Some` —
+    /// Батч-пул GPU-динамики (см. `brain::gpu_pool::BrainPool`): `Some` —
     /// арена в пулевом режиме (`Arena::new_pooled`): мембрана ВСЕХ существ
     /// считается одним GPU-шагом за тик, пластичность — на CPU. `None` —
     /// обычный CPU-путь. Спавн на пулевой арене (`Arena::spawn`) автоматически
@@ -262,7 +262,7 @@ impl Arena {
     /// СВОЙ голод 200 (NEWBORN_HUNGER, см. evolution.rs) — сильнее и до
     /// первого тика: двойного накопления нет, применяется одно значение.
     pub fn spawn_creature(&mut self, pos: Vec2, heading: f32, mut creature: Creature) -> AgentId {
-        creature.blood.conc[crate::body::metabolism::chem::HUNGER] = ARENA_NEWBORN_HUNGER;
+        creature.blood.conc[crate::biology::metabolism::chem::HUNGER] = ARENA_NEWBORN_HUNGER;
         let id = AgentId(self.next_id);
         self.next_id += 1;
         self.critters.push(        Critter {
@@ -413,7 +413,7 @@ impl Arena {
         //    независим → результат не зависит от планировщика; порядок
         //    collect сохраняется (бит-в-бит как последовательный проход).
         //    FTZ (MXCSR) — состояние ПОТОКА: воркеры пула мозг не создавали,
-        //    поэтому каждая closure выставляет флаг вручную (см. engine::perf:
+        //    поэтому каждая closure выставляет флаг вручную (см. brain::perf:
         //    без FTZ STDP-следы в денормалях замедляют SIMD ~×10 и меняют
         //    семантику распада). 2 инструкции, дёшево.
         let actions: Vec<(usize, Action)> = sim_pool().install(|| {
@@ -876,7 +876,7 @@ fn deterministic_jitter(a: u64, b: u64, spread: f32) -> Vec2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::body::metabolism::chem;
+    use crate::biology::metabolism::chem;
 
     #[test]
     fn creature_hunts_berry_and_it_crunches() {
@@ -956,7 +956,7 @@ mod tests {
         let mut a = Arena::new(42, map);
         a.spawn(Vec2::new(5.0, 5.0), 0.0, 1);
         for _ in 0..2 {
-            a.critters[0].creature.blood = crate::body::metabolism::Blood::creature(false);
+            a.critters[0].creature.blood = crate::biology::metabolism::Blood::creature(false);
             a.critters[0].creature.blood.conc[chem::HUNGER] = 255.0;
             // Свежая ягода триала: прошлые убрать (см. док теста).
             for id in a.berries() {
@@ -1052,7 +1052,7 @@ mod tests {
         map.add_room(20.0, 10.0, 60.0, 20.0);
         let mut a = Arena::new(42, map);
         a.spawn(Vec2::new(5.0, 5.0), 0.0, 1);
-        a.critters[0].creature.blood = crate::body::metabolism::Blood::creature(false);
+        a.critters[0].creature.blood = crate::biology::metabolism::Blood::creature(false);
         a.critters[0].creature.blood.conc[chem::HUNGER] = 255.0;
         a.add_berry(Vec2::new(55.0, 15.0));
 

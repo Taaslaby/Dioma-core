@@ -1,7 +1,7 @@
 //! -------------------------------------------------------------------------
 //! Filename:    src/creature/genome.rs
 //! Purpose:     НАСЛЕДСТВЕННОСТЬ существа — геном, который мутирует
-//! Description: геном = рост (engine::grow::Steering) + инстинкты +
+//! Description: геном = рост (brain::grow::Steering) + инстинкты +
 //!              гены правил Пифии + гены метаболизма. Родитель → ребёнок:
 //!              каждый ген дрейфует (мутация), коннектом РАСТЁТ ЗАНОВО из
 //!              мутировавшего Steering и нового сида. Разделение на врождённое
@@ -11,10 +11,10 @@
 //!              ребёнок рождается с рефлексами родителей.
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
-use crate::body::metabolism::Blood;
-use crate::engine::grow::{stage_c_lite_layout, Steering};
-use crate::engine::instincts::Instinct;
-use crate::engine::rules::RuleGene;
+use crate::biology::metabolism::Blood;
+use crate::brain::grow::{stage_c_lite_layout, Steering};
+use crate::brain::instincts::Instinct;
+use crate::brain::rules::RuleGene;
 use crate::rng::XorShift;
 
 /// Потолок инстинктов в геноме: один и тот же, что у свёртки выученных путей

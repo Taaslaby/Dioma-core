@@ -33,7 +33,7 @@
 //! у примера нет (ТЗ: «No new RUST deps»), а формат файлов контролируется
 //! нашими же писателями (рекордер `eye_data.rs`, тренер `train_eye.py`).
 
-use dioma_engine::engine::baked::{BakedMlp, BakedTensors};
+use dioma_engine::brain::baked::{BakedMlp, BakedTensors};
 use std::fs;
 use std::path::PathBuf;
 

@@ -5,9 +5,9 @@
 //! Программу компилирует хост один раз и хранит у агента; машина держит
 //! только состояние исполнения (pc, стек, переменные).
 
-use crate::script::compiler::{compile, Op, Program, Scope};
-use crate::script::registry::{CommandSet, Ctx};
-use crate::script::value::Value;
+use crate::logic::script::compiler::{compile, Op, Program, Scope};
+use crate::logic::script::registry::{CommandSet, Ctx};
+use crate::logic::script::value::Value;
 
 const NVARS: usize = 100;
 
@@ -196,7 +196,7 @@ impl Machine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::script::registry::Services;
+    use crate::logic::script::registry::Services;
     use std::cell::RefCell;
 
     /// Хост, собирающий вывод `out` в вектор.

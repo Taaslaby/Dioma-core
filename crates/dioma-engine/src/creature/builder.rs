@@ -1,10 +1,10 @@
 //! Builder pattern для удобного создания существ с различными конфигурациями.
 
 use crate::creature::{Creature, CreatureGenome};
-use crate::engine::grow::{
+use crate::brain::grow::{
     avoidance_layout, grow, grow_gpu, stage_b_layout, stage_c_lite_layout, Layout,
 };
-use crate::engine::neurons::PlasticityParams;
+use crate::brain::neurons::PlasticityParams;
 
 /// Раскладка мозга существа. По умолчанию — стадия C-lite (760 нейронов).
 /// Стадия B (300) остаётся для эталонных бенчмарков/сравнений.
@@ -172,10 +172,10 @@ impl CreatureBuilder {
         }
     }
 
-    /// Собрать существо для батч-пула арены (`engine::gpu_pool::BrainPool`):
+    /// Собрать существо для батч-пула арены (`brain::gpu_pool::BrainPool`):
     /// мембрана — общий GPU-раннер, пластичность — CPU. Спавнить через
     /// `Arena::spawn_creature` на арене из `Arena::new_pooled`.
-    pub fn build_pooled(self, pool: &mut crate::engine::gpu_pool::BrainPool) -> Creature {
+    pub fn build_pooled(self, pool: &mut crate::brain::gpu_pool::BrainPool) -> Creature {
         let genome = self.genome.unwrap_or_default();
         let layout = self.layout.layout();
         let grown = grow(&layout, &genome.steering, self.seed);

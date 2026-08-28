@@ -282,8 +282,8 @@ mod tests {
     #[test]
     fn sync_roundtrip_preserves_weights() {
         let g0 = toy_grown();
-        let gains = crate::engine::neurons::gains_from(2, &[(0, 1, 1.0)]);
-        let mut brain = crate::engine::neurons::Brain::new(&g0, gains.clone(), Default::default());
+        let gains = crate::brain::neurons::gains_from(2, &[(0, 1, 1.0)]);
+        let mut brain = crate::brain::neurons::Brain::new(&g0, gains.clone(), Default::default());
         // Немного «поучились»: удвоим все веса.
         let (_, _, vals) = brain.csr_triplets();
         let doubled: Vec<f32> = vals.iter().map(|&v| v * 2.0).collect();
@@ -293,7 +293,7 @@ mod tests {
         let t = brain.csr_triplets();
         sync_weights_from_brain(&mut g, (&t.0, &t.1, &t.2), &gains).unwrap();
         // Пересобранный мозг должен иметь те же веса.
-        let brain2 = crate::engine::neurons::Brain::new(&g, gains, Default::default());
+        let brain2 = crate::brain::neurons::Brain::new(&g, gains, Default::default());
         let (_, _, v2) = brain2.csr_triplets();
         for (a, b) in doubled.iter().zip(v2.iter()) {
             assert!((a - b).abs() < 1e-4, "вес потерян: {a} vs {b}");

@@ -10,7 +10,7 @@
 //!
 //! Запуск: `cargo run --release --example grow_gpu_probe`
 use dioma::creature::{Creature, Sense};
-use dioma::engine::grow::{self, Layout, Steering};
+use dioma::brain::grow::{self, Layout, Steering};
 use prometheus_grow::DiffusionBackend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;

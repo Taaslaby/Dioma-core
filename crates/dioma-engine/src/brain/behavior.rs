@@ -16,10 +16,10 @@
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
 
-use super::vm::Opcode as T;
+use crate::logic::vm::Opcode as T;
 use crate::rng::XorShift;
 
-/// Количество регистров ВМ (совпадает с engine::vm).
+/// Количество регистров ВМ (совпадает с logic::vm).
 pub const N_REG: usize = 16;
 /// Регистры 14/15 — кэш компилятора (Relax/Threshold); общие — 0..13.
 const SCRATCH: u8 = 14;
@@ -297,7 +297,7 @@ impl BehaviorProgram {
     /// заполнены вызывающим слоем до вызова.
     pub fn execute(&self, states: &mut [f32], n: usize) {
         assert!(states.len() >= slots::N_STATE * n, "буфер состояния мал");
-        unsafe { super::vm::execute(states.as_mut_ptr(), core::ptr::null(), n, &self.bytecode) }
+        unsafe { crate::logic::vm::execute(states.as_mut_ptr(), core::ptr::null(), n, &self.bytecode) }
     }
 
     /// Возвращает исходные операции программы для инспекции и мутаций.

@@ -23,7 +23,7 @@
 //! Позиции нейронов — два честных пути:
 //!
 //! - **реальные** (рекомендуется): финальные сомы из ростового мира, см.
-//!   [`crate::engine::grow::grow_with_positions`]. `Grown` хранит только
+//!   [`crate::brain::grow::grow_with_positions`]. `Grown` хранит только
 //!   топологию, поэтому позиции приходят отдельным срезом;
 //! - **синтетические** (fallback, `positions = None`): детерминированная
 //!   упаковка внутри региона (золотое сечение + сидированный джиттер) — не
@@ -33,8 +33,8 @@
 //! сенсорные токи, что в `Creature::assemble`) под смешанным стимульным
 //! паттерном: затишье → запах слева → запах справа → стена слева → стена
 //! справа → оба запаха, по циклу.
-use crate::engine::grow::{axon, Layout, RegionSpec};
-use crate::engine::neurons::{gains_from, Brain, PlasticityParams};
+use crate::brain::grow::{axon, Layout, RegionSpec};
+use crate::brain::neurons::{gains_from, Brain, PlasticityParams};
 use crate::rng::XorShift;
 use crate::Grown;
 
@@ -173,7 +173,7 @@ pub struct VizMeta {
 /// конус (VL/VR — левое/правое поле зрения) + ассоциативный слой (ASSOC_E —
 /// возбуждающий, ASSOC_I — тормозной) с внутренней рекуррентностью.
 ///
-/// ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ — [`crate::engine::grow::stage_b_layout`]: эта
+/// ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ — [`crate::brain::grow::stage_b_layout`]: эта
 /// функция — тонкая алиас-обёртка для визуализаторов (та же схема, тот же
 /// порядок регионов). Числа/метки сверяются тестом `stage_b_layout_matches_viz_tables`.
 ///
@@ -181,7 +181,7 @@ pub struct VizMeta {
 /// в концепт-режиме показывает регионы от `AVOIDANCE_BASE_REGIONS` как ghost —
 /// там коннектом не передаётся, только геометрия плана.
 pub fn avoidance_layout_future() -> Layout {
-    crate::engine::grow::stage_b_layout()
+    crate::brain::grow::stage_b_layout()
 }
 
 // ─── Концепт зон (стадия C): чистый дизайн гибридного мозга ────────────────
@@ -351,7 +351,7 @@ pub fn zones_layout() -> (Layout, Vec<&'static str>) {
 /// Собрать визуальные данные выращенного мозга (текущее ядро, зон нет).
 ///
 /// - `positions`: финальные позиции сом из ростового мира (см.
-///   [`crate::engine::grow::grow_with_positions`]); `None` — детерминированная
+///   [`crate::brain::grow::grow_with_positions`]); `None` — детерминированная
 ///   синтетическая упаковка нейронов внутри регионов.
 /// - `labels_hint`: метки регионов; при несовпадении длины — таблицы
 ///   `AVOIDANCE_LABELS` (+ добавки транша 3), иначе `R{i}`.
@@ -1131,7 +1131,7 @@ fn bool01(b: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::grow::{avoidance_layout, grow, Steering};
+    use crate::brain::grow::{avoidance_layout, grow, Steering};
 
     /// Схема + коннектом для тестов (короткий рост — быстрый, топология есть).
     fn fixture() -> (Layout, Grown) {
@@ -1227,7 +1227,7 @@ mod tests {
             grow_steps: 200,
             ..Steering::default()
         };
-        let (grown, positions) = crate::engine::grow::grow_with_positions(&layout, &st, 42);
+        let (grown, positions) = crate::brain::grow::grow_with_positions(&layout, &st, 42);
         assert_eq!(positions.len(), grown.nt.len(), "позиции на каждый нейрон");
         let viz = brain_viz(&layout, &grown, Some(&positions), &[], 20, 42);
         let j = viz.to_json();
@@ -1426,7 +1426,7 @@ mod tests {
         // стадии B ходит через avoidance_layout_future (алиас). Сверяем
         // НЕЗАВИСИМЫЕ константы виза (метки/классы/база) с фактической схемой:
         // рассинхрон чисел или меток упадёт здесь.
-        let l = crate::engine::grow::stage_b_layout();
+        let l = crate::brain::grow::stage_b_layout();
         let future = avoidance_layout_future();
         assert_eq!(l.regions.len(), AVOIDANCE_BASE_REGIONS + FUTURE_EXTRA_LABELS.len());
         assert_eq!(future.regions.len(), l.regions.len(), "алиас возвращает ту же схему");

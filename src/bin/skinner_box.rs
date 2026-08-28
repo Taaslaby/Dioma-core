@@ -1,5 +1,5 @@
 //! Ящик Скиннера — мозг учится свет→действие через R-STDP.
-use dioma_engine::engine::neurons::{Brain, PlasticityParams};
+use dioma_engine::brain::neurons::{Brain, PlasticityParams};
 use dioma_engine::rng::XorShift;
 
 const N_SENSORS: usize = 4;

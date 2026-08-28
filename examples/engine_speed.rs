@@ -3,7 +3,7 @@
 //! Run with:
 //! `cargo run --release --example engine_speed`
 
-use dioma::engine::biovm::{BioProgram, Instruction};
+use dioma::biology::biovm::{BioProgram, Instruction};
 use pillars::core::runner::run_neuron;
 use pillars::prelude::{Model, SimdContext, SimdLane};
 use std::hint::black_box;

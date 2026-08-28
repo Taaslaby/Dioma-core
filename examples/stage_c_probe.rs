@@ -3,7 +3,7 @@
 //! понять цену укрупнения коры ДО переключения существ.
 //!
 //! Запуск: `cargo run --release --example stage_c_probe`
-use dioma::engine::grow::{grow, stage_b_layout, stage_c_lite_layout, Layout, Steering};
+use dioma::brain::grow::{grow, stage_b_layout, stage_c_lite_layout, Layout, Steering};
 use std::collections::BTreeMap;
 use std::time::Instant;
 

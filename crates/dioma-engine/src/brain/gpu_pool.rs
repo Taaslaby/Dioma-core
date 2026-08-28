@@ -27,7 +27,7 @@
 //! трассы (порядок скеттера per-post тот же, что у CPU; GPU-путь может
 //! отличаться от CPU в 1 ulp — это допускается, run-vs-run — нет).
 
-use crate::engine::gpu::alpha_lif_fma_wgsl;
+use crate::brain::gpu::alpha_lif_fma_wgsl;
 use pillars_connectome::{ConnectomeData, NeuronConfig};
 use pillars_wgpu::{WgpuContext, WgpuNetwork, WgpuPop};
 

@@ -1,7 +1,7 @@
 //! GPU-динамика мозга на pillars-wgpu (alpha-lif LIF).
 //!
 //! `GpuDynamics` заменяет CPU-раннер (`pillars_connectome::BrainRunner`)
-//! внутри `engine::neurons::Brain`: мембранная динамика считается на GPU
+//! внутри `brain::neurons::Brain`: мембранная динамика считается на GPU
 //! (wgpu). Пластичность — ДВА режима:
 //! - без `enable_learning` — как раньше: спайки скачиваются, пластичность/
 //!   гомеостаз/сон/Болдуин живут на CPU поверх зеркала весов (`conn.values`);
@@ -236,7 +236,7 @@ impl GpuDynamics {
     /// (v_jump переинжектится перед каждым — внутри пачки он прикладывается
     /// на каждом подшаге), порядок и арифметика подшагов не меняются.
     pub fn run_steps_into(&mut self, ext: &[f32], n: usize, out: &mut Vec<Vec<i32>>) {
-        use crate::engine::gpu_pool::GPU_MAX_STEPS_PER_SUBMIT;
+        use crate::brain::gpu_pool::GPU_MAX_STEPS_PER_SUBMIT;
         debug_assert_eq!(ext.len(), self.conn.n_neurons, "выход мозга != n");
         out.clear();
         if n == 0 {
@@ -389,7 +389,7 @@ impl GpuDynamics {
         mr_lo: u32,
         mr_hi: u32,
     ) -> Result<(u32, u32), String> {
-        use crate::engine::gpu_pool::GPU_MAX_STEPS_PER_SUBMIT;
+        use crate::brain::gpu_pool::GPU_MAX_STEPS_PER_SUBMIT;
         let l = *self
             .learn
             .as_ref()

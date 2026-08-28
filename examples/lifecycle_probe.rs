@@ -7,7 +7,7 @@
 //!
 //! Запуск: `cargo run --release --example lifecycle_probe`
 use dioma::creature::{Creature, Sense};
-use dioma::body::metabolism::chem;
+use dioma::biology::metabolism::chem;
 
 fn avg_steer(c: &mut Creature, sense: Sense) -> f32 {
     let mut sum = 0.0f32;

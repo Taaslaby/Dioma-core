@@ -3,8 +3,8 @@
 //! не растёт с N) против CPU-раннера на том же графе. Честный замер, где GPU
 //! начинает выигрывать: при малом мозге CPU-неубиваем (лаунч-оверхед диспатчей),
 //! при популяции амортизируется.
-use dioma::engine::grow::{avoidance_layout, grow};
-use dioma::engine::neurons::gains_from;
+use dioma::brain::grow::{avoidance_layout, grow};
+use dioma::brain::neurons::gains_from;
 use dioma::creature::Creature;
 use pillars::zoo::neurons::ALPHA_LIF_WGSL_SOURCE;
 use pillars_connectome::{BrainRunner, ConnectomeData, NeuronConfig};

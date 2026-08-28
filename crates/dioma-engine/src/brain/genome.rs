@@ -6,7 +6,7 @@
 //!              гены правил Пифии. Всё, что наследуется и мутирует.
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use crate::engine::rules::RuleGene;
+use crate::brain::rules::RuleGene;
 
 /// Универсальный результат роста.
 #[derive(Clone, Debug)]
@@ -22,7 +22,7 @@ pub struct Grown {
     /// интегратор везде; наследуется с мутацией вместе с весами.
     pub rule_genes: Vec<RuleGene>,
     /// Врождённые рефлексы, прожигаемые во сне при рождении.
-    pub instincts: Vec<crate::engine::instincts::Instinct>,
+    pub instincts: Vec<crate::brain::instincts::Instinct>,
 }
 
 impl Grown {

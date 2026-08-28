@@ -6,10 +6,10 @@
 //! [`Sense`], существо исполняет мозг и тело, затем возвращает [`Action`].
 //! Координаты, столкновения, еда и социальное наблюдение принадлежат хосту
 //! (`crate::sim::Arena`).
-use crate::body::metabolism::{chem, locus, Blood};
-use crate::engine::grow::{grow, grow_gpu, stage_c_lite_layout};
-use crate::engine::instincts::Instinct;
-use crate::engine::neurons::{gains_from, Brain, PlasticityParams, BRAIN_STEPS_PER_TICK};
+use crate::biology::metabolism::{chem, locus, Blood};
+use crate::brain::grow::{grow, grow_gpu, stage_c_lite_layout};
+use crate::brain::instincts::Instinct;
+use crate::brain::neurons::{gains_from, Brain, PlasticityParams, BRAIN_STEPS_PER_TICK};
 use crate::rng::XorShift;
 use crate::Grown;
 
@@ -23,8 +23,8 @@ pub use builder::BrainLayout;
 pub use genome::{CreatureGenome, MetabolismGene, Sex};
 pub use metrics::{BloodState, BrainStats, CreatureEvent, CreatureMetrics};
 
-/// Регионы stage_c_lite_layout (см. engine::grow::stage_c_lite_layout).
-/// Индексы регионов мозга в layout'е стадии C-lite (см. [`crate::engine::grow::stage_c_lite_layout`]).
+/// Регионы stage_c_lite_layout (см. brain::grow::stage_c_lite_layout).
+/// Индексы регионов мозга в layout'е стадии C-lite (см. [`crate::brain::grow::stage_c_lite_layout`]).
 /// Публичные: научные тулзы ([`crate::sci`]) и оверлеи группируют нейроны по регионам.
 /// Ядро 0..6 — как в avoidance_layout; зрение и кора добавлены В КОНЕЦ
 /// (append-only): старые индексы не сдвинуты.
@@ -240,7 +240,7 @@ impl Creature {
     /// Существо с мозгом на GPU-динамике (pillars-wgpu, alpha-lif): та же
     /// наследственность, инстинкты и пластичность — мембрана считается на
     /// GPU. Без адаптера `Brain::new_gpu` тихо падает на CPU-динамику
-    /// (см. `engine::neurons::Brain::new_gpu`).
+    /// (см. `brain::neurons::Brain::new_gpu`).
     pub fn new_gpu(seed: u64) -> Self {
         let genome = CreatureGenome::default();
         let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
@@ -259,7 +259,7 @@ impl Creature {
     /// Существо для батч-пула арены (`Arena::new_pooled`): мембрана считается
     /// общим GPU-раннером ВСЕХ существ пула (один шаг на тик), пластичность —
     /// на CPU. Вызывает `assemble_pooled` (регистрирует коннектом в пуле).
-    pub fn new_pooled(seed: u64, pool: &mut crate::engine::gpu_pool::BrainPool) -> Self {
+    pub fn new_pooled(seed: u64, pool: &mut crate::brain::gpu_pool::BrainPool) -> Self {
         let genome = CreatureGenome::default();
         let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
         Self::assemble_pooled(grown, genome, seed, pool)
@@ -463,7 +463,7 @@ impl Creature {
         grown: Grown,
         genome: CreatureGenome,
         seed: u64,
-        pool: &mut crate::engine::gpu_pool::BrainPool,
+        pool: &mut crate::brain::gpu_pool::BrainPool,
     ) -> Self {
         let mut genome = genome;
         genome.sex = Sex::from_seed(seed);
@@ -473,7 +473,7 @@ impl Creature {
         };
         params.homeo_exclude_pre = vec![REGION_CORTEX_E, REGION_CORTEX_I];
         let gains = assemble_gains(&grown);
-        let csr = crate::engine::neurons::build_connectome(&grown, &gains, false, 1.0, f32::INFINITY);
+        let csr = crate::brain::neurons::build_connectome(&grown, &gains, false, 1.0, f32::INFINITY);
         // Регистрируем блок CSR в общем GPU-раннере (смещения хранит пул),
         // затем строим мозг на зеркале весов.
         pool.register(&csr);
@@ -922,7 +922,7 @@ fn assemble_gains(grown: &Grown) -> Vec<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::instincts::Instinct;
+    use crate::brain::instincts::Instinct;
 
     #[test]
     fn pacemaker_fires_rhythmically() {
