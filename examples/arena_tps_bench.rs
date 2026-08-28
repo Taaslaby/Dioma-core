@@ -8,10 +8,10 @@
 //!                  env DIOMA_POOL=1 (требует собранный BrainPool в Arena).
 //!
 //! По 5 и 20 существ. Запуск: `cargo run --release --example arena_tps_bench`
-use dioma::creature::{BrainLayout, Creature, CreatureBuilder};
-use dioma::env::map::WorldMap;
-use dioma::env::Vec2;
-use dioma::sim::Arena;
+use dioma_engine::creature::{BrainLayout, Creature, CreatureBuilder};
+use dioma_engine::env::map::WorldMap;
+use dioma_engine::env::Vec2;
+use dioma_engine::sim::Arena;
 use std::time::Instant;
 
 /// Число тиков замера после прогрева.

@@ -17,3 +17,7 @@ __pycache__/
 tools/whisperer_data.json
 
 tools/eye_data.json
+
+# Кэш MNIST и hold-out для глаз-классификатора (перегенерируется train_mnist_eye.py)
+tools/data/
+tools/mnist_holdout.json

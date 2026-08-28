@@ -3,12 +3,11 @@
 //! Purpose:     world:map owner, agents, events
 //! Description:
 //!
-//!
 //! Advances the simulation and provides engine commands to scripts.
 //! Borrowing scheme: mutable world state resides in the private `Inner` state;
 //! before execution,
-//! //! the script is **extracted** from the agent's slot—this allows a command, via services,
-//! //! to access the entire world, including the agent currently executing it.
+//! the script is **extracted** from the agent's slot—this allows a command, via services,
+//! to access the entire world, including the agent currently executing it.
 //!
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------

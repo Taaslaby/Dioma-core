@@ -382,6 +382,39 @@ impl BakedMlp {
         }
         cur
     }
+
+    /// Forward для автоэнкодеров: `(КОД, выход)`. Код — активация
+    /// предпоследнего слоя (tanh), выход — последний (линейный). Для
+    /// однослойной сети код = вход (тривиально).
+    ///
+    /// Используется концепт-глазом (`examples/sparse_eye_probe.rs`, тренер
+    /// `tools/train_sparse_eye.py`): 128-мерный разреженный код инжектится
+    /// током в зрительные регионы спайкового мозга — это интерфейс между
+    /// запечённым глазом и живой динамикой, а не пробниковая хитрость.
+    pub fn forward_parts(&self, x: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        assert_eq!(x.len(), self.in_dim, "длина входа {} != in_dim {}", x.len(), self.in_dim);
+        let mut cur: Vec<f32> = x.to_vec();
+        let n_layers = self.weights.len();
+        for (li, (w, b)) in self.weights.iter().zip(self.biases.iter()).enumerate() {
+            let out = w.len();
+            let inn = cur.len();
+            let mut next = vec![0.0f32; out];
+            for o in 0..out {
+                let mut acc = b[o];
+                let row = &w[o];
+                for i in 0..inn {
+                    acc += row[i] * cur[i];
+                }
+                next[o] = if li + 1 == n_layers { acc } else { acc.tanh() };
+            }
+            if li + 1 == n_layers {
+                // cur — активация предпоследнего слоя (tanh), next — выход.
+                return (cur, next);
+            }
+            cur = next;
+        }
+        (cur.clone(), cur) // недостижимо: from_tensors требует ≥ 1 слоя
+    }
 }
 
 // ─── GRU-блок ───────────────────────────────────────────────────────────────
@@ -709,6 +742,34 @@ mod tests {
             y[0],
             expected
         );
+    }
+
+    #[test]
+    fn mlp_forward_parts_returns_code_and_output() {
+        // Тот же двухслойный фикстур, что в forward-тесте: код = tanh-активация
+        // предпоследнего слоя, выход = последний (линейный).
+        let mut t = BakedTensors::new();
+        t.push("layer0.w", &[2, 2], vec![0.5, -1.0, 0.2, 0.3]).unwrap();
+        t.push("layer0.b", &[2], vec![0.1, -0.2]).unwrap();
+        t.push("layer1.w", &[1, 2], vec![1.0, -2.0]).unwrap();
+        t.push("layer1.b", &[1], vec![0.5]).unwrap();
+        let mlp = BakedMlp::from_tensors(&t).unwrap();
+        let (code, y) = mlp.forward_parts(&[1.0, 2.0]);
+        // h = tanh(W0·x + b0)
+        let h0 = (0.5f32 * 1.0 + -1.0 * 2.0 + 0.1).tanh();
+        let h1 = (0.2f32 * 1.0 + 0.3 * 2.0 + -0.2).tanh();
+        assert_eq!(code.len(), 2);
+        assert!((code[0] - h0).abs() < 1e-6, "code[0] = {}, ожидалось {}", code[0], h0);
+        assert!((code[1] - h1).abs() < 1e-6, "code[1] = {}, ожидалось {}", code[1], h1);
+        // y = W1·h + b1 — должен совпасть с обычным forward.
+        let expected = 1.0 * h0 + -2.0 * h1 + 0.5;
+        assert!(
+            (y[0] - expected).abs() < 1e-6,
+            "y = {}, ожидалось {}",
+            y[0],
+            expected
+        );
+        assert!((y[0] - mlp.forward(&[1.0, 2.0])[0]).abs() < 1e-9, "forward_parts ≠ forward");
     }
 
     #[test]
