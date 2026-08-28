@@ -171,3 +171,19 @@ fn png_bad_data_errors() {
     let err = atlas.add_png_bytes(&gpu.queue, "x", garbage);
     assert!(err.is_err(), "мусорные байты → ошибка декодирования");
 }
+
+/// Скачанные CC0-спрайты (assets/sprites) грузятся через load_folder;
+/// атлас растёт под крупный bunny.png (248×340 > стартовые 256).
+#[test]
+fn assets_folder_loads() {
+    let Some(gpu) = gpu() else { return };
+    let mut atlas = SpriteAtlas::new(&gpu.device, 256);
+    let n = atlas
+        .load_folder(&gpu.queue, "assets/sprites")
+        .expect("папка assets/sprites существует в крейте");
+    assert!(n >= 8, "ожидаем ≥8 спрайтов, загружено {n}");
+    assert!(atlas.region("bunny").is_some(), "bunny.png зарегистрирован по имени файла");
+    assert!(atlas.region("apple").is_some(), "apple.png зарегистрирован");
+    // Атлас вырос: bunny 248×340 не влезает в 256².
+    assert!(atlas.width() >= 512, "атлас вырос под bunny: {}", atlas.width());
+}

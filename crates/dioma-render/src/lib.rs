@@ -35,6 +35,7 @@ pub mod fx;
 pub mod renderer;
 pub mod scene;
 mod shaders;
+pub mod spine;
 pub mod ui;
 
 // Обратная совместимость старых плоских путей модулей (dioma_render::atlas,
@@ -59,4 +60,4 @@ pub use scene::sprite::{Sprite, SpriteFx};
 pub use tilemap::{TileBatch, Tilemap, TilesetUv};
 
 // UI-каркас: основные типы плоско.
-pub use ui::{UiInput, UiSystem};
+pub use ui::{GlassBackdrop, UiInput, UiSystem};

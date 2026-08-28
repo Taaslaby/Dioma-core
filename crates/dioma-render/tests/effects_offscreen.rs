@@ -380,3 +380,61 @@ fn gradient_equal_is_uniform() {
     let bottom = px(&data, W, W / 2, H / 2 + 10);
     assert_eq!(top, bottom, "без with_gradient цвет однородный");
 }
+
+// ── Spine 2D: парсинг и позирование (assets/spine/strawberry) ──────────────
+
+const SPINE_DIR: &str = "assets/spine/strawberry";
+
+fn load_spine() -> Option<(dioma_render::spine::SpineData, dioma_render::spine::SpineInstance)> {
+    let atlas_text = std::fs::read_to_string(format!("{SPINE_DIR}/skeleton.atlas")).ok()?;
+    let json = std::fs::read_to_string(format!("{SPINE_DIR}/skeleton.json")).ok()?;
+    let png = std::fs::read(format!("{SPINE_DIR}/skeleton.png")).ok()?;
+    let gpu = gpu()?;
+    let data = dioma_render::spine::SpineData::load(
+        &gpu.device,
+        &gpu.queue,
+        &atlas_text,
+        &png,
+        &json,
+    )
+    .expect("spine загружается");
+    let inst = data.instance("animation");
+    Some((data, inst))
+}
+
+#[test]
+fn spine_parse_and_pose() {
+    let Some((data, mut inst)) = load_spine() else { return };
+
+    // Атлас: 3 региона, один повернут, страница 346×132.
+    let text = std::fs::read_to_string(format!("{SPINE_DIR}/skeleton.atlas")).unwrap();
+    let (w, h, regions) = dioma_render::spine::parse_atlas(&text).unwrap();
+    assert_eq!((w, h), (346, 132));
+    assert_eq!(regions.len(), 3);
+    assert!(regions.iter().any(|r| r.rotate), "есть rotate-регион");
+
+    // Скелет: 4 кости, 3 слота, анимация с длительностью ~0.5.
+    assert_eq!(data.skeleton.bones.len(), 4);
+    assert_eq!(data.skeleton.slots.len(), 3);
+    let dur = inst.duration();
+    assert!(dur > 0.4 && dur < 0.7, "длительность анимации ~0.5: {dur}");
+
+    // Позирование: 12 вершин (3 квада), все конечные.
+    inst.update(dur * 0.25);
+    let mesh = inst.build_mesh();
+    assert_eq!(mesh.vertices.len(), 12);
+    assert_eq!(mesh.indices.len(), 18);
+    assert!(mesh.vertices.iter().all(|v| v.position[0].is_finite() && v.position[1].is_finite()));
+
+    // Поза зависит от времени: вершины при t=0.25 ≠ t=0.5 (кость bone4 вертится).
+    let mut inst2 = inst.clone();
+    inst2.time = dur * 0.5;
+    inst2.update(0.0);
+    let mesh2 = inst2.build_mesh();
+    let differs = mesh
+        .vertices
+        .iter()
+        .zip(mesh2.vertices.iter())
+        .any(|(a, b)| (a.position[0] - b.position[0]).abs() > 0.5);
+    assert!(differs, "анимация реально двигает вершины");
+}
