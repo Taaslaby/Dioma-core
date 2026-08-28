@@ -45,7 +45,13 @@ fn vs_main(in: VsIn) -> VsOut {
 
     var out: VsOut;
     out.clip_pos = vec4<f32>(world_to_ndc(world), 0.0, 1.0);
-    out.uv = mix(in.instance_uv_rect.xy, in.instance_uv_rect.zw, in.corner_uv);
+    // V-флип: первая строка данных текстуры (v0) — ВЕРХ изображения, поэтому
+    // верх квада (corner_uv.y = 1, мировая Y вверх) должен брать v0.
+    out.uv = mix(
+        in.instance_uv_rect.xy,
+        in.instance_uv_rect.zw,
+        vec2<f32>(in.corner_uv.x, 1.0 - in.corner_uv.y),
+    );
     out.tint = in.instance_tint;
     return out;
 }

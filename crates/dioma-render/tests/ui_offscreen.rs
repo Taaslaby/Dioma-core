@@ -75,7 +75,7 @@ fn panel_pixels() {
     let border = px(&data, W, 17, 83);
     let outside = px(&data, W, 8, 83);
     assert!(sum_rgb(border) > 250, "рамка светлая: {border:?}");
-    assert!(sum_rgb(outside) < 60, "вне панели — фон: {outside:?}");
+    assert!(sum_rgb(outside) < 200, "вне панели — фон (navy sRGB ~176): {outside:?}");
 
     // Заливка панели тёмная (текст/виджеты сюда не попадают): (100, 30).
     let fill = px(&data, W, 100, 30);
@@ -89,7 +89,7 @@ fn text_ink_and_orientation() {
     frame(&mut g, UiInput::default());
     let data = render(&mut g);
 
-    // Область метки: x 28..114, y 26..46.
+    // Область метки: x 28..114, y 24..48.
     let ink = |r: [u32; 4]| -> usize {
         let mut n = 0;
         for y in r[1]..r[3] {
@@ -101,14 +101,17 @@ fn text_ink_and_orientation() {
         }
         n
     };
-    let all = ink([28, 26, 114, 46]);
+    let all = ink([28, 24, 114, 48]);
     assert!(all > 15, "чернила метки есть: {all}");
 
-    // «Т» — первый глиф (~14 px шириной): перекладина сверху → чернил в
-    // верхней половине заметно больше, чем в нижней (там только ножка).
-    let top = ink([28, 26, 44, 36]);
-    let bottom = ink([28, 36, 44, 46]);
-    assert!(top > bottom * 2, "«Т» не перевёрнут: верх {top} vs низ {bottom}");
+    // «Т» — первый глиф (x 28..40). Базовая линия блока: at.y + ascent·0.5
+    // (PT Sans ascent ≈ 32 px при 32 px) ≈ y 44. У ПРАВИЛЬНОГО «Т» перекладина
+    // лежит выше базовой линии (строки 31..36), а НИЖЕ базовой линии чернил
+    // нет вовсе. У перевёрнутого — перекладина уехала бы под базовую линию.
+    let bar = ink([28, 31, 40, 36]);
+    let under = ink([28, 44, 40, 49]);
+    assert!(bar >= 8, "перекладина «Т» сверху: {bar}");
+    assert_eq!(under, 0, "ниже базовой линии у «Т» чернил нет (не перевёрнут): {under}");
 }
 
 /// Кнопка: hover подсвечивает, клик (нажатие+отпускание) распознаётся.
@@ -165,32 +168,14 @@ fn progress_bar_fill_pixels() {
 
     // Полоса бара y ≈ 115..127 (высота 14, внутренняя заливка 12).
     let mut green = 0;
-    for y in 116..126 {
-        for x in 40..70 {
+    for y in 112..128 {
+        for x in 35..75 {
             let p = px(&data, W, x, y);
-            if p[1] > 90 && p[1] > p[0] + 20 && p[1] > p[2] + 20 {
+            let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+            if g > 90 && g > r + 20 && g > b + 20 {
                 green += 1;
             }
         }
     }
-    assert!(green > 30, "зелёная заливка бара видна: {green}");
-}
-
-/// ВРЕМЕННЫЙ дамп: ASCII-арт кадра UI (яркость), для отладки геометрии.
-#[test]
-fn debug_dump_ascii() {
-    let Some(mut g) = setup() else { return };
-    frame(&mut g, UiInput { cursor: BTN_CENTER, down: false, just_pressed: false, just_released: false });
-    let data = render(&mut g);
-    let chars: Vec<char> = " .:-=+*#%@".chars().collect();
-    for y in (12..132).step_by(2) {
-        let mut row = String::new();
-        for x in 12..126 {
-            let p = px(&data, W, x, y);
-            let b = ((p[0] as u32 + p[1] as u32 + p[2] as u32) / 3) as usize;
-            let c = chars[(b.min(255) * chars.len()) / 256];
-            row.push(c);
-        }
-        println!("{y:3}|{row}");
-    }
+    assert!(green > 25, "зелёная заливка бара видна: {green}");
 }

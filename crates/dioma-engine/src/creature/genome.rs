@@ -23,13 +23,15 @@ use crate::rng::XorShift;
 const CROSSOVER_INSTINCT_CAP: usize = super::LEARNED_TOP_N;
 
 /// Сигма мутации генома роста (относительная, на параметр).
-const STEERING_SIGMA: f64 = 0.05;
+/// `pub(crate)`: генная машина (`creature::dna`) мутирует зеркала тех же
+/// классов той же сигмой — темп дрейфа не расходится между путями.
+pub(crate) const STEERING_SIGMA: f64 = 0.05;
 /// Сигма мутации генов правил Пифии (абсолютная, как в dynasty).
-const RULE_SIGMA: f32 = 0.08;
+pub(crate) const RULE_SIGMA: f32 = 0.08;
 /// Сигма мутации инстинктов (относительная).
-const INSTINCT_SIGMA: f32 = 0.10;
+pub(crate) const INSTINCT_SIGMA: f32 = 0.10;
 /// Сигма мутации генов метаболизма (относительная).
-const METAB_SIGMA: f32 = 0.10;
+pub(crate) const METAB_SIGMA: f32 = 0.10;
 
 /// Пол существа. Значения совпадают с C3 (`SkeletonConstants.h`:
 /// `enum {MALE=1, FEMALE=2}`; `Genome.cpp mySex`). Пол наследуется в геноме,

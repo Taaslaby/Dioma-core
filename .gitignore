@@ -3,6 +3,7 @@ target/
 
 # Инструмент Freebuff — локальное состояние, не для репозитория
 .freebuff/
+.zcode
 
 # Runtime-данные игры (сейвы существ, реплеи)
 graveyard/

@@ -26,10 +26,11 @@ pub const FONT_BYTES: &[u8] = include_bytes!("../../assets/fonts/PTSans-Regular.
 pub const LAYER_TEXT: f32 = 1002.0;
 
 /// Метрики глифа в px при [`BASE_PX`] (масштабируются стилем).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct GlyphInfo {
-    /// UV-регион в атласе.
-    pub uv: [f32; 4],
+    /// Имя региона в атласе (`ui/glyph/U+XXXX`); UV резолвится при пуше —
+    /// атлас может расти и переупаковывать регионы.
+    pub name: String,
     /// Размер растра (px).
     pub w: f32,
     pub h: f32,
@@ -86,7 +87,7 @@ impl UiFont {
         if !self.glyphs.contains_key(&c) {
             self.ensure_glyph(queue, atlas, c);
         }
-        self.glyphs[&c]
+        self.glyphs[&c].clone()
     }
 
     fn ensure_glyph(&mut self, queue: &wgpu::Queue, atlas: &mut SpriteAtlas, c: char) {
@@ -94,7 +95,7 @@ impl UiFont {
         // Пустой глиф (пробел): квада нет, шаг пера остаётся.
         if m.width == 0 || m.height == 0 {
             self.glyphs.insert(c, GlyphInfo {
-                uv: [0.0; 4], w: 0.0, h: 0.0, left: 0.0, above: 0.0, advance: m.advance_width,
+                name: String::new(), w: 0.0, h: 0.0, left: 0.0, above: 0.0, advance: m.advance_width,
             });
             return;
         }
@@ -114,11 +115,10 @@ impl UiFont {
             eprintln!("[ui] глиф {c:?} не добавлен: {e}");
             return;
         }
-        let uv = atlas.region(&name).expect("регион только что добавлен");
         self.glyphs.insert(
             c,
             GlyphInfo {
-                uv,
+                name,
                 w: m.width as f32,
                 h: m.height as f32,
                 left: m.xmin as f32,
@@ -162,6 +162,9 @@ impl UiFont {
             let baseline = at[1] + self.ascent * scale + li as f32 * line_h;
             for c in line.chars() {
                 let g = self.glyph(queue, atlas, c);
+                // UV на момент отрисовки: атлас мог вырасти и переупаковать
+                // регионы, поэтому кэшировать UV глифов нельзя.
+                let uv = atlas.region(&g.name).unwrap_or([0.0; 4]);
                 pen_x += g.left * scale;
                 if g.w > 0.0 && g.h > 0.0 {
                     // Верх растра на экране: базовая линия − «над базовой линией».
@@ -171,7 +174,7 @@ impl UiFont {
                         center_screen[0] - viewport[0] * 0.5,
                         viewport[1] * 0.5 - center_screen[1],
                     ];
-                    let mut s = Sprite::new(world, [g.w * scale, g.h * scale], g.uv);
+                    let mut s = Sprite::new(world, [g.w * scale, g.h * scale], uv);
                     s.tint = color;
                     s.layer = LAYER_TEXT;
                     out.push(s);

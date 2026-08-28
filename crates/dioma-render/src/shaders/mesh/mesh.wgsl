@@ -25,7 +25,7 @@ struct VsOut {
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
     out.clip_pos = vec4<f32>(world_to_ndc(in.position), 0.0, 1.0);
-    out.uv = in.uv;
+    out.uv = in.uv; // V-флип делается на CPU в Mesh::quad (регион-локально)
     out.color = in.color;
     return out;
 }

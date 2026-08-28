@@ -52,9 +52,11 @@ impl Mesh {
                     center[0] + corner_pos[0] * size[0],
                     center[1] + corner_pos[1] * size[1],
                 ],
+                // V-флип: v0 текстуры — верх изображения, поэтому верх квада
+                // (corner_uv.y = 1, мировая Y вверх) берёт v0 (см. sprite.wgsl).
                 uv: [
                     uv_rect[0] + (uv_rect[2] - uv_rect[0]) * corner_uv[0],
-                    uv_rect[1] + (uv_rect[3] - uv_rect[1]) * corner_uv[1],
+                    uv_rect[3] - (uv_rect[3] - uv_rect[1]) * corner_uv[1],
                 ],
                 color,
             })
