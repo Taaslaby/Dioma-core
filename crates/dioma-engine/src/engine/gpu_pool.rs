@@ -60,6 +60,17 @@ fn pool_config() -> NeuronConfig {
     }
 }
 
+/// Максимум подшагов на ОДИН `step_many`/`step_many_learn`/ридбек истории.
+/// ИСПРАВЛЕНИЕ (perf-охота 42f30ed+): pillars-wgpu молча зажимает пачку до
+/// `MAX_HIST = 64` (кольцо истории спайков), а `download_spikes_hist` с
+/// count > 64 возвращает ошибку. `BrainPool::step` звал их с spt = 100
+/// (BRAIN_STEPS_PER_TICK): тик пула молча жил 64/100 подшагами, затем вечно
+/// падал на ридбеке («сбой ридбека, тихий тик» → все мембраны нули). Тик
+/// режется на куски ≤ 64: порядок подшагов тот же, v_jump переинжектится
+/// перед каждым куском (внутри пачки он прикладывается на КАЖДОМ подшаге —
+/// семантика входа не меняется), история скачивается до перезаписи кольца.
+pub(crate) const GPU_MAX_STEPS_PER_SUBMIT: usize = 64;
+
 pub struct BrainPool {
     /// Готовый device для первой сборки сети (`try_new` поднимает заранее,
     /// `new` — лениво). Потребляется `ensure_built`; пересборка после спавна
@@ -223,23 +234,34 @@ impl BrainPool {
             }
         }
         let net = self.net.as_mut().expect("net built");
-        let first = net.step_counter();
-        let ok = net
-            .inject_voltage(0, &self.indices, &self.ext_full)
-            .is_ok()
-            && net.step_many(spt).is_ok();
-        if !ok {
-            eprintln!("[dioma] BrainPool::step — сбой GPU, тихий тик");
-            self.failed = true;
-            self.flat.resize(spt * self.n_neurons, 0);
-            return (&self.flat, &self.slots);
-        }
         self.flat.resize(spt * self.n_neurons, 0);
-        if net.download_spikes_hist(first, spt, &mut self.flat).is_err() {
-            eprintln!("[dioma] BrainPool::step — сбой ридбека, тихий тик");
-            self.failed = true;
-            self.flat.fill(0);
-            return (&self.flat, &self.slots);
+        // Пачка режется на куски ≤ GPU_MAX_STEPS_PER_SUBMIT (см. константу):
+        // v_jump переинжектится перед каждым куском (внутри пачки он
+        // прикладывается на каждом подшаге), история спайков скачивается
+        // сразу после куска — до перезаписи кольца MAX_HIST. Порядок
+        // подшагов и арифметика не меняются.
+        let mut done = 0usize;
+        while done < spt {
+            let chunk = (spt - done).min(GPU_MAX_STEPS_PER_SUBMIT);
+            let first = net.step_counter();
+            let ok = net
+                .inject_voltage(0, &self.indices, &self.ext_full)
+                .is_ok()
+                && net.step_many(chunk).is_ok();
+            if !ok {
+                eprintln!("[dioma] BrainPool::step — сбой GPU, тихий тик");
+                self.failed = true;
+                self.flat.fill(0);
+                return (&self.flat, &self.slots);
+            }
+            let rows = &mut self.flat[done * self.n_neurons..(done + chunk) * self.n_neurons];
+            if net.download_spikes_hist(first, chunk, rows).is_err() {
+                eprintln!("[dioma] BrainPool::step — сбой ридбека, тихий тик");
+                self.failed = true;
+                self.flat.fill(0);
+                return (&self.flat, &self.slots);
+            }
+            done += chunk;
         }
         (&self.flat, &self.slots)
     }

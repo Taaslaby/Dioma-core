@@ -223,45 +223,59 @@ impl GpuDynamics {
         &self.spikes
     }
 
-    /// Пачка `n` подшагов одним батчем: все шаги уходят в очередь БЕЗ ожиданий
+    /// Пачка `n` подшагов батчами: шаги уходят в очередь БЕЗ ожиданий
     /// (v_jump свёрнут в step, веса — один аплоад по dirty), ридбек спайков —
-    /// ОДИН map_async на всю пачку. Внутри тика веса константны (награды и
+    /// один map_async на кусок. Внутри тика веса константны (награды и
     /// гомеостаз — на границах тиков), поэтому пачка бит-в-бит равна n
     /// последовательных `run_step`. `out` заполняется n векторами по n_neurons.
+    ///
+    /// ИСПРАВЛЕНИЕ (perf-охота 42f30ed+): pillars-wgpu молча зажимает пачку
+    /// до MAX_HIST = 64 (кольцо истории спайков), а ридбек истории с
+    /// count > 64 падает. `BRAIN_STEPS_PER_TICK` = 100 → тик молча жил
+    /// 64/100 подшагами, затем ломался ридбек. Пачка режется на куски ≤ 64
+    /// (v_jump переинжектится перед каждым — внутри пачки он прикладывается
+    /// на каждом подшаге), порядок и арифметика подшагов не меняются.
     pub fn run_steps_into(&mut self, ext: &[f32], n: usize, out: &mut Vec<Vec<i32>>) {
+        use crate::engine::gpu_pool::GPU_MAX_STEPS_PER_SUBMIT;
         debug_assert_eq!(ext.len(), self.conn.n_neurons, "выход мозга != n");
         out.clear();
         if n == 0 {
             return;
         }
-        let first = self.net.step_counter();
-        let ok = self.upload_weights_if_dirty()
-            // Вход тика константен — один v_jump на пачку (step_many диспатчит
-            // его на каждом подшаге с теми же аргументами).
-            && self.net.inject_voltage(0, &self.indices, ext).is_ok();
-        if !ok {
-            eprintln!("[dioma] GpuDynamics::run_steps — сбой GPU (weights/v_jump)");
-            for _ in 0..n {
-                out.push(vec![0i32; self.conn.n_neurons]);
-            }
-            return;
-        }
-        if let Err(e) = self.net.step_many(n) {
-            eprintln!("[dioma] GpuDynamics::run_steps — сбой GPU: {e}");
-            for _ in 0..n {
-                out.push(vec![0i32; self.conn.n_neurons]);
-            }
-            return;
-        }
-        let mut flat = vec![0u32; n * self.conn.n_neurons];
-        if self.net.download_spikes_hist(first, n, &mut flat).is_err() {
-            eprintln!("[dioma] GpuDynamics::run_steps — сбой ридбека");
+        if !self.upload_weights_if_dirty() {
+            eprintln!("[dioma] GpuDynamics::run_steps — сбой GPU (weights)");
             for _ in 0..n {
                 out.push(vec![0i32; self.conn.n_neurons]);
             }
             return;
         }
         let nn = self.conn.n_neurons;
+        let mut flat = vec![0u32; n * nn];
+        let mut done = 0usize;
+        while done < n {
+            let chunk = (n - done).min(GPU_MAX_STEPS_PER_SUBMIT);
+            let first = self.net.step_counter();
+            // Вход тика константен — v_jump на каждый кусок (step_many
+            // диспатчит его на каждом подшаге куска с теми же аргументами).
+            let ok = self.net.inject_voltage(0, &self.indices, ext).is_ok()
+                && self.net.step_many(chunk).is_ok();
+            if !ok {
+                eprintln!("[dioma] GpuDynamics::run_steps — сбой GPU (v_jump/step)");
+                for _ in done..n {
+                    out.push(vec![0i32; nn]);
+                }
+                return;
+            }
+            let rows = &mut flat[done * nn..(done + chunk) * nn];
+            if self.net.download_spikes_hist(first, chunk, rows).is_err() {
+                eprintln!("[dioma] GpuDynamics::run_steps — сбой ридбека");
+                for _ in done..n {
+                    out.push(vec![0i32; nn]);
+                }
+                return;
+            }
+            done += chunk;
+        }
         for k in 0..n {
             let mut v = Vec::with_capacity(nn);
             v.extend(flat[k * nn..(k + 1) * nn].iter().map(|&s| s as i32));
@@ -355,10 +369,17 @@ impl GpuDynamics {
 
     // ─── GPU-обучение целиком ─────────────────────────────────────────────
 
-    /// Батч-тик с обучением на GPU: все `n` подшагов + dopamine-eligibility
-    /// одним submit, ридбек — только моторные суммы (2 × u32). Возвращает
-    /// (ml, mr) — суммы спайков моторных пулов за тик.
-    /// Требует включённого `enable_learning`; иначе возвращает ошибку.
+    /// Батч-тик с обучением на GPU: подшаги + dopamine-eligibility кусками
+    /// ≤ MAX_HIST (кольцо истории), ридбеков спайков нет вообще — моторные
+    /// суммы накапливаются по кускам (`download_motor_sums` обнуляет
+    /// аккумулятор на каждом вызове). Требует включённого `enable_learning`;
+    /// иначе возвращает ошибку.
+    ///
+    /// ИСПРАВЛЕНИЕ (perf-охота 42f30ed+): `step_many_learn` молча зажимает
+    /// пачку до MAX_HIST = 64 — тик из 100 подшагов жил 64/100 (мозг GPU-per
+    /// получал 64% нейронного времени). Порядок подшагов и арифметика не
+    /// меняются; v_jump переинжектится перед каждым куском (внутри пачки
+    /// он прикладывается на каждом подшаге).
     pub fn run_tick_learn(
         &mut self,
         ext: &[f32],
@@ -368,6 +389,7 @@ impl GpuDynamics {
         mr_lo: u32,
         mr_hi: u32,
     ) -> Result<(u32, u32), String> {
+        use crate::engine::gpu_pool::GPU_MAX_STEPS_PER_SUBMIT;
         let l = *self
             .learn
             .as_ref()
@@ -376,11 +398,21 @@ impl GpuDynamics {
         if !self.upload_weights_if_dirty() {
             return Err("run_tick_learn: upload весов".into());
         }
-        self.net.inject_voltage(0, &self.indices, ext)?;
-        self.net.step_many_learn(
-            n, l.d_pre, l.d_post, l.d_e, l.a_ltp, l.a_ltd, ml_lo, ml_hi, mr_lo, mr_hi,
-        )?;
-        self.net.download_motor_sums()
+        let mut ml_sum = 0u32;
+        let mut mr_sum = 0u32;
+        let mut done = 0usize;
+        while done < n {
+            let chunk = (n - done).min(GPU_MAX_STEPS_PER_SUBMIT);
+            self.net.inject_voltage(0, &self.indices, ext)?;
+            self.net.step_many_learn(
+                chunk, l.d_pre, l.d_post, l.d_e, l.a_ltp, l.a_ltd, ml_lo, ml_hi, mr_lo, mr_hi,
+            )?;
+            let (a, b) = self.net.download_motor_sums()?;
+            ml_sum = ml_sum.wrapping_add(a);
+            mr_sum = mr_sum.wrapping_add(b);
+            done += chunk;
+        }
+        Ok((ml_sum, mr_sum))
     }
 
     /// Один подшаг с eligibility на GPU (step_into-путь: инстинкты,

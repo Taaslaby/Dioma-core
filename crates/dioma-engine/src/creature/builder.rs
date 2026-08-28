@@ -155,8 +155,20 @@ impl CreatureBuilder {
             let grown = grow(&layout, &genome.steering, self.seed);
             Creature::assemble(grown, genome, self.seed, params)
         } else {
-            // Дефолтное CPU существо
-            Creature::from_genome(genome, self.seed)
+            // Дефолтное CPU существо.
+            // ИСПРАВЛЕНИЕ perf-регрессии 42f30ed: здесь раньше стоял голый
+            // `Creature::from_genome(genome, self.seed)` — выбранный layout
+            // МОЛЧА ИГНОРИРОВАЛСЯ: from_genome всегда растит
+            // stage_c_lite_layout (760 нейронов, 175k синапсов). До стадии
+            // C это было бит-в-бит невидимо (from_genome растил stage_b —
+            // единственную схему), после 42f30ed бенчмарочная строка
+            // «CPU@300» мерила 760n-мозги → «одинаково с CPU@760». Растим
+            // ВЫБРАННУЮ схему через from_genome_grown — для дефолтного
+            // StageCLite путь бит-в-бит тот же (from_genome делает ровно
+            // это), для явных layout'ов возвращается документированное
+            // поведение («Стадия B — эталонные бенчмарки»).
+            let grown = grow(&layout, &genome.steering, self.seed);
+            Creature::from_genome_grown(genome, self.seed, grown)
         }
     }
 
