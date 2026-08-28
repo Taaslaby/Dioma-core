@@ -114,10 +114,10 @@ impl SimView {
                 // Именованный доступ вместо сырых vars[]: состояние берётся из
                 // `Arena::berry_info` (см. Berry — рост/отрастание/съедобность).
                 let b = arena.berry_info(id)?;
-                let phase = if b.edible {
+                let phase = if b.state.is_edible() {
                     1.0
                 } else {
-                    1.0 - (b.regrow / arena.berry_regrow).clamp(0.0, 1.0)
+                    1.0 - (b.state.regrow / arena.berry_regrow).clamp(0.0, 1.0)
                 };
                 Some(BerryView { id: b.id, pos: b.pos, phase })
             })
