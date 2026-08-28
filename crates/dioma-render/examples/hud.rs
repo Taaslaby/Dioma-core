@@ -10,9 +10,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use dioma_render::ui::{Anchor, Button, UiInput, UiSystem, UiTheme};
+use dioma_render::ui::{Anchor, UiInput, UiSystem};
 use dioma_render::{
-    atlas, Camera, Light, LightBatch, Renderer, Sprite, SpriteAtlas, SpriteBatch, SpriteFx,
+    atlas, Camera, GlassBackdrop, Light, LightBatch, PostFx, PostProcess, Renderer, Sprite,
+    SpriteAtlas, SpriteBatch, SpriteFx,
 };
 
 const VIEWPORT: [f32; 2] = [1280.0, 720.0];
@@ -32,6 +33,7 @@ fn main() {
 
 /// Настройки, редактируемые из UI (mutable-состояние «игры»).
 #[derive(Default)]
+#[allow(dead_code)] // демо-состояние: часть полей для будущих фич превью
 struct HudState {
     paused: bool,
     clicks: u32,
@@ -54,12 +56,15 @@ struct HudDemo {
     atlas: Option<SpriteAtlas>,
     batch: Option<SpriteBatch>,
     lights: Option<LightBatch>,
+    post: Option<PostProcess>,
+    backdrop: Option<GlassBackdrop>,
     ui: Option<UiSystem>,
     state: HudState,
     cursor: [f32; 2],
     mouse_down: bool,
     mouse_down_last_frame: bool,
     key: Option<dioma_render::ui::UiKey>,
+    wheel: f32,
     started: Instant,
     last_frame: Option<Instant>,
 }
@@ -78,6 +83,8 @@ impl HudDemo {
             atlas: None,
             batch: None,
             lights: None,
+            post: None,
+            backdrop: None,
             ui: None,
             state: HudState {
         load: 0.42,
@@ -91,6 +98,7 @@ impl HudDemo {
             mouse_down: false,
             mouse_down_last_frame: false,
             key: None,
+            wheel: 0.0,
             started: Instant::now(),
             last_frame: None,
         }
@@ -110,6 +118,8 @@ impl HudDemo {
         let Some(renderer) = self.renderer.as_mut() else { return };
         let Some(batch) = &mut self.batch else { return };
         let Some(lights) = &mut self.lights else { return };
+        let Some(post) = &mut self.post else { return };
+        let Some(backdrop) = &self.backdrop else { return };
         let Some(ui) = &mut self.ui else { return };
 
         // ── Сцена: два «существа» на орбитах (пауза останавливает время). ──
@@ -156,9 +166,11 @@ impl HudDemo {
             just_pressed: self.mouse_down && !self.mouse_down_last_frame,
             just_released: !self.mouse_down && self.mouse_down_last_frame,
             key: self.key,
+            scroll: self.wheel,
         };
         self.mouse_down_last_frame = self.mouse_down;
-        self.key = None; // клавиша «на один кадр»
+        self.key = None; // клавиша и колесо — «на один кадр»
+        self.wheel = 0.0;
 
         {
             let mut frame = ui.begin(atlas, queue, input, VIEWPORT);
@@ -173,7 +185,16 @@ impl HudDemo {
                 }
                 p.progress_bar("Загрузка", state.load);
             });
-            frame.upload(queue);
+            // Скролл-панель «журнал» справа: колесо прокручивает записи.
+        frame.scroll_panel(Anchor::TopRight, [220.0, 260.0], |p| {
+            for i in 1..=14 {
+                p.label_muted(&format!("запись {}: событие мира", i));
+                if i % 3 == 0 {
+                    p.separator();
+                }
+            }
+        });
+        frame.upload(queue);
         } // frame отдан: дальше атлас нужен только на чтение
 
         // ── Кадр: сцена → свет → UI → present. ──
@@ -192,9 +213,29 @@ impl HudDemo {
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("hud") });
         let camera = Camera::new(VIEWPORT);
-        renderer.render(queue, &mut encoder, &view, &*atlas, batch, &camera);
-        renderer.render_lights(queue, &mut encoder, &view, &camera, lights);
+        // Сцена и свет — в текстуру пост-процессора.
+        renderer.render(queue, &mut encoder, post.scene_view(), &*atlas, batch, &camera);
+        renderer.render_lights(queue, &mut encoder, post.scene_view(), &camera, lights);
+        // Блюр сцены → бэкдроп стекла (дикий radius = сильное матовое стекло).
+        post.apply(queue, &mut encoder, backdrop.view(), PostFx::Blur { radius: 6.0 }, t);
+        renderer.set_ui_backdrop(device, backdrop.view());
+        // Стеклянные подложки панелей поверх финальной картинки, затем виджеты.
+        post.apply(queue, &mut encoder, &view, PostFx::None, t);
+        renderer.render_ui_frost(queue, &mut encoder, &view, &*atlas, ui.frost_batch(), VIEWPORT);
         renderer.render_ui(queue, &mut encoder, &view, &*atlas, ui.batch(), VIEWPORT);
+        // Скролл-панели: каждый слой обрезается по своему прямоугольнику.
+        for layer in ui.scroll_layers() {
+            let batch = ui.scroll_batch(layer.id).expect("батч слоя после upload");
+            renderer.render_ui_clip(
+                queue,
+                &mut encoder,
+                &view,
+                &*atlas,
+                batch,
+                VIEWPORT,
+                Some(layer.clip()),
+            );
+        }
         queue.submit(Some(encoder.finish()));
         fg.present();
     }
@@ -270,6 +311,10 @@ impl winit::application::ApplicationHandler for HudDemo {
         self.atlas = Some(atlas);
         self.batch = Some(SpriteBatch::new(&device, 256));
         self.lights = Some(LightBatch::new(&device, 8));
+        let mut post = PostProcess::new(&device, format);
+        post.resize(&device, size.width.max(1), size.height.max(1));
+        self.post = Some(post);
+        self.backdrop = Some(GlassBackdrop::new(&device, format, size.width.max(1), size.height.max(1)));
     }
 
     fn window_event(
@@ -287,9 +332,22 @@ impl winit::application::ApplicationHandler for HudDemo {
                     config.height = size.height.max(1);
                     surface.configure(self.device.as_ref().unwrap(), config);
                 }
+                if let (Some(post), Some(backdrop), Some(device)) =
+                    (&mut self.post, &mut self.backdrop, &self.device)
+                {
+                    post.resize(device, size.width.max(1), size.height.max(1));
+                    backdrop.resize(device, size.width.max(1), size.height.max(1));
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = [position.x as f32, position.y as f32];
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // LinearPixels — привычные «щелчки» колеса.
+                self.wheel += match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                };
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 self.mouse_down = state == ElementState::Pressed;

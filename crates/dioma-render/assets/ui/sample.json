@@ -1,0 +1,32 @@
+{
+  "theme": "dark",
+  "panels": [
+    {
+      "kind": "glass",
+      "anchor": "top_left",
+      "size": [300, 240],
+      "children": [
+        { "label": "Существо #{id}" },
+        { "muted": "дофамин: {dopamine}" },
+        { "button": { "text": "Пауза", "action": "toggle_pause", "tooltip": "Space" } },
+        { "progress": "hunger" },
+        { "progress": "glucose" },
+        { "checkbox": { "bind": "sound", "text": "Звук" } },
+        { "slider": { "bind": "volume" } }
+      ]
+    },
+    {
+      "kind": "solid",
+      "anchor": "top_right",
+      "size": [220, 120],
+      "children": [
+        { "label": "Меню" },
+        { "row": [
+          { "button": { "text": "Сброс", "action": "reset", "size": "small" } },
+          { "button": { "text": "Тема", "action": "switch_theme", "size": "small" } }
+        ] },
+        { "switch": { "bind": "autosave", "text": "Автосохранение" } }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,5 @@
 //! Задел под «стекло» UI: текстура под размытую сцену.
 
-use crate::ui::UiSystem;
 
 /// Offscreen-текстура, в которую `PostProcess::apply(PostFx::Blur { .. })`
 /// пишет размытую сцену для стеклянных панелей ([`UiSystem::glass_panel`] +
@@ -18,7 +17,7 @@ use crate::ui::UiSystem;
 /// ```
 pub struct GlassBackdrop {
     texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    view: Option<wgpu::TextureView>,
     format: wgpu::TextureFormat,
     size: [u32; 2],
 }
@@ -27,12 +26,8 @@ impl GlassBackdrop {
     /// Создаёт текстуру `w×h` (RENDER_ATTACHMENT | TEXTURE_BINDING).
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, w: u32, h: u32) -> Self {
         let mut this = Self {
-            texture: device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("dioma-render glass backdrop"),
-                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                ..Self::descriptor(format)
-            }),
-            view: wgpu::TextureView::default(),
+            texture: device.create_texture(&Self::descriptor(format)),
+            view: None,
             format,
             size: [1, 1],
         };
@@ -62,12 +57,14 @@ impl GlassBackdrop {
         let mut desc = Self::descriptor(self.format);
         desc.size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
         self.texture = device.create_texture(&desc);
-        self.view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.view = Some(self.texture.create_view(&wgpu::TextureViewDescriptor::default()));
         self.size = [w, h];
     }
 
     /// View для `PostProcess::apply(.., backdrop.view(), PostFx::Blur { .. }, ..)`.
     pub fn view(&self) -> &wgpu::TextureView {
-        &self.view
+        self.view
+            .as_ref()
+            .expect("GlassBackdrop::resize вызывается в new() — view есть")
     }
 }

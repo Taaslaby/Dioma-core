@@ -138,6 +138,11 @@ impl SpriteBatch {
         self.sprites.len()
     }
 
+    /// Итератор по спрайтам батча (для тестов/отладки).
+    pub fn iter(&self) -> impl Iterator<Item = &Sprite> {
+        self.sprites.iter()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.sprites.is_empty()
     }

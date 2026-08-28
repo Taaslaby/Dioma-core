@@ -28,6 +28,7 @@
 pub mod glass;
 pub mod layout;
 pub mod motion;
+pub mod scene;
 pub mod nine_patch;
 pub mod text;
 pub mod theme;
@@ -73,6 +74,8 @@ pub struct UiInput {
     pub just_released: bool,
     /// Клавиша UI этого кадра (стрелки/Enter — навигация фокусом).
     pub key: Option<UiKey>,
+    /// Дельта колеса мыши за кадр (положительная — «на себя», контент вниз).
+    pub scroll: f32,
 }
 
 /// Клавиша, интересная UI (маппится из winit в бинаре).
@@ -147,6 +150,36 @@ pub struct UiSystem {
     focus_order_prev: Vec<u64>,
     /// Открытое popup-меню (id его кнопки); одновременно открыто одно.
     menu_open: Option<u64>,
+    /// Смещения скролла по id панели (между кадрами).
+    scroll_offsets: HashMap<u64, f32>,
+    /// Скролл-слои завершённого кадра (для `Renderer::render_ui_clip`).
+    pub(crate) scroll_layers: Vec<ScrollLayer>,
+    /// Пул батчей скролл-слоёв (ключ — id панели; переиспользуются).
+    scroll_pool: HashMap<u64, SpriteBatch>,
+    /// Копия устройства: ленивое создание батчей пула.
+    device: wgpu::Device,
+}
+
+/// Скролл-слой: контент панели, обрезаемый по её прямоугольнику.
+/// Рисуется `Renderer::render_ui_clip(.., Some(layer.clip()))` ПОСЛЕ
+/// основного батча (клип в экранных пикселях, origin — верхний левый угол).
+pub struct ScrollLayer {
+    /// Стабильный id панели (ключ батча в пуле UiSystem).
+    pub id: u64,
+    pub(crate) rect: Rect,
+}
+
+impl ScrollLayer {
+    /// Прямоугольник отсечения для `render_ui_clip`.
+    pub fn clip(&self) -> crate::renderer::ScissorRect {
+        crate::renderer::ScissorRect {
+            x: self.rect.x.round() as u32,
+            y: self.rect.y.round() as u32,
+            width: self.rect.w.round() as u32,
+            height: self.rect.h.round() as u32,
+        }
+    }
+
 }
 
 impl UiSystem {
@@ -216,6 +249,10 @@ impl UiSystem {
             focus_order: Vec::new(),
             focus_order_prev: Vec::new(),
             menu_open: None,
+            scroll_offsets: HashMap::new(),
+            scroll_layers: Vec::new(),
+            scroll_pool: HashMap::new(),
+            device: device.clone(),
         }
     }
 
@@ -223,6 +260,29 @@ impl UiSystem {
     /// [`UiFrame`], например в тестах).
     pub fn batch(&self) -> &SpriteBatch {
         &self.batch
+    }
+
+    /// Батч стекла последнего кадра (см. [`UiFrame::frost_batch`]).
+    pub fn frost_batch(&self) -> &SpriteBatch {
+        &self.frost_batch
+    }
+
+    /// Скролл-слои последнего кадра (см. [`UiFrame::scroll_panel`]):
+    /// рисуются после `render_ui`, каждый со своим клипом:
+    ///
+    /// ```text
+    /// for layer in ui.scroll_layers() {
+    ///     let batch = ui.scroll_batch(layer.id).unwrap();
+    ///     renderer.render_ui_clip(queue, enc, view, atlas, batch, vp, Some(layer.clip()));
+    /// }
+    /// ```
+    pub fn scroll_layers(&self) -> &[ScrollLayer] {
+        &self.scroll_layers
+    }
+
+    /// Батч скролл-панели по id (см. [`Self::scroll_layers`]).
+    pub fn scroll_batch(&self, id: u64) -> Option<&SpriteBatch> {
+        self.scroll_pool.get(&id)
     }
 
     /// Сменить тему (роли цветов, отступы). Текстуры панели/кнопки
@@ -305,6 +365,7 @@ impl UiSystem {
         self.glass_patch.uv =
             atlas.region("ui/panel_glass").expect("регион ui/panel_glass удалён из атласа");
         self.frost_sprites.clear();
+        self.scroll_layers.clear();
         self.button_patch.uv =
             atlas.region("ui/button").expect("регион ui/button удалён из атласа");
         self.rect_uv = atlas.region(self.rect_name).expect("регион ui/rect удалён из атласа");
@@ -317,6 +378,7 @@ impl UiSystem {
             input,
             sprites: Vec::with_capacity(256),
             frost: Vec::new(),
+            scrolls: Vec::new(),
             theme,
         }
     }
@@ -332,6 +394,8 @@ pub struct UiFrame<'a> {
     sprites: Vec<Sprite>,
     /// Стеклянные подложки кадра (рисуются отдельным frost-проходом).
     frost: Vec<Sprite>,
+    /// Скролл-панели кадра: (id, прямоугольник панели, спрайты контента).
+    scrolls: Vec<(u64, Rect, Vec<Sprite>)>,
     /// Тема кадра (снимок ролей на момент begin).
     theme: UiTheme,
 }
@@ -395,6 +459,99 @@ impl<'a> UiFrame<'a> {
         content(&mut panel);
     }
 
+    /// Панель со скроллом: контент выше панели прокручивается колесом мыши
+    /// (`UiInput.scroll`), обрезается по прямоугольнику панели (scissor),
+    /// справа рисуется полоса прокрутки.
+    ///
+    /// Контент рисуется в отдельный батч — игра рендерит его через
+    /// `Renderer::render_ui_clip(.., Some(layer.clip()))` для каждого слоя
+    /// [`UiSystem::scroll_layers`] ПОСЛЕ основного `render_ui`.
+    pub fn scroll_panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
+        let rect = anchored_rect(anchor, size, self.viewport, self.theme.screen_margin);
+        let id = self.scroll_id();
+        // Колесо применяем ДО сборки: hit-test этого же кадра видит свежий
+        // скролл (иначе клики по прокрученному контенту отстают на кадр).
+        let wheel = self.input.scroll * 48.0;
+        let old_scroll = self
+            .ui
+            .scroll_offsets
+            .get(&id)
+            .copied()
+            .unwrap_or(0.0)
+            .max(0.0)
+            + wheel;
+
+        // Фон и рамка панели — в основном батче (не скроллятся).
+        // Запоминаем индекс начала КОНТЕНА: после замыкания забираем всё,
+        // что добавилось ПОСЛЕ рамки (в кадре могут быть и другие панели).
+        let content_start = self.sprites.len();
+        let panel_sprites = self.ui.patch.sprites(rect, self.viewport, self.theme.panel, LAYER_PANEL);
+        self.sprites.extend(panel_sprites);
+
+        // Смещаем hit-test на скролл: курсор в координатах контента.
+        let saved_cursor = self.ui.cursor;
+        self.ui.cursor = [saved_cursor[0], saved_cursor[1] + old_scroll];
+
+        let content_rect = rect.inner(self.theme.content_margin);
+        let mut cursor_y = content_rect.y - old_scroll;
+        let mut panel = Panel {
+            ctx: Ctx {
+                ui: &mut *self.ui,
+                atlas: &mut *self.atlas,
+                queue: self.queue,
+                sprites: &mut self.sprites, // временно пишем в общий список
+                viewport: self.viewport,
+                input: self.input,
+            },
+            content: content_rect,
+            cursor_y: &mut cursor_y,
+            row_gap: self.theme.row_gap,
+        };
+        content(&mut panel);
+        let content_h = cursor_y + old_scroll - content_rect.y;
+        self.ui.cursor = saved_cursor;
+
+        // Кламп по факту контента (max зависит от высоты контента).
+        let max_scroll = (content_h - rect.h).max(0.0);
+        let scroll = old_scroll.clamp(0.0, max_scroll);
+        self.ui.scroll_offsets.insert(id, scroll);
+
+        // Забираем спрайты КОНТЕНА панели (добавленные замыканием) и
+        // сдвигаем вверх на scroll (мировая Y вверх = экранная вверх).
+        let taken: Vec<Sprite> = self.sprites.drain(content_start + panel_sprites.len()..).collect();
+        let mut shifted = taken;
+        for s in &mut shifted {
+            s.position[1] += scroll;
+        }
+        self.scrolls.push((id, rect, shifted));
+
+        // Полоса прокрутки (основной батч): справа внутри панели.
+        if max_scroll > 0.0 {
+            let track_w = 4.0;
+            let track_x = rect.x + rect.w - track_w - 2.0;
+            let visible = rect.h / content_h;
+            let thumb_h = (rect.h * visible).max(16.0);
+            let travel = rect.h - thumb_h - 4.0;
+            let ty = rect.y + 2.0 + (scroll / max_scroll) * travel;
+            let mut track = Sprite::new(
+                Rect::new(track_x, rect.y + 2.0, track_w, rect.h - 4.0).world_center(self.viewport),
+                [track_w, rect.h - 4.0],
+                self.ui.rect_uv,
+            );
+            track.tint = self.theme.bar_bg;
+            track.layer = LAYER_WIDGET + 1.0;
+            self.sprites.push(track);
+            let mut thumb = Sprite::new(
+                Rect::new(track_x, ty, track_w, thumb_h).world_center(self.viewport),
+                [track_w, thumb_h],
+                self.ui.rect_uv,
+            );
+            thumb.tint = self.theme.accent;
+            thumb.layer = LAYER_WIDGET + 1.0;
+            self.sprites.push(thumb);
+        }
+    }
+
     /// Заливает собранные спрайты в батч (`Renderer::render_ui` рисует его).
     pub fn upload(&mut self, queue: &wgpu::Queue) {
         // Стекло — в свой батч.
@@ -403,6 +560,22 @@ impl<'a> UiFrame<'a> {
             self.ui.frost_batch.push(s);
         }
         self.ui.frost_batch.upload(queue);
+        // Скролл-слои — в пул батчей (по id панели).
+        self.ui.scroll_layers.clear();
+        for (id, rect, sprites) in self.scrolls.drain(..) {
+            if !self.ui.scroll_pool.contains_key(&id) {
+                self.ui
+                    .scroll_pool
+                    .insert(id, SpriteBatch::new(&self.ui.device, 4096));
+            }
+            let batch = self.ui.scroll_pool.get_mut(&id).expect("только что вставлен");
+            batch.clear();
+            for s in sprites {
+                batch.push(s);
+            }
+            batch.upload(queue);
+            self.ui.scroll_layers.push(ScrollLayer { id, rect });
+        }
         // Кадр завершён: порядок фокуса становится «прошлым».
         self.ui.focus_order_prev = std::mem::take(&mut self.ui.focus_order);
         if let Some(f) = self.ui.focus {
@@ -427,6 +600,16 @@ impl<'a> UiFrame<'a> {
         &self.ui.frost_batch
     }
 
+    /// Скролл-слои кадра: каждый рисуется `render_ui_clip(.., Some(clip))`.
+    pub fn scroll_layers(&self) -> &[(u64, Rect, Vec<Sprite>)] {
+        &self.scrolls
+    }
+
+    /// Стабильный id скролл-панели кадра (порядок вызова).
+    fn scroll_id(&mut self) -> u64 {
+        0x5C10_0000 + self.scrolls.len() as u64
+    }
+
     /// Спрайты кадра (для отладки/тестов).
     pub fn sprites(&self) -> &[Sprite] {
         &self.sprites
@@ -439,17 +622,38 @@ impl<'a> UiFrame<'a> {
 }
 
 /// Спецификация кнопки (builder): `p.button(Button::new("X").small().disabled())`
-/// или просто `p.button("X")`.
+/// или просто `p.button("X")`. Для динамически собранного текста —
+/// [`Button::owned`] (карта UI, подстановки).
 pub struct Button<'l> {
-    label: &'l str,
+    label: std::borrow::Cow<'l, str>,
     size: Size,
     disabled: bool,
-    tooltip: Option<&'l str>,
+    tooltip: Option<std::borrow::Cow<'l, str>>,
 }
 
 impl<'l> Button<'l> {
     pub fn new(label: &'l str) -> Self {
-        Self { label, size: Size::Medium, disabled: false, tooltip: None }
+        Self {
+            label: std::borrow::Cow::Borrowed(label),
+            size: Size::Medium,
+            disabled: false,
+            tooltip: None,
+        }
+    }
+
+    /// Кнопка с владеемым текстом (текст собран в рантайме).
+    pub fn owned(label: impl Into<String>) -> Self {
+        Self {
+            label: std::borrow::Cow::Owned(label.into()),
+            size: Size::Medium,
+            disabled: false,
+            tooltip: None,
+        }
+    }
+
+    /// Текст кнопки.
+    pub fn label(&self) -> &str {
+        &self.label
     }
 
     /// Компактная кнопка (см. [`Size`]).
@@ -471,8 +675,8 @@ impl<'l> Button<'l> {
     }
 
     /// Подсказка, всплывающая после задержки hover (см. `TOOLTIP_DELAY_MS`).
-    pub fn tooltip(mut self, text: &'l str) -> Self {
-        self.tooltip = Some(text);
+    pub fn tooltip(mut self, text: impl Into<std::borrow::Cow<'l, str>>) -> Self {
+        self.tooltip = Some(text.into());
         self
     }
 }
@@ -653,6 +857,8 @@ impl<'a> Ctx<'a> {
     /// Кнопка в явном прямоугольнике (общая для [`Panel`] и [`Row`]).
     fn button_at(&mut self, rect: Rect, spec: Button<'_>) -> Response {
         let Button { label, size, disabled, tooltip } = spec;
+        let label = label.as_ref();
+        let tooltip = tooltip.as_ref().map(|t| t.as_ref());
         let id = self.id(label);
         let focused = self.register_focus(id);
         let hovered = !disabled && rect.contains(self.ui.cursor);
@@ -699,7 +905,7 @@ impl<'a> Ctx<'a> {
 
         // Tooltip: только после задержки hover, поверх всего, с флипом у края.
         if !disabled && tooltip.is_some() && self.tooltip_due(id, hovered) {
-            let text = tooltip.unwrap_or("");
+            let text = tooltip.unwrap_or_default();
             let scale = Size::Small.text_scale();
             let tw = self.text_width(text, scale);
             let th = self.line_height(scale);
@@ -1106,7 +1312,7 @@ impl<'a> Row<'a> {
     /// Кнопка естественной ширины (текст + паддинги).
     pub fn button<'s>(&mut self, spec: impl Into<Button<'s>>) -> Response {
         let b = spec.into();
-        let label = b.label;
+        let label = b.label.as_ref();
         let scale = b.size.text_scale();
         let tw = self.ctx.text_width(label, scale);
         let w = (tw + 28.0).min((self.max_x - self.x).max(0.0));

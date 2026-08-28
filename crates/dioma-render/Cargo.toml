@@ -12,6 +12,11 @@ description = "dioma-render — 2D спрайтовый рендер-движо�
 wgpu = { version = "24", features = ["wgsl"] }
 bytemuck = "1"
 png = "0.17"
+# Spine: декодирование страницы атласа из памяти.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# UI-карта: декларативные сцены (JSON) — контракт с Sprite Forge.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Текст UI: растеризация TTF (кириллица) в атлас глифов.
 fontdue = "0.9"
 egui = "0.31"
