@@ -521,6 +521,24 @@ impl Genome {
     }
 
     /// Расцветка существа (`None` — гена нет в геноме).
+    /// Природная изменчивость окраса: джиттер Coat от сида особи (±0.15 на
+    /// канал, clamp 0..1). Даёт стартовую вариацию для отбора в живой арене —
+    /// иначе у всех особей одинаковый дефолтный окрас и эволюции цвета нет.
+    pub fn jitter_coat(&mut self, seed: u64) {
+        let j = |k: u64| -> f32 {
+            let h = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(k.wrapping_mul(0xBF58_476D_1CE4_E5B9));
+            let v = ((h ^ (h >> 30)) & 0xFFFF) as f32 / 65535.0;
+            (v - 0.5) * 0.3
+        };
+        let base = self.coat().unwrap_or_default();
+        let cl = |v: f32| v.clamp(0.0, 1.0);
+        self.set_coat(CoatGene::new(
+            cl(base.r + j(1)),
+            cl(base.g + j(2)),
+            cl(base.b + j(3)),
+        ));
+    }
+
     pub fn coat(&self) -> Option<CoatGene> {
         self.gene_of(GeneKind::Coat)
             .map(|g| match &g.payload {

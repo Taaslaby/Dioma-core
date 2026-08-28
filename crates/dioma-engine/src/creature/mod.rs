@@ -558,7 +558,12 @@ impl Creature {
         // + дефолтные органеллы). Потомки (`spawn_child*`) перезаписывают его
         // результатом машины — здесь это базовый «дикий тип» для
         // конструкторов `new*`/`from_genome`.
-        let dna = Genome::from_creature_genome(&genome);
+        let mut dna = Genome::from_creature_genome(&genome);
+        // Природная изменчивость окраса от сида (±0.15/канал). Для wild-type
+        // конструкторов это финальный окрас; у потомков (`spawn_child*`) dna
+        // ЗАМЕНЯЕТСЯ результатом машины (кроссовер родителей) — джиттер не
+        // наследуется, наследуется микс родителей.
+        dna.jitter_coat(seed);
         let mut c = Creature {
             brain,
             blood,

@@ -79,6 +79,9 @@ struct SnapCrit {
     glucose: f32,
     fatigue: f32,
     alive: bool,
+    drive: f32,
+    rate_motor: f32,
+    coat: [f32; 3],
 }
 
 /// Снимок арены: тик, число ягод, все существа.
@@ -186,7 +189,7 @@ fn run_wild(total_ticks: u64) -> (Vec<Snap>, u64, Vec<WildEnd>, Vec<SleepStats>)
     let mut snaps = Vec::new();
     snaps.push(snapshot(&arena));
 
-    let n = arena.critters.len();
+    let mut n = arena.critters.len();
     let mut prev_food: Vec<u32> = arena.critters.iter().map(|c| c.creature.food_eaten()).collect();
     let mut follow_ticks: u64 = 0;
     // Окна бодрствования по существам (по-тиковый счёт, не снапшоты).
@@ -195,6 +198,15 @@ fn run_wild(total_ticks: u64) -> (Vec<Snap>, u64, Vec<WildEnd>, Vec<SleepStats>)
     let mut sleep_stats: Vec<SleepStats> = vec![SleepStats::default(); n];
     for t in 1..=total_ticks {
         arena.step();
+        // Новорождённые появляются посреди прогона (спаривание) — массивы
+        // наблюдения растягиваются под текущую популяцию (новые — нули).
+        if arena.critters.len() != n {
+            n = arena.critters.len();
+            prev_food.resize(n, 0);
+            was_sleeping.resize(n, false);
+            cur_wake.resize(n, 0);
+            sleep_stats.resize(n, SleepStats::default());
+        }
         // Прокси «следования» по тикам (дополнение к снапшотному): бодрствующий
         // не-едок в радиусе 6.0 от едока в тот же тик. Едок — существо,
         // у которого food_eaten вырос за этот тик.
@@ -284,6 +296,12 @@ fn snapshot(arena: &Arena) -> Snap {
                 glucose: c.creature.glucose(),
                 fatigue: c.creature.fatigue(),
                 alive: c.creature.alive(),
+                drive: c.last_drive,
+                rate_motor: c.last_rate_motor,
+                coat: {
+                    let coat = c.creature.dna.coat().unwrap_or_default();
+                    [coat.r, coat.g, coat.b]
+                },
             })
             .collect(),
     }
@@ -930,7 +948,7 @@ fn build_json(
             }
             json.push_str(&format!(
                 "{{\"id\":{},\"pos\":[{},{}],\"heading\":{},\"food_eaten\":{},\"wall_hits\":{},\
-\"sleeping\":{},\"hunger\":{},\"glucose\":{},\"fatigue\":{},\"alive\":{}}}",
+\"sleeping\":{},\"hunger\":{},\"glucose\":{},\"fatigue\":{},\"drive\":{},\"rate_motor\":{},\"coat\":[{},{},{}],\"alive\":{}}}",
                 c.id,
                 json_f32(c.pos.x),
                 json_f32(c.pos.y),
@@ -941,6 +959,11 @@ fn build_json(
                 json_f32(c.hunger),
                 json_f32(c.glucose),
                 json_f32(c.fatigue),
+                json_f32(c.drive),
+                json_f32(c.rate_motor),
+                json_f32(c.coat[0]),
+                json_f32(c.coat[1]),
+                json_f32(c.coat[2]),
                 c.alive
             ));
         }
@@ -1007,6 +1030,7 @@ fn build_json(
 fn main() {
     let mut out = PathBuf::from("tools/emergence_data.json");
     let mut quick = false;
+    let mut wild_ticks_override: Option<u64> = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         let mut val = || {
@@ -1018,6 +1042,7 @@ fn main() {
         match a.as_str() {
             "--out" => out = PathBuf::from(val()),
             "--quick" => quick = true,
+            "--ticks" => wild_ticks_override = Some(val().parse::<u64>().unwrap_or(WILD_TICKS)),
             "--help" | "-h" => {
                 println!(
                     "emergence_run — закрытый контур: «Дикий лес» + «Поколения» + метрики\n\
@@ -1028,6 +1053,7 @@ fn main() {
                      Параметры:\n  \
                      --out PATH  выходной JSON (по умолчанию tools/emergence_data.json)\n  \
                      --quick     смоук: 3000 тиков «Дикого леса», 2 поколения\n\
+                     --ticks N   длина «Дикого леса» в тиках (дефолт 30000)\n\
                      \n\
                      Дальше: python tools/emergence_report.py\n  \
                      рисует tools/emergence_report.html (самодостаточный, тёмная тема)."
@@ -1041,7 +1067,7 @@ fn main() {
         }
     }
 
-    let wild_ticks = if quick { WILD_TICKS_QUICK } else { WILD_TICKS };
+    let wild_ticks = wild_ticks_override.unwrap_or(if quick { WILD_TICKS_QUICK } else { WILD_TICKS });
     let evo_gens = if quick { EVO_GENS_QUICK } else { EVO_GENS };
 
     println!("Эмерджентность: закрытый контур (quick={quick})");
