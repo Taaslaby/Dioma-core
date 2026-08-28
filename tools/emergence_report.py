@@ -41,7 +41,12 @@
 import argparse
 import html
 import json
-import sys
+import sys as _sys
+try:
+    _sys.stdout.reconfigure(encoding='utf-8')
+    _sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 from pathlib import Path
 
 # ─────────────────────────────────────────────────────────────────────────────

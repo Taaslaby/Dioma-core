@@ -47,6 +47,21 @@ pub enum SpriteFx {
         /// Цвет полосы границы (RGBA).
         edge_color: [f32; 4],
     },
+    /// Мягкая drop-тень силуэта (`fx/shadow.wgsl`).
+    Shadow {
+        /// Смещение тени в мировых пикселях (в uv-пространстве; y = вверх мира).
+        offset: [f32; 2],
+        /// Радиус размытия края тени в текселях атласа.
+        radius: f32,
+        /// Цвет тени (обычно полупрозрачный чёрный).
+        color: [f32; 4],
+    },
+    /// Обесцвечивание с управляемой силой (`fx/grayscale.wgsl`) — мёртвые/
+    /// выключенные объекты (см. RENDER_SIM_BRIDGE: «мёртвое → серое»).
+    Grayscale {
+        /// Сила 0..1: 0 — без изменений, 1 — полностью серый.
+        amount: f32,
+    },
     /// Волнистость/болезненная дрожь (`fx/wobble.wgsl`).
     Wobble {
         /// Амплитуда смещения вершин по X в мировых пикселях.
@@ -68,6 +83,8 @@ impl SpriteFx {
             SpriteFx::Glow { .. } => 2,
             SpriteFx::Dissolve { .. } => 3,
             SpriteFx::Wobble { .. } => 4,
+            SpriteFx::Shadow { .. } => 5,
+            SpriteFx::Grayscale { .. } => 6,
         }
     }
 
@@ -83,6 +100,10 @@ impl SpriteFx {
             SpriteFx::Wobble { amplitude, frequency, speed } => {
                 ([amplitude, frequency, speed, 0.0], [0.0; 4])
             }
+            SpriteFx::Shadow { offset, radius, color } => {
+                ([offset[0], offset[1], radius, 0.0], color)
+            }
+            SpriteFx::Grayscale { amount } => ([amount, 0.0, 0.0, 0.0], [0.0; 4]),
         }
     }
 }
@@ -107,7 +128,10 @@ pub struct Sprite {
     pub position: [f32; 2],
     pub size: [f32; 2],
     pub rotation: f32,
+    /// Tint у ВЕРХА квада (экранная ориентация; при градиенте — верхний цвет).
     pub tint: [f32; 4],
+    /// Tint у НИЗА квада (вертикальный градиент; равен `tint`, если градиента нет).
+    pub tint_end: [f32; 4],
     pub uv_rect: [f32; 4],
     pub layer: f32,
     pub depth: f32,
@@ -122,6 +146,7 @@ impl Default for Sprite {
             size: [32.0, 32.0],
             rotation: 0.0,
             tint: [1.0, 1.0, 1.0, 1.0],
+            tint_end: [1.0, 1.0, 1.0, 1.0],
             uv_rect: [0.0, 0.0, 1.0, 1.0],
             layer: 0.0,
             depth: 0.0,
@@ -159,6 +184,15 @@ impl Sprite {
     /// Множитель цвета (RGBA, straight alpha).
     pub fn with_tint(mut self, tint: [f32; 4]) -> Self {
         self.tint = tint;
+        self.tint_end = tint;
+        self
+    }
+
+    /// Вертикальный градиент tint'а: `top` у верхнего края, `bottom` — у
+    /// нижнего (экранная ориентация). Полезно для неба, воды, панелей UI.
+    pub fn with_gradient(mut self, top: [f32; 4], bottom: [f32; 4]) -> Self {
+        self.tint = top;
+        self.tint_end = bottom;
         self
     }
 

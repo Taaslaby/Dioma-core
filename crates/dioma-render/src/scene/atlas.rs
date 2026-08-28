@@ -126,6 +126,53 @@ impl SpriteAtlas {
         self.add_rgba_impl(queue, name, w, h, pixels, [0.0, 0.0])
     }
 
+    /// Перезаписывает пиксели СУЩЕСТВУЮЩЕГО региона того же размера
+    /// (тема UI перекрашивает панель/кнопку без переукладки атласа).
+    /// Если региона нет — работает как [`Self::add_rgba`].
+    pub fn replace_rgba(
+        &mut self,
+        queue: &wgpu::Queue,
+        name: &str,
+        w: u32,
+        h: u32,
+        pixels: &[u8],
+    ) -> Result<(), String> {
+        let Some(info) = self.region_info(name) else {
+            return self.add_rgba(queue, name, w, h, pixels);
+        };
+        if pixels.len() != (w as usize) * (h as usize) * 4 {
+            return Err(format!(
+                "размер данных {} ≠ {w}×{h}×4",
+                pixels.len()
+            ));
+        }
+        if info.size_px != [w, h] {
+            return Err(format!(
+                "регион '{name}' имеет размер {:?}, замена {w}×{h} невозможна",
+                info.size_px
+            ));
+        }
+        // Пиксельный левый-верхний угол региона в текстуре из нормализованных uv.
+        let x = (info.uv[0] * self.width as f32).round() as u32;
+        let y = (info.uv[1] * self.height as f32).round() as u32;
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        Ok(())
+    }
+
     /// Внутренняя реализация добавления: как [`Self::add_rgba`], но с явным
     /// смещением обрезки (для PNG-регионов, у которых прозрачная рамка срезана).
     fn add_rgba_impl(

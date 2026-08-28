@@ -23,6 +23,8 @@ pub mod channels {
     pub const FILL: u8 = 0;
     /// Подсветка hover кнопки (0..1).
     pub const HOVER: u8 = 1;
+    /// Позиция бегунка switch (0..1).
+    pub const THUMB: u8 = 2;
 }
 
 /// Сэмплирует интерполяцию анимации в момент `now`.

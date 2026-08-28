@@ -130,6 +130,49 @@ impl UiFont {
         );
     }
 
+    /// Ширина текста по метрикам шрифта БЕЗ атласа (для лэйаута/тестов;
+    /// не растеризует новые глифы).
+    pub fn measure(&self, text: &str, scale: f32) -> f32 {
+        text.chars()
+            .map(|c| match self.glyphs.get(&c) {
+                Some(g) => g.advance * scale,
+                None => {
+                    let (m, _) = self.font.rasterize(c, BASE_PX);
+                    m.advance_width * scale
+                }
+            })
+            .sum()
+    }
+
+    /// Перенос по словам: строки шириной ≤ `max_width` (px при `scale`).
+    /// Слово длиннее строки остаётся целиком на своей строке (без разрыва).
+    pub fn wrap(&self, text: &str, max_width: f32, scale: f32) -> Vec<String> {
+        let space_w = self.measure(" ", scale);
+        let mut lines: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        let mut cur_w = 0.0f32;
+        for para in text.split('\n') {
+            for word in para.split(' ') {
+                let w = self.measure(word, scale);
+                let with_space = if cur.is_empty() { 0.0 } else { space_w };
+                if !cur.is_empty() && cur_w + with_space + w > max_width {
+                    lines.push(std::mem::take(&mut cur));
+                    cur_w = 0.0;
+                }
+                if !cur.is_empty() {
+                    cur.push(' ');
+                    cur_w += with_space;
+                }
+                cur.push_str(word);
+                cur_w += w;
+            }
+            // Абзац кончился (учитываем пустые строки из двух \n подряд).
+            lines.push(std::mem::take(&mut cur));
+            cur_w = 0.0;
+        }
+        lines
+    }
+
     /// Высота строки текста при масштабе `scale` (px).
     pub fn line_height(&self, scale: f32) -> f32 {
         (self.ascent - self.descent) * scale
@@ -199,6 +242,48 @@ mod tests {
         assert!(p.ymin < 0, "хвост «p» ниже базовой линии: ymin={}", p.ymin);
         assert!(a.ymin >= 0, "«A» стоит на базовой линии: ymin={}", a.ymin);
         assert!(p.ymin + i32::try_from(p.height).unwrap() < a.ymin + i32::try_from(a.height).unwrap(), "верх «p» ниже верха «A»");
+    }
+
+    fn test_font() -> UiFont {
+        let font = Font::from_bytes(FONT_BYTES, Default::default()).unwrap();
+        let line = font.horizontal_line_metrics(BASE_PX).unwrap();
+        // Без атласа: measure/wrap работают по метрикам шрифта напрямую.
+        UiFont {
+            font,
+            glyphs: HashMap::new(),
+            ascent: line.ascent,
+            descent: line.descent,
+        }
+    }
+
+    #[test]
+    fn wrap_breaks_by_words() {
+        let f = test_font();
+        let lines = f.wrap("Привет большой мир снова", 120.0, 0.5);
+        assert!(lines.len() >= 2, "должно быть несколько строк: {lines:?}");
+        for l in &lines {
+            let w = f.measure(l, 0.5);
+            assert!(w <= 120.0 + 0.5, "строка шире лимита: {l:?} = {w}");
+        }
+        // Слова не разорваны и не потеряны.
+        let joined = lines.join(" ");
+        assert_eq!(joined, "Привет большой мир снова", "{lines:?}");
+    }
+
+    #[test]
+    fn wrap_respects_paragraph_breaks() {
+        let f = test_font();
+        let lines = f.wrap("один
+
+два", 300.0, 0.5);
+        assert_eq!(lines, vec!["один".to_string(), "".to_string(), "два".to_string()], "{lines:?}");
+    }
+
+    #[test]
+    fn long_word_stays_whole() {
+        let f = test_font();
+        let lines = f.wrap("короткое ДлинноеСлово", 60.0, 0.5);
+        assert!(lines.iter().any(|l| l == "ДлинноеСлово"), "длинное слово целиком: {lines:?}");
     }
 
     #[test]

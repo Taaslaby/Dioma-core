@@ -107,7 +107,7 @@ pub struct ScissorRect {
 /// лэйауту пайплайнов, и wgpu дедуплицирует одинаковые bind group layout'ы.
 pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
-    fx_pipelines: [wgpu::RenderPipeline; 4],
+    fx_pipelines: [wgpu::RenderPipeline; 6],
     mesh_pipeline: wgpu::RenderPipeline,
     mesh_additive_pipeline: wgpu::RenderPipeline,
     /// Wireframe-каркас мешей (`PolygonMode::Line`); `None`, если
@@ -142,6 +142,11 @@ pub struct Renderer {
     /// » предыдущие, поэтому у оверлея и UI свои буферы камеры.
     ui_uniform_buffer: wgpu::Buffer,
     ui_camera_bind_group: wgpu::BindGroup,
+    /// Стеклянные панели: пайплайн (группа 2 — бэкдроп) + биндинг размытой сцены.
+    frost_pipeline: wgpu::RenderPipeline,
+    frost_backdrop_bgl: wgpu::BindGroupLayout,
+    frost_sampler: wgpu::Sampler,
+    ui_backdrop_bg: Option<wgpu::BindGroup>,
     clear_color: wgpu::Color,
     time: f32,
     /// Debug-тогглы проходов и оверлея (публичное поле — меняйте напрямую).
@@ -227,6 +232,22 @@ impl Renderer {
                 format,
                 crate::shaders::fx_wobble(),
                 "dioma-render wobble pipeline",
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+            ),
+            build_sprite_pipeline(
+                device,
+                &sprite_layout,
+                format,
+                crate::shaders::fx_shadow(),
+                "dioma-render shadow pipeline",
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+            ),
+            build_sprite_pipeline(
+                device,
+                &sprite_layout,
+                format,
+                crate::shaders::fx_grayscale(),
+                "dioma-render grayscale pipeline",
                 Some(wgpu::BlendState::ALPHA_BLENDING),
             ),
         ];
@@ -354,6 +375,53 @@ impl Renderer {
             parallax_bind_groups.push(bg);
         }
 
+        // ── Стеклянные панели (frosted glass): группа 2 — бэкдроп. ──
+        let frost_backdrop_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("dioma-render frost backdrop bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let frost_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("dioma-render frost pipeline layout"),
+            bind_group_layouts: &[&camera_layout, &atlas_layout, &frost_backdrop_bgl],
+            push_constant_ranges: &[],
+        });
+        let frost_pipeline = build_pipeline(
+            device,
+            &frost_layout,
+            format,
+            crate::shaders::fx_frost(),
+            "dioma-render frost pipeline",
+            &SpriteBatch::vertex_layouts(),
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
+        );
+        let frost_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("dioma-render frost sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        let ui_backdrop_bg = None;
+
         let debug_mesh_batch = MeshBatch::new(device, 8192, 16384);
 
         // Debug-шейпы: тот же layout вершин, что у мешей, но свой шейдер без
@@ -398,6 +466,10 @@ impl Renderer {
             overlay_camera_bind_group,
             ui_uniform_buffer,
             ui_camera_bind_group,
+            frost_pipeline,
+            frost_backdrop_bgl,
+            frost_sampler,
+            ui_backdrop_bg,
             clear_color: wgpu::Color::BLACK,
             time: 0.0,
             debug: RenderDebug::default(),
@@ -482,6 +554,71 @@ impl Renderer {
         self.render_with_clip(queue, encoder, view, atlas, batch, camera, None);
     }
 
+    /// Задаёт РАЗМЫТУЮ сцену для стеклянных панелей ([`Self::render_ui_frost`]).
+    /// Блюр делает `PostProcess::apply(PostFx::Blur { .. })` в текстуру
+    /// [`crate::ui::GlassBackdrop`]; здесь только биндинг.
+    pub fn set_ui_backdrop(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) {
+        self.ui_backdrop_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("dioma-render frost backdrop bg"),
+            layout: &self.frost_backdrop_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.frost_sampler),
+                },
+            ],
+        }));
+    }
+
+    /// Проход стеклянных подложек: рисует батч прямоугольников, сэмплирующих
+    /// размытый бэкдроп (см. [`Self::set_ui_backdrop`]). Вызывается ДО
+    /// [`Self::render_ui`], который рисует рамки и виджеты поверх стекла.
+    pub fn render_ui_frost(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        atlas: &SpriteAtlas,
+        batch: &SpriteBatch,
+        viewport: [f32; 2],
+    ) {
+        if batch.is_empty() {
+            return; // стекла нет — и прохода нет
+        }
+        let Some(backdrop_bg) = &self.ui_backdrop_bg else {
+            eprintln!("[renderer] render_ui_frost без set_ui_backdrop — стекло пропущено");
+            return;
+        };
+        let camera = Camera::new(viewport);
+        self.write_camera_uniform(queue, &self.ui_uniform_buffer, &camera);
+
+        let pass_color = wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("dioma-render frost pass"),
+            color_attachments: &[Some(pass_color)],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&self.frost_pipeline);
+        pass.set_bind_group(0, &self.ui_camera_bind_group, &[]);
+        pass.set_bind_group(1, atlas.bind_group(), &[]);
+        pass.set_bind_group(2, backdrop_bg, &[]);
+        pass.set_vertex_buffer(0, batch.vertex_buffer().slice(..));
+        pass.set_vertex_buffer(1, batch.instance_buffer().slice(..));
+        pass.set_index_buffer(batch.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..6, 0, 0..batch.len() as u32);
+        self.stats.draw_calls += 1;
+    }
+
     /// [`Self::render`] с опциональным прямоугольником отсечения
     /// ([`ScissorRect`]): рисует ТОЛЬКО внутрь области цели — сплит-скрин,
     /// миникарта, инспектор. Камера независима от прямоугольника: чтобы сценa
@@ -531,6 +668,22 @@ impl Renderer {
         batch: &SpriteBatch,
         viewport: [f32; 2],
     ) {
+        self.render_ui_clip(queue, encoder, view, atlas, batch, viewport, None);
+    }
+
+    /// [`Self::render_ui`] с опциональным прямоугольником отсечения
+    /// ([`ScissorRect`], экранные px): UI-окно рисуется только внутри своей
+    /// области — задел под скролл/клиппинг контента панелей.
+    pub fn render_ui_clip(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        atlas: &SpriteAtlas,
+        batch: &SpriteBatch,
+        viewport: [f32; 2],
+        clip: Option<ScissorRect>,
+    ) {
         self.draw_sprite_pass(
             queue,
             encoder,
@@ -541,7 +694,7 @@ impl Renderer {
             CameraSlot::Ui,
             false, // Load: сцена уже нарисована
             true,
-            None,
+            clip,
         );
     }
 
@@ -1054,8 +1207,8 @@ impl Renderer {
             }
             let pipeline = match fx_id {
                 0 => &self.pipeline,
-                id @ 1..=4 => &self.fx_pipelines[(id - 1) as usize],
-                _ => unreachable!("SpriteFx::id возвращает только 0..=4"),
+                id @ 1..=6 => &self.fx_pipelines[(id - 1) as usize],
+                _ => unreachable!("SpriteFx::id возвращает только 0..=6"),
             };
             pass.set_pipeline(pipeline);
             pass.draw_indexed(0..6, 0, range.start as u32..range.end as u32);

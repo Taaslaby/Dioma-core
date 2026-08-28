@@ -53,6 +53,21 @@ pub fn fx_wobble() -> String {
     world(include_str!("shaders/fx/wobble.wgsl"))
 }
 
+/// Мягкая drop-тень (`SpriteFx::Shadow`).
+pub fn fx_shadow() -> String {
+    world(include_str!("shaders/fx/shadow.wgsl"))
+}
+
+/// Обесцвечивание (`SpriteFx::Grayscale`).
+pub fn fx_grayscale() -> String {
+    world(include_str!("shaders/fx/grayscale.wgsl"))
+}
+
+/// Стеклянная подложка панели (группа 2 — размытый бэкдроп).
+pub fn fx_frost() -> String {
+    world(include_str!("shaders/fx/frost.wgsl"))
+}
+
 // ── Прочие мировые проходы ──────────────────────────────────────────────────
 
 /// Меши: произвольная триангулированная геометрия (CPU-скиннинг).

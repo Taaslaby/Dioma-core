@@ -27,6 +27,8 @@ struct VsIn {
     @location(8) instance_fx_id: u32,
     @location(9) instance_fx_a: vec4<f32>,
     @location(10) instance_fx_b: vec4<f32>,
+    // Вертикальный градиент tint: значение у НИЗА квада (верх — instance_tint).
+    @location(11) instance_tint_end: vec4<f32>,
 };
 
 struct VsOut {
@@ -51,7 +53,7 @@ fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
     out.clip_pos = vec4<f32>(world_to_ndc(world), 0.0, 1.0);
     out.uv = mix(in.instance_uv_rect.xy, in.instance_uv_rect.zw, in.corner_uv);
-    out.tint = in.instance_tint;
+    out.tint = mix(in.instance_tint_end, in.instance_tint, in.corner_uv.y);
     out.fx_a = in.instance_fx_a;
     out.fx_b = in.instance_fx_b;
     return out;

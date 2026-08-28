@@ -20,7 +20,7 @@ pub(crate) struct QuadVertex {
 unsafe impl Pod for QuadVertex {}
 unsafe impl Zeroable for QuadVertex {}
 
-/// Инстансные атрибуты спрайта (per-instance), строка 104 байта.
+/// Инстансные атрибуты спрайта (per-instance), строка 120 байт.
 ///
 /// Раскладка (смещения/шейдерные location см. в [`SpriteBatch::vertex_layouts`]):
 /// позиция, размер, поворот, тинт, UV-прямоугольник, пульс, id эффекта и два
@@ -37,6 +37,7 @@ pub(crate) struct InstanceData {
     pub fx_id: u32,
     pub fx_a: [f32; 4],
     pub fx_b: [f32; 4],
+    pub tint_end: [f32; 4],
 }
 
 unsafe impl Pod for InstanceData {}
@@ -55,6 +56,7 @@ impl From<&Sprite> for InstanceData {
             fx_id: s.fx.id(),
             fx_a,
             fx_b,
+            tint_end: s.tint_end,
         }
     }
 }
@@ -307,6 +309,11 @@ impl SpriteBatch {
                         format: wgpu::VertexFormat::Float32x4,
                         offset: 88,
                         shader_location: 10,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 104,
+                        shader_location: 11,
                     },
                 ],
             },

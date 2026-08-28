@@ -291,3 +291,92 @@ fn vignette_darkens_corners() {
     assert!(center > 600, "центр должен остаться белым, а это {center}");
     assert!(corner < center, "углы должны затемняться виньеткой: {corner} vs {center}");
 }
+
+// ── N. Drop-тень силуэта (`SpriteFx::Shadow`) ──────────────────────────────
+
+/// Тень: мягкое затемнение ПОД спрайтом (смещение вниз экрана), тело чистое.
+#[test]
+fn shadow_offset_blur() {
+    let Some(gpu) = gpu() else { return };
+    let (atlas, uv) = white_circle_atlas(&gpu.device, &gpu.queue);
+    let mut batch = SpriteBatch::new(&gpu.device, 8);
+    // offset (0, -6): uv y = вверх мира = вверх экрана → тень на 6 px НИЖЕ тела.
+    batch.push(Sprite::new([W as f32 * 0.5, H as f32 * 0.5], [40.0, 40.0], uv).with_fx(SpriteFx::Shadow {
+        offset: [0.0, -6.0],
+        radius: 3.0,
+        color: [0.0, 0.0, 0.0, 0.9],
+    }));
+    let data = render_batch(&gpu, &mut batch, &atlas);
+
+    // Тело спрайта — белое (тень под ним не видна).
+    let body = px(&data, W, W / 2, H / 2);
+    assert!(sum_rgb(body) > 600, "тело белое: {body:?}");
+    // Ниже тела (y=центр+14) — тень: темнее navy, но не тело.
+    let below = px(&data, W, W / 2, H / 2 + 23);
+    assert!(sum_rgb(below) < sum_rgb(body) - 300 && sum_rgb(below) > 80, "под телом тень: {below:?}");
+    // Выше тела (y=центр−14) — тени нет (offset ушёл вниз), чистый navy.
+    let above = px(&data, W, W / 2, H / 2 - 23);
+    assert!(sum_rgb(above) < 200, "над телом чистый фон (navy ~176): {above:?}");
+}
+
+// ── N+1. Обесцвечивание (`SpriteFx::Grayscale`) ────────────────────────────
+
+#[test]
+fn grayscale_desaturates() {
+    let Some(gpu) = gpu() else { return };
+    // Красный круг.
+    let mut atlas = SpriteAtlas::new(&gpu.device, 256);
+    let (tw, th, pixels) = atlas::circle_rgba(16, [255, 40, 40, 255]);
+    atlas.add_rgba(&gpu.queue, "red", tw, th, &pixels).expect("влезает");
+    let uv = atlas.region("red").unwrap();
+
+    // amount=1: красный канал уравнивается с остальными (серый).
+    let mut batch = SpriteBatch::new(&gpu.device, 8);
+    batch.push(Sprite::new([W as f32 * 0.5, H as f32 * 0.5], [40.0, 40.0], uv).with_fx(SpriteFx::Grayscale { amount: 1.0 }));
+    let data = render_batch(&gpu, &mut batch, &atlas);
+    let gray = px(&data, W, W / 2, H / 2);
+    assert!(
+        gray[0] > 100 && (gray[0] as i32 - gray[1] as i32).abs() < 8 && (gray[1] as i32 - gray[2] as i32).abs() < 8,
+        "полностью серый: {gray:?}"
+    );
+
+    // amount=0: без изменений — красный доминирует.
+    let mut batch2 = SpriteBatch::new(&gpu.device, 8);
+    batch2.push(Sprite::new([W as f32 * 0.5, H as f32 * 0.5], [40.0, 40.0], uv).with_fx(SpriteFx::Grayscale { amount: 0.0 }));
+    let data2 = render_batch(&gpu, &mut batch2, &atlas);
+    let red = px(&data2, W, W / 2, H / 2);
+    assert!(red[0] > 180 && red[0] > red[1] + 80, "красный остался красным: {red:?}");
+}
+
+// ── N+2. Вертикальный градиент tint ────────────────────────────────────────
+
+#[test]
+fn gradient_tint_top_bottom() {
+    let Some(gpu) = gpu() else { return };
+    let (atlas, uv) = white_circle_atlas(&gpu.device, &gpu.queue);
+    let mut batch = SpriteBatch::new(&gpu.device, 8);
+    batch.push(
+        Sprite::new([W as f32 * 0.5, H as f32 * 0.5], [40.0, 40.0], uv)
+            .with_gradient([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]),
+    );
+    let data = render_batch(&gpu, &mut batch, &atlas);
+
+    // Верх круга — красный, низ — синий (центральный столбец).
+    let top = px(&data, W, W / 2, H / 2 - 10);
+    let bottom = px(&data, W, W / 2, H / 2 + 10);
+    assert!(top[0] > 150 && top[0] > top[2] + 80, "верх красный: {top:?}");
+    assert!(bottom[2] > 150 && bottom[2] > bottom[0] + 80, "низ синий: {bottom:?}");
+}
+
+/// Градиент без разницы цветов == обычный tint (регрессия: не темнить низ).
+#[test]
+fn gradient_equal_is_uniform() {
+    let Some(gpu) = gpu() else { return };
+    let (atlas, uv) = white_circle_atlas(&gpu.device, &gpu.queue);
+    let mut batch = SpriteBatch::new(&gpu.device, 8);
+    batch.push(Sprite::new([W as f32 * 0.5, H as f32 * 0.5], [40.0, 40.0], uv));
+    let data = render_batch(&gpu, &mut batch, &atlas);
+    let top = px(&data, W, W / 2, H / 2 - 10);
+    let bottom = px(&data, W, W / 2, H / 2 + 10);
+    assert_eq!(top, bottom, "без with_gradient цвет однородный");
+}

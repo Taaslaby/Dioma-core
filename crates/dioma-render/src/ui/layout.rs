@@ -42,6 +42,84 @@ impl Rect {
             viewport[1] * 0.5 - (self.y + self.h * 0.5),
         ]
     }
+
+    /// Верхняя часть прямоугольника высотой `h`.
+    pub fn split_top(&self, h: f32) -> Rect {
+        Rect::new(self.x, self.y, self.w, h.min(self.h))
+    }
+
+    /// Левая часть прямоугольника шириной `w`.
+    pub fn split_left(&self, w: f32) -> Rect {
+        Rect::new(self.x, self.y, w.min(self.w), self.h)
+    }
+}
+
+/// Отступы по четырём сторонам (px).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Edges {
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
+}
+
+/// Сторона, с которой попап предпочитает появиться.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Side {
+    Above,
+    Below,
+    Left,
+    Right,
+}
+
+/// Позиционер попапов (tooltip/popup-menu) — заимствовано из gpui-component
+/// (`Positioner`): предпочитаемая сторона → флип, если не влезает →
+/// clamp внутрь вьюпорта с отступом `margin`.
+pub fn place_popup(
+    anchor: Rect,
+    popup: [f32; 2],
+    viewport: [f32; 2],
+    preferred: Side,
+    margin: f32,
+) -> Rect {
+    let fits = |side: Side| -> bool {
+        match side {
+            Side::Above => anchor.y >= popup[1] + margin,
+            Side::Below => viewport[1] - (anchor.y + anchor.h) >= popup[1] + margin,
+            Side::Left => anchor.x >= popup[0] + margin,
+            Side::Right => viewport[0] - (anchor.x + anchor.w) >= popup[0] + margin,
+        }
+    };
+    let side = if fits(preferred) {
+        preferred
+    } else {
+        let flipped = match preferred {
+            Side::Above => Side::Below,
+            Side::Below => Side::Above,
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        };
+        if fits(flipped) { flipped } else { preferred }
+    };
+
+    // Основная ось: вплотную к якорю со стороны `side` (уже проверено/флипнуто).
+    let (x, y) = match side {
+        Side::Above => (0.0, anchor.y - popup[1] - margin),
+        Side::Below => (0.0, anchor.y + anchor.h + margin),
+        Side::Left => (anchor.x - popup[0] - margin, 0.0),
+        Side::Right => (anchor.x + anchor.w + margin, 0.0),
+    };
+    // Поперечная ось: центр якоря.
+    let (mut x, mut y) = if matches!(side, Side::Above | Side::Below) {
+        (anchor.x + (anchor.w - popup[0]) * 0.5, y)
+    } else {
+        (x, anchor.y + (anchor.h - popup[1]) * 0.5)
+    };
+
+    // Clamp внутрь вьюпорта (попап меньше вьюпорта предполагается).
+    x = x.clamp(margin, (viewport[0] - popup[0] - margin).max(margin));
+    y = y.clamp(margin, (viewport[1] - popup[1] - margin).max(margin));
+    Rect::new(x, y, popup[0], popup[1])
 }
 
 /// Якорь панели на экране: к какому краю приколочен виджет.
@@ -113,6 +191,35 @@ mod tests {
             assert!((r.x - expected_corner[0]).abs() < 1e-4, "{a:?}: {r:?}");
             assert!((r.y - expected_corner[1]).abs() < 1e-4, "{a:?}: {r:?}");
         }
+    }
+
+    #[test]
+    fn place_popup_prefers_side_and_clamps() {
+        let vp = [400.0, 300.0];
+        let anchor = Rect::new(180.0, 280.0, 40.0, 20.0);
+        let size = [100.0, 30.0];
+        // Снизу якоря места нет (якорь у нижнего края) → флип наверх.
+        let r = place_popup(anchor, size, vp, Side::Below, 8.0);
+        assert!((r.y + r.h) < anchor.y + 0.1, "флип наверх: r.y={}", r.y);
+        // Клэмп по краям вьюпорта: центр якоря выталкивает попап за левый край —
+        // попап прижат к margin.
+        let r2 = place_popup(Rect::new(10.0, 100.0, 10.0, 10.0), size, vp, Side::Below, 8.0);
+        assert!((r2.x - 8.0).abs() < 0.1, "клэмп влево: r2.x={}", r2.x);
+        // Справа достаточно места → как просили.
+        let r3 = place_popup(Rect::new(180.0, 100.0, 40.0, 20.0), size, vp, Side::Right, 8.0);
+        assert!((r3.x - (180.0 + 40.0 + 8.0)).abs() < 0.1, "right side: r3.x={}", r3.x);
+    }
+
+    #[test]
+    fn splits_are_inside_parent() {
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        let top = r.split_top(20.0);
+        assert_eq!([top.w, top.h], [100.0, 20.0]);
+        let left = r.split_left(30.0);
+        assert_eq!([left.x, left.h], [10.0, 50.0]);
+        // Перебор не вылезает.
+        assert_eq!(r.split_top(100.0).h, 50.0);
+        assert_eq!(r.split_left(200.0).w, 100.0);
     }
 
     #[test]

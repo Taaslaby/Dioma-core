@@ -50,6 +50,8 @@ impl Size {
 /// Цветовая тема UI: роли → tint (RGBA, компоненты 0..1).
 #[derive(Clone, Debug)]
 pub struct UiTheme {
+    /// Светлая ли тема (для кнопок-переключателей; роли сами по себе данные).
+    pub is_light: bool,
     /// Подложка панели (поверх тёмной текстуры панели).
     pub panel: [f32; 4],
     /// Кнопка: обычная / под курсором / нажатая / недоступная.
@@ -68,6 +70,14 @@ pub struct UiTheme {
     pub bar_fill: [f32; 4],
     /// Акцентный цвет (выделение, ring фокуса — будущие виджеты).
     pub accent: [f32; 4],
+    /// Цвета ТЕКСТУР панели/кнопки: tint поверх них может только темнить,
+    /// поэтому светлая тема требует другой текстуры (см. `UiSystem::set_theme`).
+    pub panel_fill: [u8; 4],
+    pub panel_border: [u8; 4],
+    pub button_fill: [u8; 4],
+    pub button_border: [u8; 4],
+    /// Стекло панели: RGB множитель размытой сцены, A — плотность.
+    pub glass: [f32; 4],
     /// Отступы (spacing-токены, px).
     pub content_margin: f32,
     pub row_gap: f32,
@@ -78,6 +88,7 @@ impl UiTheme {
     /// Тёмная тема по умолчанию (совпадает с прежним `mod colors`).
     pub fn dark() -> Self {
         Self {
+            is_light: false,
             panel: [1.0, 1.0, 1.0, 1.0],
             button: [0.86, 0.88, 0.92, 1.0],
             button_hover: [1.0, 1.0, 1.0, 1.0],
@@ -89,6 +100,11 @@ impl UiTheme {
             bar_bg: [0.16, 0.17, 0.20, 1.0],
             bar_fill: [0.45, 0.85, 0.45, 1.0],
             accent: [0.40, 0.75, 1.0, 1.0],
+            panel_fill: [22, 26, 38, 216],
+            panel_border: [188, 196, 214, 255],
+            glass: [0.82, 0.88, 1.0, 0.78],
+            button_fill: [232, 238, 248, 255],
+            button_border: [96, 106, 130, 255],
             content_margin: 12.0,
             row_gap: 10.0,
             screen_margin: 16.0,
@@ -108,6 +124,7 @@ impl UiTheme {
     /// Светлая тема (демо/проверка переключения).
     pub fn light() -> Self {
         Self {
+            is_light: true,
             panel: [0.94, 0.95, 0.98, 1.0],
             button: [0.98, 0.99, 1.0, 1.0],
             button_hover: [1.0, 1.0, 1.0, 1.0],
@@ -119,6 +136,11 @@ impl UiTheme {
             bar_bg: [0.78, 0.80, 0.86, 1.0],
             bar_fill: [0.20, 0.62, 0.30, 1.0],
             accent: [0.15, 0.50, 0.90, 1.0],
+            panel_fill: [245, 247, 252, 240],
+            panel_border: [120, 130, 150, 255],
+            glass: [0.96, 0.98, 1.0, 0.85],
+            button_fill: [255, 255, 255, 255],
+            button_border: [110, 120, 145, 255],
             ..Self::dark()
         }
     }

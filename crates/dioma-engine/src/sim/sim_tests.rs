@@ -466,6 +466,50 @@
         );
     }
 
+    /// Зомби-ловушка (сторож): существо без моторной активности (RATE_MOTOR
+    /// ниже порога эмиттера усталости) всё равно засыпает — базальная
+    /// усталость копится от самого бодрствования. До фикса такие особи
+    /// простаивали 21K тиков без единого сна (исследование эмерджентности).
+    #[test]
+    fn idle_creature_sleeps_via_basal_fatigue() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 40.0, 20.0);
+        let mut arena = Arena::new(3, map);
+        // Без ягод: запаха нет, моторы тихие (RATE_MOTOR < порога эмиттера).
+        arena.spawn(Vec2::new(20.0, 10.0), 0.0, 3);
+        // Голод 0: охота не активируется — чистый «простой».
+        let mut slept_at = None;
+        for t in 0..1000u64 {
+            arena.step();
+            if arena.critters[0].sleeping {
+                slept_at = Some(t);
+                break;
+            }
+        }
+        let slept_at = slept_at
+            .expect("даже тихое существо должно засыпать (базальная усталость)");
+        assert!(
+            slept_at <= 810,
+            "базальное окно бодрствования: {} тиков",
+            slept_at
+        );
+        // Просыпается и снова засыпает — цикл замкнут.
+        let mut woke = false;
+        let mut slept_again = false;
+        for _ in 0..600u64 {
+            arena.step();
+            if !woke && !arena.critters[0].sleeping && arena.tick > slept_at {
+                woke = true;
+            }
+            if woke && arena.critters[0].sleeping {
+                slept_again = true;
+                break;
+            }
+        }
+        assert!(woke, "после сна существо просыпается");
+        assert!(slept_again, "цикл сон-бодрствование повторяется");
+    }
+
     // ─── Стены (запах/зеркало по комнатам, Sense::wall) ───────────────────
 
     /// Запах не проходит сквозь стены: ягода в соседней комнате у общей стены

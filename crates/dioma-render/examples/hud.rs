@@ -10,9 +10,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use dioma_render::ui::{Anchor, UiInput, UiSystem};
+use dioma_render::ui::{Anchor, Button, UiInput, UiSystem, UiTheme};
 use dioma_render::{
-    atlas, Camera, Light, LightBatch, Renderer, Sprite, SpriteAtlas, SpriteBatch,
+    atlas, Camera, Light, LightBatch, Renderer, Sprite, SpriteAtlas, SpriteBatch, SpriteFx,
 };
 
 const VIEWPORT: [f32; 2] = [1280.0, 720.0];
@@ -36,6 +36,10 @@ struct HudState {
     paused: bool,
     clicks: u32,
     load: f32,
+    light_theme: bool,
+    sound: bool,
+    volume: f32,
+    action: Option<&'static str>,
 }
 
 struct HudDemo {
@@ -55,6 +59,7 @@ struct HudDemo {
     cursor: [f32; 2],
     mouse_down: bool,
     mouse_down_last_frame: bool,
+    key: Option<dioma_render::ui::UiKey>,
     started: Instant,
     last_frame: Option<Instant>,
 }
@@ -74,10 +79,18 @@ impl HudDemo {
             batch: None,
             lights: None,
             ui: None,
-            state: HudState { load: 0.42, ..Default::default() },
+            state: HudState {
+        load: 0.42,
+        light_theme: false,
+        sound: true,
+        volume: 0.6,
+        action: None,
+        ..Default::default()
+    },
             cursor: [0.0; 2],
             mouse_down: false,
             mouse_down_last_frame: false,
+            key: None,
             started: Instant::now(),
             last_frame: None,
         }
@@ -106,10 +119,24 @@ impl HudDemo {
 
         let body_uv = atlas.region("body").expect("регион body создаётся в resumed");
         batch.clear();
+        // Градиентное небо (новая фича: with_gradient) — прямоугольник на весь
+        // «мир» позади существ.
+        {
+            let sky_uv = [0.0, 0.0, 1.0, 1.0]; // единый квад без атласной области: используем ui/flat
+            let flat_uv = atlas.region("ui/rect").expect("регион ui/rect создаётся в UiSystem::new");
+            let _ = sky_uv;
+            let mut sky = Sprite::new([320.0, 100.0], [640.0, 200.0], flat_uv)
+                .with_gradient([0.35, 0.55, 0.95, 0.9], [0.10, 0.16, 0.40, 0.9]);
+            sky.layer = -1.0;
+            batch.push(sky);
+        }
         for i in 0..2u32 {
             let ang = sim_t * 0.8 + i as f32 * std::f32::consts::PI;
             let pos = [320.0 + ang.cos() * 120.0, 80.0 + ang.sin() * 50.0];
-            batch.push(Sprite::new(pos, [26.0, 26.0], body_uv));
+            let mut s = Sprite::new(pos, [26.0, 26.0], body_uv);
+            // Drop-тень: новый fx — силуэт, смещённый вниз и размытый.
+            s.fx = SpriteFx::Shadow { offset: [0.0, -4.0], radius: 3.0, color: [0.0, 0.0, 0.0, 0.5] };
+            batch.push(s);
         }
         batch.upload(queue);
 
@@ -128,8 +155,10 @@ impl HudDemo {
             down: self.mouse_down,
             just_pressed: self.mouse_down && !self.mouse_down_last_frame,
             just_released: !self.mouse_down && self.mouse_down_last_frame,
+            key: self.key,
         };
         self.mouse_down_last_frame = self.mouse_down;
+        self.key = None; // клавиша «на один кадр»
 
         {
             let mut frame = ui.begin(atlas, queue, input, VIEWPORT);
@@ -264,6 +293,25 @@ impl winit::application::ApplicationHandler for HudDemo {
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 self.mouse_down = state == ElementState::Pressed;
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                use winit::keyboard::PhysicalKey;
+                if event.state == ElementState::Pressed {
+                    self.key = match event.physical_key {
+                        PhysicalKey::Code(winit::keyboard::KeyCode::ArrowUp) => {
+                            Some(dioma_render::ui::UiKey::Up)
+                        }
+                        PhysicalKey::Code(winit::keyboard::KeyCode::ArrowDown) => {
+                            Some(dioma_render::ui::UiKey::Down)
+                        }
+                        PhysicalKey::Code(winit::keyboard::KeyCode::Enter) => {
+                            Some(dioma_render::ui::UiKey::Enter)
+                        }
+                        _ => None,
+                    };
+                } else {
+                    self.key = None;
+                }
             }
             WindowEvent::RedrawRequested => {
                 self.frame();
