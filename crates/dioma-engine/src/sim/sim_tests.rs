@@ -1084,3 +1084,257 @@
             d.critters[0].ticks_since_reward
         );
     }
+
+    // ─── Спаривание (фаза 1.75): естественное рождение ──────────────────
+
+    use crate::creature::dna::CoatGene;
+
+    /// Сцена спаривания: комната 12×8, пара в 4 юнитах, оба зрелы
+    /// (age = MATURITY_TICKS) и сыты. Пол выставлен вручную: по умолчанию
+    /// пол — детерминированный хэш сида, тесту нужна пара М×Ж. Глюкоза по
+    /// желанию запинена на 200 — метаболизм не съедает условие
+    /// элегибельности за окно теста (в тесте платежа пина нет: платёж
+    /// должен быть виден).
+    fn mating_scene(pin_glucose: bool) -> Arena {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 12.0, 8.0);
+        let mut arena = Arena::new(7, map);
+        arena.spawn(Vec2::new(4.0, 4.0), 0.0, 7);
+        arena.spawn(Vec2::new(8.0, 4.0), 0.0, 9);
+        for (i, sex) in [(0usize, Sex::Male), (1usize, Sex::Female)] {
+            let c = &mut arena.critters[i];
+            c.creature.age = MATURITY_TICKS;
+            c.creature.genome.sex = sex;
+            c.creature.blood.conc[chem::GLUCOSE] = 200.0;
+            if pin_glucose {
+                c.creature.blood.pins.push((chem::GLUCOSE, 200.0));
+            }
+        }
+        arena
+    }
+
+    /// Шагать до рождения (население > before), потолок ожидания 30 тиков.
+    /// Тела снуют — дистанция пары иногда за радиусом, поэтому окно
+    /// щедрое, а условие проверяется каждый тик. None — рождение не вышло.
+    fn wait_birth(arena: &mut Arena, before: usize) -> Option<()> {
+        for _ in 0..30 {
+            arena.step();
+            if arena.critters.len() > before {
+                return Some(());
+            }
+        }
+        None
+    }
+
+    /// Спаривание рождает ребёнка с СМЕШАННЫМИ генами: пара зрелых сытых
+    /// существ разного пола рядом → третий криттер через существующую
+    /// машину генов (`spawn_child_pair` — кроссовер + мутация). Ребёнок:
+    /// голод новорождённого арены, пол от своего сида, возраст 0, потолок
+    /// жизни от сида, расцветка — каналы ОБОИХ родителей; родители в
+    /// кулдауне, ребёнок в комнате.
+    #[test]
+    fn mating_produces_child_with_mixed_genes() {
+        let mut arena = mating_scene(true);
+        // Расцветки разведены по каналам (как в mod.rs:spawn_child_pair_mixes_coat).
+        arena
+            .critters[0]
+            .creature
+            .dna
+            .set_coat(CoatGene::new(0.9, 0.1, 0.9));
+        arena
+            .critters[1]
+            .creature
+            .dna
+            .set_coat(CoatGene::new(0.1, 0.9, 0.1));
+
+        wait_birth(&mut arena, 2).expect("пара должна родить ребёнка");
+        assert_eq!(
+            arena.critters.len(),
+            3,
+            "после спаривания населения 3 (кулдаун исключает второе немедленное рождение)"
+        );
+        let child = &arena.critters[2];
+        // Новорождённый арены рождается голодным (первая еда достижима).
+        assert_eq!(
+            child.creature.hunger(),
+            ARENA_NEWBORN_HUNGER,
+            "у ребёнка HUNGER == ARENA_NEWBORN_HUNGER"
+        );
+        // Возраст и потолок жизни — новорождённый: age = 0, max_age от сида.
+        assert_eq!(child.creature.age, 0, "ребёнок рождается с нулевым возрастом");
+        assert_eq!(
+            child.max_age,
+            critter_max_age(child.creature.seed),
+            "потолок жизни ребёнка — жребий его сида"
+        );
+        // Пол — от сида ребёнка (внутри spawn_child_pair), не от родителей.
+        assert_eq!(
+            child.creature.sex(),
+            Sex::from_seed(child.creature.seed),
+            "пол ребёнка от его сида"
+        );
+        // Гены — наследие машины кроссовера: каждый канал расцветки — от
+        // одного из родителей (+ мутационный дрейф ±5%). Канальный кроссовер,
+        // дающий каналы ОБОИХ сторон при зафиксированном сидe, покрыт
+        // юнит-тестом creature::spawn_child_pair_mixes_coat; здесь сид
+        // ребёнка — чистая функция тика рождения (детерминированно, но
+        // заранее не зафиксирован), поэтому проверка по-канальная.
+        let coat = child
+            .creature
+            .dna
+            .coat()
+            .expect("ребёнок пары несёт расцветку");
+        let near = |x: f32, ys: [f32; 2]| ys.iter().any(|&y| (x - y).abs() < 0.2);
+        assert!(
+            near(coat.r, [0.9, 0.1]) && near(coat.g, [0.1, 0.9]) && near(coat.b, [0.9, 0.1]),
+            "расцветка ребёнка — каналы от родителей (+дрейф): {coat:?}"
+        );
+        // Родители уходят в кулдаун; ребёнок — в комнате (не в пустоте).
+        assert!(
+            arena.critters[0].mate_cooldown > 0 && arena.critters[1].mate_cooldown > 0,
+            "оба родителя в кулдауне после спаривания"
+        );
+        assert!(
+            arena.world.map.room_at(child.pos).is_some(),
+            "ребёнок рождается в игровой комнате"
+        );
+    }
+
+    /// Пара одного пола ребёнка не рожает: правило пары — строго М×Ж
+    /// (зеркальный случай Ж×Ж отсекается той же проверкой пола самки).
+    #[test]
+    fn same_sex_no_child() {
+        let mut arena = mating_scene(true);
+        arena.critters[1].creature.genome.sex = Sex::Male; // теперь оба самцы
+        for _ in 0..60 {
+            arena.step();
+        }
+        assert_eq!(arena.critters.len(), 2, "пара одного пола не рождает");
+    }
+
+    /// Кулдаун держит: после рождения родители (единственная зрелая пара на
+    /// арене) не рождают второй раз, пока MATE_COOLDOWN не истечёт; снятый
+    /// хостом кулдаун возвращает способность (условия элегибельности те же).
+    #[test]
+    fn cooldown_blocks() {
+        let mut arena = mating_scene(true);
+        wait_birth(&mut arena, 2).expect("первое спаривание должно состояться");
+        assert_eq!(arena.critters.len(), 3);
+        // Окно 300 тиков много меньше MATE_COOLDOWN=3000: рождений нет.
+        for _ in 0..300 {
+            arena.step();
+        }
+        assert_eq!(
+            arena.critters.len(),
+            3,
+            "кулдаун держит: окно 300 << MATE_COOLDOWN={MATE_COOLDOWN}"
+        );
+        // Снятие кулдауна хостом: пара сводится снова (возраст/сытость на
+        // месте, позиции выставлены рядом — в прогоне тела разбрелись).
+        for c in arena.critters.iter_mut().take(2) {
+            c.mate_cooldown = 0;
+        }
+        arena.critters[0].pos = Vec2::new(4.0, 4.0);
+        arena.critters[1].pos = Vec2::new(8.0, 4.0);
+        wait_birth(&mut arena, 3).expect("после снятия кулдауна второе рождение");
+        assert_eq!(arena.critters.len(), 4);
+    }
+
+    /// Потолок населения (экология, MAX_CRITTERS): зрелая сытая разнополая
+    /// пара на заполненной арене не рожает; после прореживания та же пара
+    /// рождает — блокировала именно экология, а не элегибельность.
+    #[test]
+    fn population_cap_blocks() {
+        let mut map = WorldMap::default();
+        map.add_room(0.0, 0.0, 80.0, 40.0);
+        let mut arena = Arena::new(21, map);
+        // MAX_CRITTERS предзаспавненных сеткой по комнате.
+        for i in 0..MAX_CRITTERS {
+            let x = 5.0 + (i % 8) as f32 * 10.0;
+            let y = 5.0 + (i / 8) as f32 * 15.0;
+            arena.spawn(Vec2::new(x, y), 0.0, 100 + i as u64);
+        }
+        // Пара-кандидат: зрелая, сытая (пин), разнополая, рядом.
+        for (i, sex) in [(0usize, Sex::Male), (1usize, Sex::Female)] {
+            let c = &mut arena.critters[i];
+            c.creature.age = MATURITY_TICKS;
+            c.creature.genome.sex = sex;
+            c.creature.blood.conc[chem::GLUCOSE] = 200.0;
+            c.creature.blood.pins.push((chem::GLUCOSE, 200.0));
+        }
+        arena.critters[1].pos = arena.critters[0].pos + Vec2::new(3.0, 0.0);
+        for _ in 0..40 {
+            arena.step();
+        }
+        assert_eq!(
+            arena.critters.len(),
+            MAX_CRITTERS,
+            "на потолке населения спаривания нет"
+        );
+        // Контраст: та же пара после прореживания рождает.
+        arena.critters.truncate(2);
+        arena.critters[0].pos = Vec2::new(4.0, 4.0);
+        arena.critters[1].pos = Vec2::new(8.0, 4.0);
+        wait_birth(&mut arena, 2).expect("после прореживания пара рождает");
+        assert_eq!(arena.critters.len(), 3);
+    }
+
+    /// Оба родителя платят MATE_GLUCOSE_COST (пин снят: платёж виден в
+    /// крови; метаболизм и активность только увеличивают разницу).
+    #[test]
+    fn parents_pay_glucose() {
+        let mut arena = mating_scene(false);
+        let before: Vec<f32> = arena
+            .critters
+            .iter()
+            .map(|c| c.creature.glucose())
+            .collect();
+        wait_birth(&mut arena, 2).expect("пара без пина тоже рождает");
+        for (i, &g0) in before.iter().enumerate().take(2) {
+            let paid = g0 - arena.critters[i].creature.glucose();
+            assert!(
+                paid >= MATE_GLUCOSE_COST - 0.5,
+                "родитель {i} заплатил MATE_GLUCOSE_COST (плюс метаболизм): {paid}"
+            );
+        }
+    }
+
+    /// Незрелые не спариваются: всё готово (сытость, пол, радиус), кроме
+    /// возраста — age < MATURITY_TICKS рождений не даёт (за окно теста
+    /// возраст доращивается до 60 — всё ещё много меньше 3600).
+    #[test]
+    fn immature_no_mating() {
+        let mut arena = mating_scene(true);
+        for c in arena.critters.iter_mut().take(2) {
+            c.creature.age = 0;
+        }
+        for _ in 0..60 {
+            arena.step();
+        }
+        assert_eq!(
+            arena.critters.len(),
+            2,
+            "незрелые (age < MATURITY_TICKS) не спариваются"
+        );
+    }
+
+    /// Спаривание детерминировано: два одинаковых прогона — бит-в-бит одна
+    /// судьба (позиции всех троих и сид ребёнка совпадают; ГСЧ симуляции
+    /// не тронут, сид ребёнка — чистая функция тика/сидов/номера пары).
+    #[test]
+    fn mating_is_deterministic() {
+        let run = || {
+            let mut arena = mating_scene(true);
+            for _ in 0..30 {
+                arena.step();
+                if arena.critters.len() > 2 {
+                    break;
+                }
+            }
+            (
+                arena.critters.iter().map(|c| c.pos).collect::<Vec<_>>(),
+                arena.critters.get(2).map(|c| c.creature.seed),
+            )
+        };
+        assert_eq!(run(), run(), "одна сцена — одно потомство (бит-в-бит)");
+    }

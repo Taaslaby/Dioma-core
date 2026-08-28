@@ -332,6 +332,10 @@ impl Evolution {
             vis_l: 0.0,
             vis_r: 0.0,
             ticks_since_reward: 0,
+            // Кулдауна нет: спаривание отсрочивает сама незрелость (age=0;
+            // при generation_ticks > MATURITY_TICKS естественная фаза 1.75
+            // может сработать и внутри поколения — это эмерджентно и честно).
+            mate_cooldown: 0,
             max_age: critter_max_age(child_seed),
         });
         *child_idx += 1;
@@ -369,6 +373,7 @@ impl Evolution {
             vis_l: 0.0,
             vis_r: 0.0,
             ticks_since_reward: 0,
+            mate_cooldown: 0, // см. push_child: отсрочка — незрелость
             max_age: critter_max_age(child_seed),
         });
         *child_idx += 1;
