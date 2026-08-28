@@ -7,7 +7,7 @@
 //! Координаты, столкновения, еда и социальное наблюдение принадлежат хосту
 //! (`crate::sim::Arena`).
 use crate::biology::metabolism::{chem, locus, Blood};
-use crate::brain::grow::{grow, grow_gpu, stage_c_lite_layout};
+use crate::brain::grow::{grow, grow_gpu, stage_b_layout};
 use crate::brain::instincts::Instinct;
 use crate::brain::neurons::{gains_from, Brain, PlasticityParams, BRAIN_STEPS_PER_TICK};
 use crate::rng::XorShift;
@@ -233,7 +233,7 @@ impl Creature {
     /// `lr = 0` отключает обучение — мозг-«камень» для сравнения).
     pub fn new_with_params(seed: u64, params: PlasticityParams) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
+        let grown = grow(&stage_b_layout(), &genome.steering, seed);
         Self::assemble(grown, genome, seed, params)
     }
 
@@ -243,7 +243,7 @@ impl Creature {
     /// (см. `brain::neurons::Brain::new_gpu`).
     pub fn new_gpu(seed: u64) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
+        let grown = grow(&stage_b_layout(), &genome.steering, seed);
         Self::assemble_gpu(grown, genome, seed)
     }
 
@@ -252,7 +252,7 @@ impl Creature {
     /// тихо падает на CPU (прометей сам выбирает бэкенд).
     pub fn new_gpu_grown(seed: u64) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow_gpu(&stage_c_lite_layout(), &genome.steering, seed);
+        let grown = grow_gpu(&stage_b_layout(), &genome.steering, seed);
         Self::assemble_gpu(grown, genome, seed)
     }
 
@@ -261,7 +261,7 @@ impl Creature {
     /// на CPU. Вызывает `assemble_pooled` (регистрирует коннектом в пуле).
     pub fn new_pooled(seed: u64, pool: &mut crate::brain::gpu_pool::BrainPool) -> Self {
         let genome = CreatureGenome::default();
-        let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
+        let grown = grow(&stage_b_layout(), &genome.steering, seed);
         Self::assemble_pooled(grown, genome, seed, pool)
     }
 
@@ -275,7 +275,7 @@ impl Creature {
     /// grown-весов), не движковый дефолт 6: иначе обучение не могло бы
     /// потенцировать пути, и эффект Болдуина был бы невозможен.
     pub fn from_genome(genome: CreatureGenome, seed: u64) -> Self {
-        let grown = grow(&stage_c_lite_layout(), &genome.steering, seed);
+        let grown = grow(&stage_b_layout(), &genome.steering, seed);
         Self::from_genome_grown(genome, seed, grown)
     }
 

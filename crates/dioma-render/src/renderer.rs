@@ -2,13 +2,13 @@
 //! + uniform камеры + параллакс-слои фона (см. [`Renderer::render_parallax`])
 //! + профилировщик и debug-оверлей.
 
-use crate::atlas::{atlas_bind_group_layout, SpriteAtlas};
-use crate::batch::SpriteBatch;
+use crate::scene::atlas::{atlas_bind_group_layout, SpriteAtlas};
+use crate::scene::batch::SpriteBatch;
 use crate::camera::Camera;
 use crate::debug::{DebugFont, RenderDebug};
-use crate::light::LightBatch;
-use crate::mesh::{Mesh, MeshBatch, MeshBlend, MeshVertex};
-use crate::particles::ParticleSystem;
+use crate::fx::light::LightBatch;
+use crate::scene::mesh::{Mesh, MeshBatch, MeshBlend, MeshVertex};
+use crate::fx::particles::ParticleSystem;
 use crate::profiler::RenderStats;
 
 /// Аддитивный блендинг (в wgpu 22 нет готового `BlendState::ADDITIVE`).
@@ -63,6 +63,9 @@ const PARALLAX_RING: usize = 4;
 enum CameraSlot {
     Main,
     Parallax(usize),
+    /// Screen-space UI (см. `render_ui`): свой буфер, чтобы не конфликтовать
+    /// с оверлеем, если оба прохода в одном submit.
+    Ui,
 }
 
 /// Прямоугольник отсечения отрисовки в ЭКРАННЫХ пикселях цели
@@ -135,6 +138,10 @@ pub struct Renderer {
     /// и его запись не должна перетирать мировую камеру основного прохода.
     overlay_uniform_buffer: wgpu::Buffer,
     overlay_camera_bind_group: wgpu::BindGroup,
+    /// Отдельная пара для UI-прохода: write_buffer в одном submit «перезаписывает
+    /// » предыдущие, поэтому у оверлея и UI свои буферы камеры.
+    ui_uniform_buffer: wgpu::Buffer,
+    ui_camera_bind_group: wgpu::BindGroup,
     clear_color: wgpu::Color,
     time: f32,
     /// Debug-тогглы проходов и оверлея (публичное поле — меняйте напрямую).
@@ -183,7 +190,7 @@ impl Renderer {
             device,
             &sprite_layout,
             format,
-            include_str!("shaders/sprite.wgsl"),
+            crate::shaders::sprite(),
             "dioma-render sprite pipeline",
             Some(wgpu::BlendState::ALPHA_BLENDING),
         );
@@ -194,7 +201,7 @@ impl Renderer {
                 device,
                 &sprite_layout,
                 format,
-                include_str!("shaders/fx/outline.wgsl"),
+                crate::shaders::fx_outline(),
                 "dioma-render outline pipeline",
                 Some(wgpu::BlendState::ALPHA_BLENDING),
             ),
@@ -202,7 +209,7 @@ impl Renderer {
                 device,
                 &sprite_layout,
                 format,
-                include_str!("shaders/fx/glow.wgsl"),
+                crate::shaders::fx_glow(),
                 "dioma-render glow pipeline",
                 Some(wgpu::BlendState::ALPHA_BLENDING),
             ),
@@ -210,7 +217,7 @@ impl Renderer {
                 device,
                 &sprite_layout,
                 format,
-                include_str!("shaders/fx/dissolve.wgsl"),
+                crate::shaders::fx_dissolve(),
                 "dioma-render dissolve pipeline",
                 Some(wgpu::BlendState::ALPHA_BLENDING),
             ),
@@ -218,7 +225,7 @@ impl Renderer {
                 device,
                 &sprite_layout,
                 format,
-                include_str!("shaders/fx/wobble.wgsl"),
+                crate::shaders::fx_wobble(),
                 "dioma-render wobble pipeline",
                 Some(wgpu::BlendState::ALPHA_BLENDING),
             ),
@@ -232,7 +239,7 @@ impl Renderer {
             device,
             &sprite_layout,
             format,
-            include_str!("shaders/mesh/mesh.wgsl"),
+            crate::shaders::mesh(),
             "dioma-render mesh pipeline",
             std::slice::from_ref(&MeshBatch::vertex_layout()),
             Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -242,7 +249,7 @@ impl Renderer {
             device,
             &sprite_layout,
             format,
-            include_str!("shaders/mesh/mesh.wgsl"),
+            crate::shaders::mesh(),
             "dioma-render mesh additive pipeline",
             std::slice::from_ref(&MeshBatch::vertex_layout()),
             Some(MESH_ADDITIVE_BLENDING),
@@ -256,7 +263,7 @@ impl Renderer {
                 device,
                 &sprite_layout,
                 format,
-                include_str!("shaders/mesh/mesh.wgsl"),
+                crate::shaders::mesh(),
                 "dioma-render mesh wireframe pipeline",
                 std::slice::from_ref(&MeshBatch::vertex_layout()),
                 Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -276,7 +283,7 @@ impl Renderer {
             device,
             &light_layout,
             format,
-            include_str!("shaders/light/radial.wgsl"),
+            crate::shaders::light_radial(),
             "dioma-render light pipeline",
             &LightBatch::vertex_layout(),
             Some(ADDITIVE_BLENDING),
@@ -292,7 +299,7 @@ impl Renderer {
             device,
             &particle_layout,
             format,
-            include_str!("shaders/particle/particle.wgsl"),
+            crate::shaders::particle(),
             "dioma-render particle pipeline",
             &ParticleSystem::vertex_layout(),
             Some(ADDITIVE_BLENDING),
@@ -336,6 +343,8 @@ impl Renderer {
         };
         let (overlay_uniform_buffer, overlay_camera_bind_group) =
             make_camera_pair("dioma-render overlay camera uniform");
+        let (ui_uniform_buffer, ui_camera_bind_group) =
+            make_camera_pair("dioma-render ui camera uniform");
         let mut parallax_uniforms = Vec::with_capacity(PARALLAX_RING);
         let mut parallax_bind_groups = Vec::with_capacity(PARALLAX_RING);
         for i in 0..PARALLAX_RING {
@@ -359,7 +368,7 @@ impl Renderer {
             device,
             &debug_shape_layout,
             format,
-            include_str!("shaders/debug/shape.wgsl"),
+            crate::shaders::debug_shape(),
             "dioma-render debug shape pipeline",
             std::slice::from_ref(&MeshBatch::vertex_layout()),
             Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -387,6 +396,8 @@ impl Renderer {
             parallax_ring_index: 0,
             overlay_uniform_buffer,
             overlay_camera_bind_group,
+            ui_uniform_buffer,
+            ui_camera_bind_group,
             clear_color: wgpu::Color::BLACK,
             time: 0.0,
             debug: RenderDebug::default(),
@@ -500,6 +511,37 @@ impl Renderer {
             true,
             true,
             clip,
+        );
+    }
+
+    /// Проход screen-space UI поверх сцены: батч спрайтов рисуется
+    /// identity-камерой (`Camera::new(viewport)`, зум 1) с `LoadOp::Load`.
+    /// Предназначен для модуля `ui` (и любых HUD-батчей в экранных пикселях):
+    /// у прохода СВОЙ uniform-буфер камеры — можно соседствовать с
+    /// `render_debug_overlay` в одном кадре.
+    ///
+    /// Fx-эффекты разрешены (outline у hover-кнопок); clip не нужен —
+    /// UI-батч и так целиком экранный.
+    pub fn render_ui(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        atlas: &SpriteAtlas,
+        batch: &SpriteBatch,
+        viewport: [f32; 2],
+    ) {
+        self.draw_sprite_pass(
+            queue,
+            encoder,
+            view,
+            atlas,
+            batch,
+            &Camera::new(viewport),
+            CameraSlot::Ui,
+            false, // Load: сцена уже нарисована
+            true,
+            None,
         );
     }
 
@@ -930,6 +972,7 @@ impl Renderer {
         match slot {
             CameraSlot::Main => (&self.uniform_buffer, &self.camera_bind_group),
             CameraSlot::Parallax(i) => (&self.parallax_uniforms[i], &self.parallax_bind_groups[i]),
+            CameraSlot::Ui => (&self.ui_uniform_buffer, &self.ui_camera_bind_group),
         }
     }
 
@@ -1071,7 +1114,7 @@ fn build_sprite_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
-    shader_src: &str,
+    shader_src: String,
     label: &str,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
@@ -1092,7 +1135,7 @@ fn build_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
-    shader_src: &str,
+    shader_src: String,
     label: &str,
     vertex_layouts: &[wgpu::VertexBufferLayout<'_>],
     blend: Option<wgpu::BlendState>,
@@ -1107,7 +1150,7 @@ fn build_pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers: vertex_layouts,
         },
@@ -1122,7 +1165,7 @@ fn build_pipeline(
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,

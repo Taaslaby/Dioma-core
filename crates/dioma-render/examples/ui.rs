@@ -90,7 +90,7 @@ struct UiDemo {
 impl UiDemo {
     fn new(smoke_frames: Option<u32>) -> Self {
         Self {
-            instance: wgpu::Instance::new(wgpu::InstanceDescriptor::default()),
+            instance: wgpu::Instance::new(&wgpu::InstanceDescriptor::default()),
             window: None,
             surface: None,
             config: None,
@@ -278,8 +278,8 @@ fn build_ui(ctx: &egui::Context, state: &mut UiState, camera_zoom: &mut f32, sta
         ctx.set_visuals(visuals);
         let mut style = (*ctx.style()).clone();
         style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-        style.visuals.widgets.noninteractive.rounding = egui::Rounding::same(8.0);
-        style.visuals.widgets.inactive.rounding = egui::Rounding::same(6.0);
+        style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(8);
+        style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
         ctx.set_style(style);
 
         // ── HUD: статистика кадра ──
@@ -318,7 +318,7 @@ fn build_ui(ctx: &egui::Context, state: &mut UiState, camera_zoom: &mut f32, sta
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 egui::Frame::window(ui.style())
-                    .inner_margin(egui::Margin::same(24.0))
+                    .inner_margin(egui::Margin::same(24))
                     .show(ui, |ui| {
                         ui.set_min_width(300.0);
                         ui.heading("Меню");

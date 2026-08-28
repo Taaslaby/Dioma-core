@@ -219,7 +219,7 @@ struct Demo {
 impl Demo {
     fn new(smoke_frames: Option<u32>) -> Self {
         Self {
-            instance: wgpu::Instance::new(wgpu::InstanceDescriptor::default()),
+            instance: wgpu::Instance::new(&wgpu::InstanceDescriptor::default()),
             window: None,
             surface: None,
             device: None,

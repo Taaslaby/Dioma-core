@@ -21,7 +21,7 @@ pub enum BrainLayout {
 
 impl Default for BrainLayout {
     fn default() -> Self {
-        BrainLayout::StageCLite
+        BrainLayout::StageB
     }
 }
 

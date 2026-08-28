@@ -114,7 +114,7 @@ pub enum MeshBlend {
 /// Все пушнутые меши интерливируются в ОДИН вершинный и ОДИН индексный массив
 /// (индексы ремапятся смещением базовой вершины). Вместимость фиксирована:
 /// `max_vertices` вершин и `max_indices` индексов (u32). Перед рендером
-/// вызывайте [`Self::upload`] — контракт как у [`crate::batch::SpriteBatch`].
+/// вызывайте [`Self::upload`] — контракт как у [`crate::scene::batch::SpriteBatch`].
 pub struct MeshBatch {
     meshes: Vec<Mesh>,
     vertex_buffer: wgpu::Buffer,
@@ -153,7 +153,7 @@ impl MeshBatch {
     }
 
     /// Добавляет меш. Паника при переполнении вместимости (как
-    /// [`crate::batch::SpriteBatch::push`]).
+    /// [`crate::scene::batch::SpriteBatch::push`]).
     pub fn push(&mut self, mesh: &Mesh) {
         let pushed_vertices: usize = self.meshes.iter().map(|m| m.vertices.len()).sum();
         let pushed_indices: usize = self.meshes.iter().map(|m| m.indices.len()).sum();
@@ -187,7 +187,7 @@ impl MeshBatch {
     /// Интерливирует все пушнутые меши в один вершинный и один индексный
     /// массив и заливает их на GPU (индексы ремапятся смещением базовой
     /// вершины). Пустой батч пропускается. Вызывайте после push/clear перед
-    /// рендером — контракт как у [`crate::batch::SpriteBatch::upload`].
+    /// рендером — контракт как у [`crate::scene::batch::SpriteBatch::upload`].
     pub fn upload(&mut self, queue: &wgpu::Queue) {
         if self.meshes.is_empty() {
             self.drawn_vertex_count = 0;

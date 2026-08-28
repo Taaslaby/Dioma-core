@@ -1,9 +1,12 @@
-//! Debug-тулкит: тогглы проходов рендера ([`RenderDebug`]) и пиксельный
+//! Debug-тулкит: тогглы проходов рендера ([`RenderDebug`]), пиксельный
 //! текстовый оверлей ([`DebugFont`]) — встроенный 8×8 bitmap-шрифт (public
-//! domain, классический font8x8 на основе IBM VGA), ни одной зависимости.
+//! domain, классический font8x8 на основе IBM VGA), ни одной зависимости —
+//! и профайлер кадра ([`profiler::RenderStats`] через [`crate::Renderer::stats`]).
 
-use crate::atlas::SpriteAtlas;
-use crate::mesh::Mesh;
+pub mod profiler;
+
+use crate::scene::atlas::SpriteAtlas;
+use crate::scene::mesh::Mesh;
 use wgpu::util::DeviceExt;
 
 /// Тогглы проходов рендера и оверлея.

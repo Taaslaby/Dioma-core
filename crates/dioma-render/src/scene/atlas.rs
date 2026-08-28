@@ -557,7 +557,7 @@ fn write_block(
         height: h,
         depth_or_array_layers: 1,
     };
-    let copy_view = wgpu::ImageCopyTexture {
+    let copy_view = wgpu::TexelCopyTextureInfo {
         texture,
         mip_level: mip,
         origin: wgpu::Origin3d { x, y, z: 0 },
@@ -567,7 +567,7 @@ fn write_block(
         queue.write_texture(
             copy_view,
             pixels,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(row_pitch),
                 rows_per_image: Some(h),
@@ -586,7 +586,7 @@ fn write_block(
         queue.write_texture(
             copy_view,
             &padded,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(row_pitch),
                 rows_per_image: Some(h),

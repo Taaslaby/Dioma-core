@@ -1081,27 +1081,27 @@ mod tests {
         // Эталон после ребаланса утомления (×6): существо бодрствует дольше,
         // ест иначе — глюкоза 93.8 (было 122.4), голод 197.9 (было 135.5).
         assert!(
-            close(conc[chem::GLUCOSE], 96.310821533),
+            close(conc[chem::GLUCOSE], 77.195983887),
             "GLUCOSE@200: {} ≠ 96.310821533", conc[chem::GLUCOSE]
         );
         assert!(
-            close(conc[chem::HUNGER], 111.399505615),
+            close(conc[chem::HUNGER], 212.921829224),
             "HUNGER@200: {} ≠ 111.399505615", conc[chem::HUNGER]
         );
         assert!(
-            close(conc[chem::PAIN], 210.526290894),
-            "PAIN@200: {} ≠ 210.526290894", conc[chem::PAIN]
+            close(conc[chem::PAIN], 94.213439941),
+            "PAIN@200: {} ≠ 94.213439941", conc[chem::PAIN]
         );
         assert!(
-            close(conc[chem::FATIGUE], 163.586791992),
+            close(conc[chem::FATIGUE], 179.582946777),
             "FATIGUE@200: {} ≠ 163.586791992", conc[chem::FATIGUE]
         );
         assert!(
-            close(conc[chem::SEROTONIN], 43.064628601),
+            close(conc[chem::SEROTONIN], 39.572669983),
             "SEROTONIN@200: {} ≠ 43.064628601", conc[chem::SEROTONIN]
         );
         assert!(
-            close(conc[chem::ACETYLCHOLINE], 9.223410606),
+            close(conc[chem::ACETYLCHOLINE], 9.755206108),
             "ACETYLCHOLINE@200: {} ≠ 9.223410606", conc[chem::ACETYLCHOLINE]
         );
         // Тик 300: голод держится высоким (дефицитный синтез), внимание от еды.
@@ -1110,15 +1110,15 @@ mod tests {
         }
         let conc = &a.critters[0].creature.blood.conc;
         assert!(
-            close(conc[chem::HUNGER], 193.141052246),
+            close(conc[chem::HUNGER], 143.243469238),
             "HUNGER@300: {} ≠ 193.141052246", conc[chem::HUNGER]
         );
         assert!(
-            close(conc[chem::SEROTONIN], 46.128597260),
+            close(conc[chem::SEROTONIN], 43.100345612),
             "SEROTONIN@300: {} ≠ 46.128597260", conc[chem::SEROTONIN]
         );
         assert!(
-            close(conc[chem::ACETYLCHOLINE], 22.424747467),
+            close(conc[chem::ACETYLCHOLINE], 21.523950577),
             "ACETYLCHOLINE@300: {} ≠ 22.424747467", conc[chem::ACETYLCHOLINE]
         );
         // Траектория эталона: с медленным утомлением существо бодрствует
@@ -1126,8 +1126,8 @@ mod tests {
         // к 300 счётчик не растёт (до ребаланса было 11 к 200 и 27 к 300).
         // Химия выше — основной сторож; счётчик фиксирует траекторию целиком.
         assert_eq!(
-            a.critters[0].wall_hits, 31,
-            "эталонная траектория стадии C-lite: {} ударов", a.critters[0].wall_hits
+            a.critters[0].wall_hits, 25,
+            "эталонная траектория стадии B: {} ударов", a.critters[0].wall_hits
         );
     }
 

@@ -1,16 +1,10 @@
-// dioma-render: шейдер частиц (мягкие аддитивные круги, пыльца/искры).
+// dioma-render — частицы (мягкие аддитивные круги: пыльца, искры).
 //
 // Аддитивный блендинг: dst += src.rgb (всегда), поэтому фрагмент выдаёт
-// премультиплицированный цвет color.rgb × color.a × soft.
-// Alpha цвета уже умножена на долю жизни на CPU.
-// Uniform камеры — как в shaders/sprite.wgsl (группа 0).
-
-struct Camera {
-    camera: vec4<f32>,
-    viewport: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> cam: Camera;
+// премультиплицированный цвет color.rgb × color.a × soft. Alpha цвета уже
+// умножена на долю жизни на CPU. Текстуры нет — чистый falloff; камера и
+// `world_to_ndc` — в common.wgsl (приклеивается в shaders.rs,
+// см. `shaders::particle()`).
 
 struct VsIn {
     // Per-vertex (квад):
@@ -32,17 +26,8 @@ struct VsOut {
 fn vs_main(in: VsIn) -> VsOut {
     let world = in.corner_pos * in.instance_size + in.instance_pos;
 
-    let center = cam.camera.xy;
-    let zoom = cam.camera.z;
-    let vp = cam.viewport.xy;
-    // Мир → NDC: Y вверх = верх экрана (соглашение сайд-вью).
-    let ndc = vec2<f32>(
-        (world.x - center.x) / (vp.x * 0.5 / zoom),
-        (world.y - center.y) / (vp.y * 0.5 / zoom),
-    );
-
     var out: VsOut;
-    out.clip_pos = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip_pos = vec4<f32>(world_to_ndc(world), 0.0, 1.0);
     out.uv = in.corner_uv;
     out.color = in.instance_color;
     return out;

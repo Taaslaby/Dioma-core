@@ -21,7 +21,7 @@ static SHARED_GPU: OnceLock<Option<TestGpu>> = OnceLock::new();
 /// `None` — GPU недоступен, тест пропускается.
 pub fn gpu() -> Option<TestGpu> {
     let init = || {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let mut adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
         if adapter.is_none() {

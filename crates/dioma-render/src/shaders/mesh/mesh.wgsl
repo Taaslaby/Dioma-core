@@ -1,26 +1,16 @@
-// dioma-render: mesh-пайплайн: вершины уже в мировых координатах (CPU-скиннинг).
+// dioma-render — меши: произвольная триангулированная 2D-геометрия.
 //
-// Произвольная триангулированная 2D-геометрия: per-vertex позиция (мир),
-// UV в атласе и цвет. Мир → NDC камерой — то же преобразование, что в
-// спрайтовом шейдере (uniform камеры 2×vec4):
-//   camera.xy    — центр камеры (мировые координаты)
-//   camera.z     — зум
-//   camera.w     — время (секунды)
-//   viewport.xy  — размер вьюпорта в пикселях
-//   viewport.zw  — не используется (0, 0)
-
-struct Camera {
-    camera: vec4<f32>,
-    viewport: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> cam: Camera;
+// Вершины уже в мировых координатах (CPU-скиннинг): позиция, UV в атласе и
+// per-vertex цвет. Основа для деформаций и Spine-подобной анимации.
+// Камера и `world_to_ndc` — в common.wgsl (приклеивается в shaders.rs,
+// см. `shaders::mesh()`); раскладка вершины — `MeshBatch::vertex_layout()`.
+// Тот же исходник собирает три пайплайна: обычный, аддитивный и wireframe.
 
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(1) var atlas_sampler: sampler;
 
 struct VsIn {
-    @location(0) position: vec2<f32>,
+    @location(0) position: vec2<f32>, // мировые координаты
     @location(1) uv: vec2<f32>,
     @location(2) color: vec4<f32>,
 };
@@ -33,18 +23,8 @@ struct VsOut {
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
-    // Мир → NDC: Y вверх = верх экрана (соглашение сайд-вью); мировая Y растёт
-    // вверх — как в спрайтовом шейдере.
-    let center = cam.camera.xy;
-    let zoom = cam.camera.z;
-    let vp = cam.viewport.xy;
-    let ndc = vec2<f32>(
-        (in.position.x - center.x) / (vp.x * 0.5 / zoom),
-        (in.position.y - center.y) / (vp.y * 0.5 / zoom),
-    );
-
     var out: VsOut;
-    out.clip_pos = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip_pos = vec4<f32>(world_to_ndc(in.position), 0.0, 1.0);
     out.uv = in.uv;
     out.color = in.color;
     return out;

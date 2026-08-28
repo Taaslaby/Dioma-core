@@ -1,20 +1,14 @@
-// dioma-render: шейдер свечения/эмиссии (счастливые существа, дофаминовое сияние).
+// dioma-render — внешнее свечение (`SpriteFx::Glow`).
 //
-// вершинная часть синхронизирована с shaders/sprite.wgsl
-// NDC: Y вверх = верх экрана (соглашение сайд-вью); мировая Y растёт вверх.
-// (атрибуты 0–10 те же; параметры эффекта: fx_a = (radius, intensity, 0, 0),
-// fx_b = цвет свечения; radius/intensity в мировых пикселях).
+// Счастливые существа, дофаминовое сияние. Спрайтовое семейство: атрибуты
+// 0–10 те же, что в sprite.wgsl; камера и хелперы — в common.wgsl
+// (приклеивается в shaders.rs, см. `shaders::fx_glow()`).
+// Параметры эффекта: fx_a = (radius, intensity, 0, 0), fx_b = цвет свечения
+// (radius/intensity — в мировых единицах).
 //
 // Спрайт рисуется как обычно, ПЛЮС внешнее свечение: радиальное кольцо у краёв
 // квада (расстояние от края в UV). Альфа-блендинг; тело спрайта остаётся
 // непрозрачным (множитель (1 − base.a) убирает свечение внутри него).
-
-struct Camera {
-    camera: vec4<f32>,
-    viewport: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> cam: Camera;
 
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(1) var atlas_sampler: sampler;
@@ -30,6 +24,7 @@ struct VsIn {
     @location(5) instance_tint: vec4<f32>,
     @location(6) instance_uv_rect: vec4<f32>,
     @location(7) instance_pulse: vec4<f32>,
+    // Параметры эффекта (общие для fx-семейства):
     @location(8) instance_fx_id: u32,
     @location(9) instance_fx_a: vec4<f32>,
     @location(10) instance_fx_b: vec4<f32>,
@@ -47,30 +42,17 @@ struct VsOut {
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
-    let pulse_scale = mix(
-        in.instance_pulse.x,
-        in.instance_pulse.y,
-        0.5 + 0.5 * sin(cam.camera.w * in.instance_pulse.z + in.instance_pulse.w),
-    );
-    let scaled = in.corner_pos * in.instance_size * pulse_scale;
-    let c = cos(in.instance_rot);
-    let s = sin(in.instance_rot);
-    let rotated = vec2<f32>(
-        scaled.x * c - scaled.y * s,
-        scaled.x * s + scaled.y * c,
-    );
-    let world = rotated + in.instance_pos;
-
-    let center = cam.camera.xy;
-    let zoom = cam.camera.z;
-    let vp = cam.viewport.xy;
-    let ndc = vec2<f32>(
-        (world.x - center.x) / (vp.x * 0.5 / zoom),
-        (world.y - center.y) / (vp.y * 0.5 / zoom),
+    let world = quad_world(
+        in.corner_pos,
+        in.instance_size,
+        pulse_scale(in.instance_pulse),
+        0.0,
+        in.instance_rot,
+        in.instance_pos,
     );
 
     var out: VsOut;
-    out.clip_pos = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip_pos = vec4<f32>(world_to_ndc(world), 0.0, 1.0);
     out.uv = mix(in.instance_uv_rect.xy, in.instance_uv_rect.zw, in.corner_uv);
     out.tint = in.instance_tint;
     out.size = in.instance_size;
@@ -90,7 +72,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return base;
     }
 
-    // Расстояние от края квада в мировых пикселях (по corner_uv — UV 0..1 по кваду).
+    // Расстояние от края квада в мировых единицах (по corner_uv — UV 0..1 по кваду).
     let radius = in.fx_a.x;
     let intensity = in.fx_a.y;
     let c = in.corner_uv;

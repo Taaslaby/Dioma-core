@@ -99,6 +99,10 @@ struct Game {
     presenter: Option<Presenter>,
     batch: Option<SpriteBatch>,
     font: Option<DebugFont>,
+    // egui-оверлей (0.31 — пара к wgpu 24): контекст живёт всегда, окно/рендерер — в resumed.
+    egui_ctx: egui::Context,
+    egui_state: Option<egui_winit::State>,
+    egui_renderer: Option<egui_wgpu::Renderer>,
     // Симуляция.
     arena: Arena,
     // Состояние кадра.
@@ -123,7 +127,7 @@ impl Game {
     fn new(smoke_frames: Option<u32>) -> Self {
         let arena = default_arena();
         Self {
-            instance: wgpu::Instance::new(wgpu::InstanceDescriptor::default()),
+            instance: wgpu::Instance::new(&wgpu::InstanceDescriptor::default()),
             window: None,
             surface: None,
             device: None,
@@ -134,6 +138,9 @@ impl Game {
             presenter: None,
             batch: None,
             font: None,
+            egui_ctx: egui::Context::default(),
+            egui_state: None,
+            egui_renderer: None,
             arena,
             camera: Camera::new([1.0, 1.0]),
             input: InputMapper::new(),
@@ -300,6 +307,62 @@ impl Game {
             &lines,
         );
 
+        // 6) egui-оверлей (Load — сцена и DebugFont уже нарисованы): HUD с
+        //    кнопками паузы/скорости, список существ и инспектор выбранного.
+        {
+            let Some(window) = &self.window else { return };
+            let Some(egui_state) = self.egui_state.as_mut() else { return };
+            let Some(egui_renderer) = self.egui_renderer.as_mut() else { return };
+            let stats = *renderer.stats();
+
+            let raw_input = egui_state.take_egui_input(window);
+            let full_output = self.egui_ctx.run(raw_input, |ctx| {
+                game_ui(
+                    ctx,
+                    &mut self.paused,
+                    &mut self.speed,
+                    &mut self.selected,
+                    &view,
+                    &stats,
+                )
+            });
+            egui_state.handle_platform_output(window, full_output.platform_output);
+            let clipped =
+                self.egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+
+            let screen_descriptor = egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [config.width, config.height],
+                pixels_per_point: window.scale_factor() as f32,
+            };
+            for (id, delta) in &full_output.textures_delta.set {
+                egui_renderer.update_texture(device, queue, *id, delta);
+            }
+            egui_renderer.update_buffers(device, queue, &mut encoder, &clipped, &screen_descriptor);
+            {
+                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("game egui pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view_tex,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                rpass.set_scissor_rect(0, 0, config.width, config.height);
+                // forget_lifetime: egui хочет RenderPass<'static>, у нас — с
+                // заимствованием encoder'а; после drop pass'а encoder свободен.
+                egui_renderer.render(&mut rpass.forget_lifetime(), &clipped, &screen_descriptor);
+            }
+            for id in &full_output.textures_delta.free {
+                egui_renderer.free_texture(id);
+            }
+        }
+
         queue.submit(Some(encoder.finish()));
         frame.present();
     }
@@ -363,9 +426,106 @@ impl Game {
     }
 }
 
+/// egui-панель: HUD (FPS/тик/время суток), кнопки паузы и скорости,
+/// список существ для выбора и инспектор выбранного.
+///
+/// Кириллица здесь — ок (шрифт egui её умеет), в отличие от DebugFont.
+fn game_ui(
+    ctx: &egui::Context,
+    paused: &mut bool,
+    speed: &mut u32,
+    selected: &mut Option<dioma::env::AgentId>,
+    view: &SimView,
+    stats: &dioma_render::RenderStats,
+) {
+    egui::Window::new("dioma")
+        .default_width(260.0)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(format!("FPS {:.1}", stats.fps));
+            });
+            ui.label(format!(
+                "{} · день {} · {}",
+                tod_latin(view.time_of_day),
+                view.day_in_season + 1,
+                season_name(view.season),
+            ));
+            ui.label(format!(
+                "существ: {} · ягод: {} · комнат: {}",
+                view.critters.len(),
+                view.berries.len(),
+                view.rooms.len(),
+            ));
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button(if *paused { "▶ Пуск" } else { "⏸ Пауза" }).clicked() {
+                    *paused = !*paused;
+                }
+                for s in [1u32, 2, 4] {
+                    if ui.selectable_label(*speed == s, format!("×{s}")).clicked() {
+                        *speed = s;
+                    }
+                }
+            });
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.heading("Существа");
+            egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                for c in &view.critters {
+                    let label = format!("#{id} · {sex} · {state}", id = c.id.0,
+                        sex = if matches!(c.sex, Sex::Male) { "M" } else { "F" },
+                        state = if c.alive { "живо" } else { "мертво" });
+                    if ui.selectable_label(*selected == Some(c.id), label).clicked() {
+                        *selected = if *selected == Some(c.id) { None } else { Some(c.id) };
+                    }
+                }
+            });
+
+            if let Some(id) = *selected {
+                if let Some(c) = view.critters.iter().find(|c| c.id == id) {
+                    ui.separator();
+                    ui.heading(format!("Существо #{}", id.0));
+                    need_bar(ui, "Голод", c.hunger);
+                    need_bar(ui, "Глюкоза", c.glucose);
+                    need_bar(ui, "Усталость", c.fatigue);
+                    ui.label(format!(
+                        "съедено: {} · скорость: {:.2} · пол: {}",
+                        c.food_eaten,
+                        c.speed,
+                        if matches!(c.sex, Sex::Male) { "M" } else { "F" },
+                    ));
+                    ui.label(format!("видит еду: L {:.2} · R {:.2}", c.vis_l, c.vis_r));
+                }
+            }
+        });
+}
+
+/// Потребность как прогресс-бар с подписью.
+fn need_bar(ui: &mut egui::Ui, name: &str, v: f32) {
+    ui.horizontal(|ui| {
+        ui.label(name);
+        ui.add(
+            egui::ProgressBar::new(v.clamp(0.0, 1.0))
+                .show_percentage()
+                .desired_width(140.0),
+        );
+    });
+}
+
+/// Сезон по-русски (egui — кириллица ок).
+fn season_name(s: Season) -> &'static str {
+    match s {
+        Season::Spring => "весна",
+        Season::Summer => "лето",
+        Season::Autumn => "осень",
+        Season::Winter => "зима",
+    }
+}
+
 /// Полоса состояния как текст: `[#####---]`.
-fn bar(v: f32) -> String {
-    const N: usize = 10;
+fn bar(v: f32) -> String {    const N: usize = 10;
     let filled = (v.clamp(0.0, 1.0) * N as f32).round() as usize;
     let mut s = String::with_capacity(N + 2);
     s.push('[');
@@ -487,6 +647,17 @@ impl ApplicationHandler for Game {
         camera.center = CAMERA_CENTER;
         camera.zoom = ZOOM;
 
+        // ── egui-стек (0.31: wgpu 24 + winit 0.30) ──
+        let egui_state = egui_winit::State::new(
+            self.egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &window,
+            None,
+            None,
+            None,
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
+
         self.window = Some(window);
         self.surface = Some(surface);
         self.device = Some(device);
@@ -497,12 +668,20 @@ impl ApplicationHandler for Game {
         self.presenter = Some(presenter);
         self.batch = Some(batch);
         self.font = Some(font);
+        self.egui_state = Some(egui_state);
+        self.egui_renderer = Some(egui_renderer);
         self.camera = camera;
         self.started = Some(Instant::now());
         self.last_frame = None;
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // egui первым: клики/клавиши по панели не должны доходить до игры.
+        if let (Some(window), Some(state)) = (&self.window, &mut self.egui_state) {
+            if state.on_window_event(window, &event).consumed {
+                return;
+            }
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {

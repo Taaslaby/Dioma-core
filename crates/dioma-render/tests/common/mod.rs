@@ -38,7 +38,7 @@ static SHARED_GPU: OnceLock<Option<TestGpu>> = OnceLock::new();
 /// создаётся ровно один раз на тест-бинарный процесс.
 pub fn gpu() -> Option<TestGpu> {
     let init = || {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let mut adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
     if adapter.is_none() {
@@ -103,15 +103,15 @@ pub fn readback(gpu: &TestGpu, texture: &wgpu::Texture, w: u32, h: u32) -> Vec<u
         label: Some("offscreen encoder"),
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &read_back,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(row_pitch),
                 rows_per_image: Some(h),

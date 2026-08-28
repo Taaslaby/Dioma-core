@@ -1,6 +1,6 @@
 //! Радиальные источники света — аддитивный слой подсветки поверх спрайтов.
 
-use crate::batch::{unit_quad_vertices, QuadVertex};
+use crate::scene::batch::{unit_quad_vertices, QuadVertex};
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 

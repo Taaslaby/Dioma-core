@@ -305,6 +305,22 @@ pub struct Brain {
     /// Переиспользуемый буфер подшага для `ingest_batched_flat` (пул):
     /// спайки из общего flat-буфера конвертируются u32 → i32 без аллокаций.
     pool_spikes: Vec<i32>,
+    // ── Тик-пластичность (mean-field STDP: один проход по синапсам за тик) ──
+    /// Счётчик спайков нейрона за текущий тик.
+    tick_spike_count: Vec<u32>,
+    /// Σ индексов подшагов спайков (средний момент спайка = sum/count).
+    tick_spike_sum_s: Vec<u64>,
+    /// Зеркала пред/пост следов на ТЕКУЩИЙ подшаг (ядро: t = t·d + sp).
+    tick_trace_pre: Vec<f32>,
+    tick_trace_post: Vec<f32>,
+    /// Траектории следов за тик (n×S, ряд = подшаг): для причинных членов
+    /// LTP/LTD — след пре на момент среднего спайка поста и наоборот.
+    tick_trace_pre_hist: Vec<f32>,
+    tick_trace_post_hist: Vec<f32>,
+    /// Номер подшага внутри тика (0..S).
+    tick_row: usize,
+    /// Тик отмечался спайками (CPU-путь)? Пул/GPU-пути — без apply.
+    tick_active: bool,
 }
 
 impl Brain {
@@ -447,6 +463,14 @@ impl Brain {
             memory_lt,
             gpu_learn,
             pool_spikes: Vec::new(),
+            tick_spike_count: Vec::new(),
+            tick_spike_sum_s: Vec::new(),
+            tick_trace_pre: Vec::new(),
+            tick_trace_post: Vec::new(),
+            tick_trace_pre_hist: Vec::new(),
+            tick_trace_post_hist: Vec::new(),
+            tick_row: 0,
+            tick_active: false,
         }
     }
 
@@ -499,6 +523,14 @@ impl Brain {
             memory_lt,
             gpu_learn: false,
             pool_spikes: Vec::new(),
+            tick_spike_count: Vec::new(),
+            tick_spike_sum_s: Vec::new(),
+            tick_trace_pre: Vec::new(),
+            tick_trace_post: Vec::new(),
+            tick_trace_pre_hist: Vec::new(),
+            tick_trace_post_hist: Vec::new(),
+            tick_row: 0,
+            tick_active: false,
         }
     }
 
@@ -902,8 +934,125 @@ impl Brain {
     /// Пост-обработка одного подшага (CPU-путь): пластичность потребляет
     /// пер-нейронные спайки, затем счётчик/гомеостаз/награды.
     fn post_substep(&mut self, spikes: &[i32]) {
-        self.plast.step(spikes);
+        self.tick_note_spikes(spikes);
         self.post_substep_tick();
+    }
+
+    // ─── Тик-пластичность: mean-field STDP, один проход за тик ───────────
+    //
+    // Профилирование (760н): per-substep `plast.step` = 96% времени мозга
+    // (5.5M событий/тик — рекуррентная кора не разрежена). Замена: за тик
+    // копим статистику спайков (счётчик + средний момент) и траектории
+    // следов (n×S, дёшево), затем ОДИН проход по синапсам с причинными
+    // членами: LTP — след ПРЕ на момент среднего спайка ПОСТА (каузальность
+    // «после»), LTD — след ПОСТА на момент среднего спайка ПРЕ. Потолок
+    // события ×count. Eligibility затухает одним d_e^S за тик (тот же
+    // per-second темп: 0.9995^100 = 0.951). Run-vs-run детерминизм — без
+    // планировщика; поведение отличается от per-substep (крупнее бины
+    // времени) — эталоны/тесты переякорены (авторизация владельца).
+
+    /// Подшаг: накопить статистику спайков и продвинуть зеркала следов.
+    fn tick_note_spikes(&mut self, spikes: &[i32]) {
+        let n = self.n;
+        let spt = self.steps_per_tick();
+        if self.tick_spike_count.len() != n || self.tick_trace_pre_hist.len() != n * spt {
+            self.tick_spike_count = vec![0; n];
+            self.tick_spike_sum_s = vec![0; n];
+            self.tick_trace_pre = vec![0.0; n];
+            self.tick_trace_post = vec![0.0; n];
+            self.tick_trace_pre_hist = vec![0.0; n * spt];
+            self.tick_trace_post_hist = vec![0.0; n * spt];
+            self.tick_row = 0;
+        }
+        let (dt, tau_pre, tau_post) = {
+            let c = self.plast.stdp_config();
+            (c.dt, c.tau_pre, c.tau_post)
+        };
+        let d_pre = fast_exp(-dt / tau_pre);
+        let d_post = fast_exp(-dt / tau_post);
+        let row = self.tick_row;
+        for (i, &sp) in spikes.iter().enumerate() {
+            let add = if sp > 0 { 1.0 } else { 0.0 };
+            // Зеркала следов: порядок ядра (fma: t·d + sp) — 1 ulp-совместимо.
+            let tp = &mut self.tick_trace_pre[i];
+            *tp = tp.mul_add(d_pre, add);
+            let tpo = &mut self.tick_trace_post[i];
+            *tpo = tpo.mul_add(d_post, add);
+            self.tick_trace_pre_hist[row * n + i] = *tp;
+            self.tick_trace_post_hist[row * n + i] = *tpo;
+            if sp > 0 {
+                self.tick_spike_count[i] += 1;
+                self.tick_spike_sum_s[i] += row as u64;
+            }
+        }
+        self.tick_row = (row + 1) % spt.max(1);
+        self.tick_active = true;
+    }
+
+    /// Конец тика: один проход по всем синапсам — mean-field STDP.
+    ///
+    /// Для синапса (pre→post): LTP = a_ltp·след(pre, mean-момент спайка
+    /// post)·c_post; LTD = a_ltd·след(post, mean-момент спайка pre)·c_pre;
+    /// eligibility = (elig + LTP − LTD)·d_e^S. Замороженные (thaw_at) — 0.
+    fn tick_plasticity_apply(&mut self, spt: usize) {
+        let n = self.n;
+        if self.tick_spike_count.len() != n || self.tick_trace_pre_hist.len() != n * spt {
+            return;
+        }
+        let (dt, tau_pre, tau_post, tau_e, a_ltp, a_ltd) = {
+            let c = self.plast.stdp_config();
+            (c.dt, c.tau_pre, c.tau_post, c.tau_e, c.a_ltp, c.a_ltd)
+        };
+        let d_e = fast_exp(-dt / tau_e);
+        let d_e_tick = d_e.powi(spt as i32);
+        let now = self.step_count;
+        let mut elig: Vec<f32> = self.plast.eligibility().to_vec();
+        if elig.len() != self.pre_of.len() {
+            return; // рассинхрон (не должен случаться)
+        }
+        // Средние моменты спайков за тик (подшаги 0..S-1).
+        let mean_s = |count: u32, sum: u64| -> usize {
+            if count > 0 {
+                ((sum as f32 / count as f32).round() as usize).min(spt - 1)
+            } else {
+                0
+            }
+        };
+        let mean_of_pre: Vec<usize> = (0..n)
+            .map(|i| mean_s(self.tick_spike_count[i], self.tick_spike_sum_s[i]))
+            .collect();
+        for idx in 0..self.pre_of.len() {
+            let pre = self.pre_of[idx];
+            let post = self.post_of[idx];
+            // Замороженные синапсы: eligibility держим нулевой (окна оттаивания).
+            if self.thaw_at.len() > idx && self.thaw_at[idx] > now {
+                elig[idx] = 0.0;
+                continue;
+            }
+            let cpre = self.tick_spike_count[pre];
+            let cpost = self.tick_spike_count[post];
+            let mut acc = elig[idx] * d_e_tick;
+            if cpost > 0 {
+                // LTP: пост стрелял — след ПРЕ на его средний момент.
+                let m_post = mean_s(cpost, self.tick_spike_sum_s[post]);
+                let tpre_at = self.tick_trace_pre_hist[m_post * n + pre];
+                acc += a_ltp * tpre_at * cpost as f32;
+            }
+            if cpre > 0 {
+                let m_pre = mean_of_pre[pre];
+                let tpost_at = self.tick_trace_post_hist[m_pre * n + post];
+                acc -= a_ltd * tpost_at * cpre as f32;
+            }
+            elig[idx] = acc;
+        }
+        self.plast.set_eligibility(&elig);
+        // Сброс счётчиков тика (зеркала следов НЕ сбрасываются — непрерывны).
+        for v in self.tick_spike_count.iter_mut() {
+            *v = 0;
+        }
+        for v in self.tick_spike_sum_s.iter_mut() {
+            *v = 0;
+        }
     }
 
     /// Пост-обработка подшага БЕЗ пластичности (GPU-путь: eligibility уже на
@@ -911,6 +1060,14 @@ impl Brain {
     /// и отложенные награды — общий код для `step_into`/`step_batch` GPU.
     fn post_substep_tick(&mut self) {
         self.step_count += 1;
+
+        // Граница тика: набралось S подшагов — ОДИН проход тик-пластичности
+        // (mean-field STDP, см. `tick_plasticity_apply`). Только CPU-путь:
+        // пул/GPU ведут eligibility своими механизмами (tick_active).
+        let spt = self.steps_per_tick();
+        if self.tick_active && self.step_count.is_multiple_of(spt) {
+            self.tick_plasticity_apply(spt);
+        }
 
         // Мягкий гомеостаз по расписанию модели (см. `step`).
         let period = self.params.homeo_every_ticks.max(1) * self.steps_per_tick();

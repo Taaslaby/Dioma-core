@@ -157,21 +157,21 @@ impl PostProcess {
             device,
             &layout,
             format,
-            include_str!("shaders/post/vignette_grain.wgsl"),
+            crate::shaders::post_vignette_grain(),
             "dioma-render vignette_grain pipeline",
         );
         let pipeline_blur = Self::build_pipeline(
             device,
             &layout,
             format,
-            include_str!("shaders/post/blur.wgsl"),
+            crate::shaders::post_blur(),
             "dioma-render blur pipeline",
         );
         let pipeline_darkness = Self::build_pipeline(
             device,
             &layout,
             format,
-            include_str!("shaders/post/darkness.wgsl"),
+            crate::shaders::post_darkness(),
             "dioma-render darkness pipeline",
         );
 
@@ -329,7 +329,7 @@ impl PostProcess {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         format: wgpu::TextureFormat,
-        shader_src: &str,
+        shader_src: String,
         label: &str,
     ) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -355,7 +355,7 @@ impl PostProcess {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[vertex_layout],
             },
@@ -369,7 +369,7 @@ impl PostProcess {
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,

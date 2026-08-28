@@ -1,7 +1,7 @@
 //! Спрайт — один инстанс текстурированного квада + per-sprite эффекты.
 
-use crate::atlas::SpriteAtlas;
-use crate::flipbook::Flipbook;
+use crate::scene::atlas::SpriteAtlas;
+use crate::scene::flipbook::Flipbook;
 
 /// Визуальный эффект спрайта (рисуется отдельным шейдером из `src/shaders/fx/`).
 ///

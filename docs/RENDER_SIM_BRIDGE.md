@@ -34,7 +34,7 @@
         dioma-engine              dioma-render
         (сим, чистый)             (wgpu 22, готов)
                    │               │
-                   └── pillars / SiMuse ──┘
+                   └──   SiMuse  ──┘
 ```
 
 Никаких обратных стрелок: `dioma-render` не знает о симе, `dioma-engine` не знает о рендере.

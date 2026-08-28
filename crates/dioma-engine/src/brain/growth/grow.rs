@@ -292,8 +292,92 @@ fn finalize(
     }
 }
 
-/// Общий рост: шаги мира + опциональный снимок финальных позиций сом.
-fn grow_inner(layout: &Layout, st: &Steering, seed: u64, want_positions: bool) -> (Grown, Vec<[f64; 3]>) {
+/// Прореживание самосинапсов плотных регионов.
+///
+/// Проблема (замер на стадии C-lite): 400 сом коры в облаке r=42 при
+/// `synapse_dist=13` собирают фактически ПОЛНЫЙ граф — self-degree ~439
+/// (175K синапсов на мозг), и событийная пластичность (O(спайки × степень)
+/// за подшаг, 100 подшагов/тик) роняет тик до ~100 мс. Коммент «короткий
+/// самоаксон 30 мкм» не работает: замыкание идёт по ДИСТАНЦИИ к соме, а в
+/// плотном 3D-облаке «труба» 30×π·13² накрывает сотни сом.
+///
+/// Решение: после роста для каждого НЕЙРОНА региона-гиганта (count ≥
+/// PRUNE_SELF_REGION_MIN) оставляем PRUNE_SELF_KEEP БЛИЖАЙШИХ
+/// self-синапсов (по дистанции между сомами, детерминированный tiebreak по
+/// индексу ребра), остальные self-рёбра региона отбрасываем.
+/// Межрегиональные связи не трогаются. StageB (регионы ≤ 90 сом) не
+/// затрагивается — порог 200 отсеивает только гигантов стадии C.
+const PRUNE_SELF_REGION_MIN: usize = 200;
+/// Сколько ближайших self-синапсов остаётся у нейрона плотного региона.
+const PRUNE_SELF_KEEP: usize = 16;
+
+fn prune_dense_self_synapses(
+    grown: &mut Grown,
+    positions: &[[f64; 3]],
+    region_sizes: &[usize],
+) {
+    // Регионы-гиганты (по числу сом).
+    let giant: Vec<usize> = (0..region_sizes.len())
+        .filter(|&r| region_sizes[r] >= PRUNE_SELF_REGION_MIN)
+        .collect();
+    if giant.is_empty() || positions.len() < grown.nt.len() {
+        return; // нечего прореживать / нет позиций
+    }
+    // Self-рёбра гигантов, сгруппированные по пре-нейрону.
+    use std::collections::BTreeMap;
+    let mut by_pre: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (ei, &(pre, post, _)) in grown.edges.iter().enumerate() {
+        if pre < grown.region_of.len()
+            && post < grown.region_of.len()
+            && grown.region_of[pre] == grown.region_of[post]
+            && giant.contains(&grown.region_of[pre])
+        {
+            by_pre.entry(pre).or_default().push(ei);
+        }
+    }
+    if by_pre.is_empty() {
+        return;
+    }
+    let mut drop = vec![false; grown.edges.len()];
+    let mut pruned = 0usize;
+    for (_pre, eis) in by_pre {
+        if eis.len() <= PRUNE_SELF_KEEP {
+            continue;
+        }
+        let mut ranked: Vec<(f64, usize)> = eis
+            .iter()
+            .map(|&ei| {
+                let (pre, post, _) = grown.edges[ei];
+                let a = positions[pre];
+                let b = positions[post];
+                let d = (a[0] - b[0]).powi(2)
+                    + (a[1] - b[1]).powi(2)
+                    + (a[2] - b[2]).powi(2);
+                (d, ei)
+            })
+            .collect();
+        ranked.sort_unstable_by(|a, b| {
+            // дистанции² конечны и ≥ 0 — NaN невозможен; tiebreak по индексу ребра
+            a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1))
+        });
+        for &(_, ei) in ranked.iter().skip(PRUNE_SELF_KEEP) {
+            drop[ei] = true;
+            pruned += 1;
+        }
+    }
+    if pruned > 0 {
+        let mut i = 0usize;
+        grown.edges.retain(|_| {
+            let keep = !drop[i];
+            i += 1;
+            keep
+        });
+    }
+}
+
+/// Общий рост: шаги мира + снимок финальных позиций сом (всегда — нужны
+/// прореживанию плотных регионов; копия стоит копейки).
+fn grow_inner(layout: &Layout, st: &Steering, seed: u64) -> (Grown, Vec<[f64; 3]>) {
     let (mut world, region_of) = build_world(layout, st, seed);
 
     let t0 = std::time::Instant::now();
@@ -304,23 +388,21 @@ fn grow_inner(layout: &Layout, st: &Steering, seed: u64, want_positions: bool) -
 
     // Позиции берём ДО сворачивания мира: `finalize` потребляет world, а
     // `Grown` хранит только топологию. Индекс клетки = id нейрона (add_cell).
-    let positions = if want_positions {
-        world
-            .cells
-            .iter()
-            .map(|c| [c.soma.pos.x, c.soma.pos.y, c.soma.pos.z])
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let positions: Vec<[f64; 3]> = world
+        .cells
+        .iter()
+        .map(|c| [c.soma.pos.x, c.soma.pos.y, c.soma.pos.z])
+        .collect();
 
-    let grown = finalize(world, region_of, layout, st, growth_s);
+    let mut grown = finalize(world, region_of, layout, st, growth_s);
+    let region_sizes: Vec<usize> = layout.regions.iter().map(|r| r.count).collect();
+    prune_dense_self_synapses(&mut grown, &positions, &region_sizes);
     (grown, positions)
 }
 
 /// Вырастить коннектом из layout на CPU (rayon-диффузия прометея).
 pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
-    grow_inner(layout, st, seed, false).0
+    grow_inner(layout, st, seed).0
 }
 
 /// Вырастить коннектом и вернуть ФИНАЛЬНЫЕ позиции сом нейронов (индекс =
@@ -332,7 +414,7 @@ pub fn grow(layout: &Layout, st: &Steering, seed: u64) -> Grown {
 /// нужен этот путь, чтобы показать честную геометрию мозга: растёт одно и то
 /// же, но мир не выбрасывается, пока позиции не скопированы.
 pub fn grow_with_positions(layout: &Layout, st: &Steering, seed: u64) -> (Grown, Vec<[f64; 3]>) {
-    let (grown, positions) = grow_inner(layout, st, seed, true);
+    let (grown, positions) = grow_inner(layout, st, seed);
     debug_assert_eq!(
         positions.len(),
         grown.nt.len(),

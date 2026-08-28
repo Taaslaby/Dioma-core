@@ -1,15 +1,12 @@
-// dioma-render: шейдер радиального света (аддитивный слой подсветки).
+// dioma-render — радиальный свет (аддитивный слой подсветки).
 //
-// Квад света имеет размер 2×radius; falloff (1 − smoothstep(0,1,dist)) доходит
-// до нуля на краях квада. Текстура не нужна — чистый математический falloff.
-// Uniform камеры — как в shaders/sprite.wgsl (группа 0).
-
-struct Camera {
-    camera: vec4<f32>,
-    viewport: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> cam: Camera;
+// Квад света имеет размер 2×radius; falloff (1 − smoothstep(0,1,dist))
+// доходит до нуля на краях квада. Текстура не нужна — чистый математический
+// falloff; группа 1 не используется. Камера и `world_to_ndc` — в common.wgsl
+// (приклеивается в shaders.rs, см. `shaders::light_radial()`).
+//
+// Вместе с пост-проходом «тьма» (post/darkness.wgsl) даёт цикл дня и ночи:
+// свет рисуется ПОВЕРХ тьмы и «пробивает» её собой.
 
 struct VsIn {
     // Per-vertex (квад):
@@ -33,17 +30,8 @@ struct VsOut {
 fn vs_main(in: VsIn) -> VsOut {
     let world = in.corner_pos * (2.0 * in.instance_radius) + in.instance_pos;
 
-    let center = cam.camera.xy;
-    let zoom = cam.camera.z;
-    let vp = cam.viewport.xy;
-    // Мир → NDC: Y вверх = верх экрана (соглашение сайд-вью).
-    let ndc = vec2<f32>(
-        (world.x - center.x) / (vp.x * 0.5 / zoom),
-        (world.y - center.y) / (vp.y * 0.5 / zoom),
-    );
-
     var out: VsOut;
-    out.clip_pos = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip_pos = vec4<f32>(world_to_ndc(world), 0.0, 1.0);
     out.uv = in.corner_uv;
     out.color = in.instance_color;
     out.intensity = in.instance_intensity;

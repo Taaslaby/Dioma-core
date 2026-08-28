@@ -158,6 +158,25 @@ impl Brain {
 
     /// Current eligibility, as of each synapse's last sync (call
     /// [`Self::fold_eligibility`] first to bring them to now).
+    /// Перезаписать eligibility целиком (тик-уровневая пластичность хоста:
+    /// хост сам считает mean-field STDP за тик и заливает готовые следы).
+    /// Длина обязана совпадать (`n_syn`), иначе паника с понятным текстом.
+    pub fn set_eligibility(&mut self, elig: &[f32]) {
+        assert_eq!(
+            elig.len(),
+            self.elig.len(),
+            "set_eligibility: длина {} ≠ числа синапсов {}",
+            elig.len(),
+            self.elig.len()
+        );
+        self.elig.copy_from_slice(elig);
+    }
+
+    /// Конфиг STDP (хосту нужны dt/tau/amplitude для собственных тик-проходов).
+    pub fn stdp_config(&self) -> &StdpConfig {
+        &self.cfg
+    }
+
     pub fn eligibility(&self) -> &[f32] {
         &self.elig
     }

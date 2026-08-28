@@ -1,6 +1,6 @@
 //! CPU-батч спрайтов + построение вершинных/инстансных буферов.
 
-use crate::sprite::Sprite;
+use crate::scene::sprite::Sprite;
 use bytemuck::{Pod, Zeroable};
 use std::ops::Range;
 use wgpu::util::DeviceExt;

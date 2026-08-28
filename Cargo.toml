@@ -20,11 +20,15 @@ taas-format = { path = "crates/SiMuse/crates/taas-format" }
 pollster = "0.3"
 pillars-wgpu = { path = "crates/SiMuse/crates/pillars-wgpu" }
 
-# ── Мост «сим ↔ рендер»: рендерер, wgpu 22 (как в dioma-render) и winit 0.30
-#    (в dioma-render winit — только dev-dep, игре нужен напрямую) ──
+# ── Мост «сим ↔ рендер»: рендерер и wgpu 24 (пара к egui-wgpu 0.31, как в
+#    dioma-render) + winit 0.30 (в dioma-render winit — dev-dep, игре нужен
+#    напрямую). dioma-engine/SiMuse остаются на wgpu 22 — версии сосуществуют.
 dioma-render = { path = "crates/dioma-render" }
-wgpu = { version = "22", features = ["wgsl"] }
+wgpu = { version = "24", features = ["wgsl"] }
 winit = "0.30"
+egui = "0.31"
+egui-wgpu = "0.31"
+egui-winit = "0.31"
 
 # Стейлы-примеры используют `pillars` (ядро нейродинамики), которое рефакторинг
 # «тонких зависимостей» вынес из runtime-зависимостей — примерам оно всё ещё

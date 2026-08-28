@@ -1,21 +1,15 @@
-// dioma-render: базовый спрайтовый шейдер (вершины квада + инстансные атрибуты).
+// dioma-render — базовый спрайт: текстурированный квад с tint'ом.
 //
-// NDC: Y вверх = верх экрана (соглашение сайд-вью); мировая Y растёт вверх.
+// Единый инстансный квад для ВСЕГО мира: тайлы, существа, ягоды, тон суток.
+// Камера и хелперы (`world_to_ndc`, `pulse_scale`, `quad_world`) — в
+// common.wgsl (приклеивается в shaders.rs, см. `shaders::sprite()`).
 //
-// Uniform камеры — 32 байта (2×vec4):
-//   camera.xy    — центр камеры (мировые координаты)
-//   camera.z     — зум
-//   camera.w     — время (секунды; пульс, волнистость, зерно)
-//   viewport.xy  — размер вьюпорта в пикселях
-//   viewport.zw  — не используется (0, 0)
+// Атлас (группа 1): регион спрайта задаётся `instance_uv_rect` (xy = левый
+// нижний, zw = правый верхний), интерполяция по corner_uv квада.
+//
+// Слои/сортировка — на CPU (layer, depth); шейдер только рисует.
 
-struct Camera {
-    camera: vec4<f32>,
-    viewport: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> cam: Camera;
-
+// Атлас (группа 1): общая текстура всех спрайтовых проходов.
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(1) var atlas_sampler: sampler;
 
@@ -40,33 +34,17 @@ struct VsOut {
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
-    // Пульс: масштаб квада «дышит» между min_scale и max_scale по синусу времени.
-    let pulse_scale = mix(
-        in.instance_pulse.x,
-        in.instance_pulse.y,
-        0.5 + 0.5 * sin(cam.camera.w * in.instance_pulse.z + in.instance_pulse.w),
-    );
-    // Единичный квад (corner_pos ∈ [-0.5, 0.5]) → размер с пульсом → поворот → мир.
-    let scaled = in.corner_pos * in.instance_size * pulse_scale;
-    let c = cos(in.instance_rot);
-    let s = sin(in.instance_rot);
-    let rotated = vec2<f32>(
-        scaled.x * c - scaled.y * s,
-        scaled.x * s + scaled.y * c,
-    );
-    let world = rotated + in.instance_pos;
-
-    // Мир → NDC: Y вверх = верх экрана (соглашение сайд-вью); мировая Y растёт вверх.
-    let center = cam.camera.xy;
-    let zoom = cam.camera.z;
-    let vp = cam.viewport.xy;
-    let ndc = vec2<f32>(
-        (world.x - center.x) / (vp.x * 0.5 / zoom),
-        (world.y - center.y) / (vp.y * 0.5 / zoom),
+    let world = quad_world(
+        in.corner_pos,
+        in.instance_size,
+        pulse_scale(in.instance_pulse),
+        0.0, // без смещения — оно нужно только волнению (fx/wobble.wgsl)
+        in.instance_rot,
+        in.instance_pos,
     );
 
     var out: VsOut;
-    out.clip_pos = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip_pos = vec4<f32>(world_to_ndc(world), 0.0, 1.0);
     out.uv = mix(in.instance_uv_rect.xy, in.instance_uv_rect.zw, in.corner_uv);
     out.tint = in.instance_tint;
     return out;

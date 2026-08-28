@@ -6,8 +6,8 @@
 //! [`TilesetUv`] слева-направо, сверху-вниз — так же, как кадры у
 //! [`crate::Flipbook::from_grid`].
 
-use crate::batch::SpriteBatch;
-use crate::sprite::Sprite;
+use crate::scene::batch::SpriteBatch;
+use crate::scene::sprite::Sprite;
 
 /// Слой тайлмапа в батче. Игра рисует существ и объекты выше (layer > 0.0),
 /// либо использует глубину: тайлы получают `depth = y` (ряд тайлов).

@@ -1,6 +1,6 @@
 //! Система частиц: инстансированные мягкие аддитивные круги (пыльца, искры).
 
-use crate::batch::{unit_quad_vertices, QuadVertex};
+use crate::scene::batch::{unit_quad_vertices, QuadVertex};
 use crate::renderer::Renderer;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
