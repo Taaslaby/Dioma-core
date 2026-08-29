@@ -446,3 +446,29 @@ fn spine_parse_and_pose() {
         .any(|(a, b)| (a.position[0] - b.position[0]).abs() > 0.5);
     assert!(differs, "анимация реально двигает вершины");
 }
+
+#[test]
+fn spine_mesh_attachments_probe() {
+    let Some((data, inst)) = load_spine() else { return };
+    let mut regions = 0;
+    let mut meshes = 0;
+    for slot in &data.skeleton.slots {
+        match data.skeleton.attachments.get(&slot.attachment) {
+            Some(dioma_render::spine::Attachment::Region(_)) => regions += 1,
+            Some(dioma_render::spine::Attachment::Mesh(m)) => {
+                meshes += 1;
+                println!(
+                    "mesh {}: вершин {}, треугольников {}",
+                    slot.attachment,
+                    m.weighted.len(),
+                    m.triangles.len() / 3
+                );
+            }
+            None => println!("skip slot {} -> {:?}", slot.name, slot.attachment),
+        }
+    }
+    println!("regions={regions} meshes={meshes}");
+    let mesh = inst.build_mesh();
+    println!("mesh vertices: {}", mesh.vertices.len());
+    assert!(meshes >= 2, "mesh-attachment'ы должны распознаваться");
+}

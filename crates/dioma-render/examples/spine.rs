@@ -77,7 +77,7 @@ impl SpineDemo {
         renderer.begin_frame(dt);
         let camera = Camera {
             center: [0.0, 0.0],
-            zoom: 1.2, // модель ~440 мировых px → влезает в 720
+            zoom: 0.85, // модель ~760 мировых px → влезает в 720
             viewport: VIEWPORT,
         };
         renderer.render_meshes(
