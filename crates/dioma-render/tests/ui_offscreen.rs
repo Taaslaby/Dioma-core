@@ -83,8 +83,9 @@ fn panel_pixels() {
     assert!(sum_rgb(outside) < 200, "вне панели — фон (navy sRGB ~176): {outside:?}");
 
     // Заливка панели тёмная (текст/виджеты сюда не попадают): (100, 30).
+    // Градиент + тень под полупрозрачным fill дают до ~131 суммы.
     let fill = px(&data, W, 100, 30);
-    assert!(sum_rgb(fill) < 120, "заливка тёмная: {fill:?}");
+    assert!(sum_rgb(fill) < 160, "заливка тёмная: {fill:?}");
 }
 
 /// Текст «Тест» читаем: чернила есть, у «Т» перекладина сверху (не перевёрнут).
@@ -828,4 +829,43 @@ fn scroll_panel_keeps_earlier_sprites() {
     assert!(main_len >= 14, "ранние спрайты живы: {main_len}");
     let scroll_len = g.ui.scroll_batch(0x5C10_0000).map(|b| b.len()).unwrap_or(0);
     assert!(scroll_len > 20, "контент скролла в своём слое: {scroll_len}");
+}
+
+#[test]
+fn dump_panel_probe() {
+    let Some(mut g) = setup() else { return };
+    let mut btn = dioma_render::ui::Response::default();
+    {
+        let mut f = g.ui.begin(&mut g.atlas, &g.gpu.queue, UiInput::default(), VP);
+        f.panel(layout::Anchor::TopLeft, [110.0, 126.0], |p| {
+            p.label("Тест");
+            btn = p.button("Кнопка");
+            p.progress_bar("Бар", 0.6);
+        });
+        for (i, sp) in f.sprites().iter().enumerate() {
+            let sx = sp.position[0] + VP[0] * 0.5;
+            let sy = VP[1] * 0.5 - sp.position[1];
+            println!(
+                "{i:2} screen=({sx:6.1},{sy:6.1}) size=({:6.1},{:6.1}) uv=[{:.3},{:.3},{:.3},{:.3}]",
+                sp.size[0], sp.size[1], sp.uv_rect[0], sp.uv_rect[1], sp.uv_rect[2], sp.uv_rect[3]
+            );
+        }
+        f.upload(&g.gpu.queue);
+    }
+    let _ = btn;
+    let data = render(&mut g);
+    if std::env::var("UI_DUMP_PNG").is_ok() {
+        let img = image::RgbaImage::from_raw(W, H, data.clone()).unwrap();
+        img.save("../../ui_dump.png").unwrap();
+    }
+    for y in [18, 30, 45, 75, 130] {
+        let mut row = String::new();
+        for x in [30, 70, 110] {
+            let p = image::RgbaImage::new(1, 1);
+            let _ = p;
+            let i = ((y * W + x) * 4) as usize;
+            row.push_str(&format!("({},{},{}) ", data[i], data[i + 1], data[i + 2]));
+        }
+        println!("y={y}: {row}");
+    }
 }

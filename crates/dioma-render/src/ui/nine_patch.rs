@@ -62,6 +62,101 @@ pub fn panel_rgba(border: [u8; 4], fill: [u8; 4]) -> (u32, u32, Vec<u8>) {
     (s, s, px)
 }
 
+/// Скруглённый прямоугольник-заливка (без рамки): универсальная заготовка
+/// (пилюли баров, коробки чекбоксов). Coverage — по SDF скругления.
+pub fn rounded_rect_rgba(w: u32, h: u32, radius: u32, fill: [u8; 4]) -> (u32, u32, Vec<u8>) {
+    let mut px = vec![0u8; (w * h * 4) as usize];
+    let r = radius as f32;
+    let hx = (w as f32 - 1.0) / 2.0;
+    let hy = (h as f32 - 1.0) / 2.0;
+    for y in 0..h {
+        for x in 0..w {
+            let cx = (x as f32 + 0.5 - (hx + 1.0)).abs() - (hx - r);
+            let cy = (y as f32 + 0.5 - (hy + 1.0)).abs() - (hy - r);
+            let qx = cx.max(0.0);
+            let qy = cy.max(0.0);
+            // Расстояние внутрь от скруглённого контура (0 на краю).
+            let inside = r - qx.hypot(qy).min(r);
+            let cover = (inside + 0.5).clamp(0.0, 1.0);
+            if cover <= 0.0 {
+                continue;
+            }
+            let i = ((y * w + x) * 4) as usize;
+            px[i] = fill[0];
+            px[i + 1] = fill[1];
+            px[i + 2] = fill[2];
+            px[i + 3] = (fill[3] as f32 * cover) as u8;
+        }
+    }
+    (w, h, px)
+}
+
+/// Мягкая тень скруглённого прямоугольника: белая альфа (цвет задаёт tint),
+/// размытие к краям. Текстура 64×64: ядро 40×40 (радиус 12) + хвост 12px.
+/// Рисуется ОДНИМ спрайтом на панель (растяжение хвоста незаметно).
+pub fn shadow_rgba() -> (u32, u32, Vec<u8>) {
+    let s = 64u32;
+    let (hx, hy) = (22.0f32, 22.0f32); // полукорень ядра 44×44
+    let radius = 12.0f32; // скругление углов ядра
+    let blur = 9.0f32; // ширина хвоста размытия
+    let mut px = vec![0u8; (s * s * 4) as usize];
+    for y in 0..s {
+        for x in 0..s {
+            // SDF скруглённого прямоугольника (центр = центр текстуры):
+            // d < 0 внутри ядра, > 0 снаружи.
+            let px_x = x as f32 + 0.5 - s as f32 / 2.0;
+            let px_y = y as f32 + 0.5 - s as f32 / 2.0;
+            let qx = (px_x.abs() - (hx - radius)).max(0.0);
+            let qy = (px_y.abs() - (hy - radius)).max(0.0);
+            let d = qx.hypot(qy) + (qx.max(qy)).min(0.0) - radius;
+            let a = (1.0 - d.max(0.0) / blur).clamp(0.0, 1.0);
+            if a <= 0.0 {
+                continue;
+            }
+            let i = ((y * s + x) * 4) as usize;
+            px[i] = 255;
+            px[i + 1] = 255;
+            px[i + 2] = 255;
+            px[i + 3] = (a * 255.0) as u8;
+        }
+    }
+    (s, s, px)
+}
+
+/// Галочка (две толстые линии, белые) — для чекбокса.
+pub fn check_rgba() -> (u32, u32, Vec<u8>) {
+    let s = 24u32;
+    let mut px = vec![0u8; (s * s * 4) as usize];
+    let thick = 3.0f32;
+    // Расстояние точка-отрезок для двух сегментов галочки.
+    let segs = [((5.0, 12.5), (10.0, 18.0)), ((10.0, 18.0), (19.5, 6.5))];
+    for y in 0..s {
+        for x in 0..s {
+            let p = (x as f32 + 0.5, y as f32 + 0.5);
+            let mut cover = 0.0f32;
+            for ((ax, ay), (bx, by)) in segs {
+                let abx = bx - ax;
+                let aby = by - ay;
+                let t = (((p.0 - ax) * abx + (p.1 - ay) * aby)
+                    / (abx * abx + aby * aby))
+                    .clamp(0.0, 1.0);
+                let d = ((p.0 - (ax + abx * t)).hypot(p.1 - (ay + aby * t)) - thick / 2.0)
+                    .clamp(0.0, 1.0);
+                cover = cover.max(1.0 - d);
+            }
+            if cover <= 0.0 {
+                continue;
+            }
+            let i = ((y * s + x) * 4) as usize;
+            px[i] = 255;
+            px[i + 1] = 255;
+            px[i + 2] = 255;
+            px[i + 3] = (cover * 255.0) as u8;
+        }
+    }
+    (s, s, px)
+}
+
 /// Чистый белый прямоугольник 8×8 (без скругления): для заливок, которые
 /// растягиваются по обеим осям (прогресс-бары) — искажений не бывает.
 pub fn rect_rgba() -> (u32, u32, Vec<u8>) {

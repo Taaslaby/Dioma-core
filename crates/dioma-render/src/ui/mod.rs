@@ -41,7 +41,10 @@ use crate::scene::batch::SpriteBatch;
 use crate::scene::sprite::Sprite;
 pub use layout::{anchored_rect, place_popup, Anchor, Edges, Rect, Side};
 pub use motion::Motion;
-pub use nine_patch::{panel_rgba, rect_rgba, NinePatch, MARGIN as PATCH_MARGIN, PATCH_RADIUS, PATCH_SIZE};
+pub use nine_patch::{
+    check_rgba, panel_rgba, rect_rgba, rounded_rect_rgba, shadow_rgba, NinePatch,
+    MARGIN as PATCH_MARGIN, PATCH_RADIUS, PATCH_SIZE,
+};
 pub use glass::GlassBackdrop;
 pub use text::{UiFont, BASE_PX};
 pub use theme::{Size, UiTheme};
@@ -50,6 +53,7 @@ pub use theme::{Size, UiTheme};
 const UI_BATCH_CAPACITY: usize = 8192;
 
 /// Слои UI-батча (выше любых мировых слоёв).
+pub const LAYER_SHADOW_UI: f32 = 999.0;
 pub const LAYER_PANEL: f32 = 1000.0;
 pub const LAYER_WIDGET: f32 = 1001.0;
 /// (текст — внутри [`text::LAYER_TEXT`]); tooltip выше всего.
@@ -111,17 +115,12 @@ pub struct UiSystem {
     /// Nine-patch рамки стеклянной панели (тонкая рамка + почти прозрачный fill).
     glass_patch: NinePatch,
     /// UV маски скругления для стекла (регион ui/panel).
-    panel_uv: [f32; 4],
     /// Отдельный батч стеклянных подложек (рисуется своим frost-проходом).
     frost_batch: SpriteBatch,
     /// Спрайты стекла текущего кадра (до upload).
     frost_sprites: Vec<Sprite>,
     /// Имя/UV плоского белого прямоугольника (бары).
-    rect_name: &'static str,
-    rect_uv: [f32; 4],
     /// Имя/UV белого круга (бегунки switch/slider).
-    thumb_name: &'static str,
-    thumb_uv: [f32; 4],
     batch: SpriteBatch,
     /// Курсор текущего кадра (hit-test).
     cursor: [f32; 2],
@@ -200,12 +199,31 @@ impl UiSystem {
         atlas
             .add_rgba(queue, "ui/button", w, h, &px)
             .expect("атлас растёт под регион ui/button");
-        // Плоский белый ПРЯМОУГОЛЬНИК (без скругления) для баров: его можно
-        // растягивать как угодно — искажений не видно.
+        // Плоский белый ПРЯМОУГОЛЬНИК (без скругления) для заливок.
         let (w, h, px) = rect_rgba();
         atlas
             .add_rgba(queue, "ui/rect", w, h, &px)
             .expect("атлас растёт под регион ui/rect");
+        // Мягкая тень панелей (белая альфа; цвет задаёт tint) — одним спрайтом.
+        let (w, h, px) = shadow_rgba();
+        atlas
+            .add_rgba(queue, "ui/shadow", w, h, &px)
+            .expect("атлас растёт под регион ui/shadow");
+        // Пилюля 32×16 (радиус = половина высоты) — бары и слайдеры.
+        let (w, h, px) = rounded_rect_rgba(32, 16, 8, [255, 255, 255, 255]);
+        atlas
+            .add_rgba(queue, "ui/pill", w, h, &px)
+            .expect("атлас растёт под регион ui/pill");
+        // Коробка чекбокса 18×18 (радиус 5).
+        let (w, h, px) = rounded_rect_rgba(18, 18, 5, [255, 255, 255, 255]);
+        atlas
+            .add_rgba(queue, "ui/box", w, h, &px)
+            .expect("атлас растёт под регион ui/box");
+        // Галочка чекбокса.
+        let (w, h, px) = check_rgba();
+        atlas
+            .add_rgba(queue, "ui/check", w, h, &px)
+            .expect("атлас растёт под регион ui/check");
         // Белый круг для бегунков switch/slider (цвет задаёт tint).
         let (w, h, px) = crate::scene::atlas::circle_rgba(12, [255, 255, 255, 255]);
         atlas
@@ -223,21 +241,13 @@ impl UiSystem {
         let glass_patch = NinePatch::new(guv, PATCH_SIZE as f32, PATCH_MARGIN);
         let buv = atlas.region("ui/button").expect("регион только что добавлен");
         let button_patch = NinePatch::new(buv, PATCH_SIZE as f32, PATCH_MARGIN);
-        let rect_uv = atlas.region("ui/rect").expect("регион только что добавлен");
-        let thumb_uv = atlas.region("ui/thumb").expect("регион только что добавлен");
-
         Self {
             font: UiFont::new(device, queue, atlas),
             patch,
             glass_patch,
-            panel_uv: uv,
             frost_batch: SpriteBatch::new(device, 256),
             frost_sprites: Vec::new(),
             button_patch,
-            rect_name: "ui/rect",
-            rect_uv,
-            thumb_name: "ui/thumb",
-            thumb_uv,
             batch: SpriteBatch::new(device, UI_BATCH_CAPACITY),
             cursor: [0.0, 0.0],
             pressed: None,
@@ -375,18 +385,8 @@ impl UiSystem {
         if !input.down && !input.just_released {
             self.pressed = None;
         }
-        // Свежие UV: добавление глифов могло вырастить атлас и переупаковать
-        // регионы — кэшировать UV между кадрами нельзя.
-        self.patch.uv = atlas.region("ui/panel").expect("регион ui/panel удалён из атласа");
-        self.panel_uv = self.patch.uv;
-        self.glass_patch.uv =
-            atlas.region("ui/panel_glass").expect("регион ui/panel_glass удалён из атласа");
         self.frost_sprites.clear();
         self.scroll_layers.clear();
-        self.button_patch.uv =
-            atlas.region("ui/button").expect("регион ui/button удалён из атласа");
-        self.rect_uv = atlas.region(self.rect_name).expect("регион ui/rect удалён из атласа");
-        self.thumb_uv = atlas.region(self.thumb_name).expect("регион ui/thumb удалён из атласа");
         UiFrame {
             ui: self,
             atlas,
@@ -418,12 +418,38 @@ pub struct UiFrame<'a> {
 }
 
 impl<'a> UiFrame<'a> {
+    /// Свежий UV региона по имени (атлас может расти прямо в кадре).
+    fn uv(&self, name: &str) -> [f32; 4] {
+        self.atlas.region(name).unwrap_or([0.0; 4])
+    }
+
+    /// Мягкая тень под прямоугольник (один спрайт, цвет из темы).
+    fn draw_shadow(&mut self, rect: Rect) {
+        if std::env::var("UI_NO_SHADOW").is_ok() { return; }
+        const GROW: f32 = 10.0; // запас под хвост размытия текстуры
+        const DROP: f32 = 3.0; // опускание тени
+        let sh = Rect::new(rect.x - GROW, rect.y - GROW + DROP, rect.w + 2.0 * GROW, rect.h + 2.0 * GROW);
+        let mut s = Sprite::new(sh.world_center(self.viewport), [sh.w, sh.h], self.uv("ui/shadow"));
+        s.tint = self.theme.shadow;
+        s.layer = LAYER_SHADOW_UI;
+        self.sprites.push(s);
+    }
+
     /// Панель, приколоченная якорем `anchor` к краю экрана; содержимое —
     /// вертикальный стек внутри замыкания ([`Panel`]).
     pub fn panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
         let rect =
             anchored_rect(anchor, size, self.viewport, self.theme.screen_margin * self.ui.scale);
-        let panel_sprites = self.ui.patch.sprites(rect, self.viewport, self.theme.panel, LAYER_PANEL);
+        self.draw_shadow(rect);
+        self.ui.patch.uv = self.uv("ui/panel");
+        // Градиент по рядам nine-patch: верхняя строка светлее нижней.
+        let (top, bottom) = (self.theme.panel, panel_bottom(self.theme.panel));
+        let mid = lerp_tint(top, bottom, 0.5);
+        let row_tints = [top, mid, bottom];
+        let mut panel_sprites = self.ui.patch.sprites(rect, self.viewport, [1.0; 4], LAYER_PANEL);
+        for (i, sp) in panel_sprites.iter_mut().enumerate() {
+            sp.tint = row_tints[i / 3];
+        }
         self.sprites.extend(panel_sprites);
 
         let s = self.ui.scale;
@@ -452,13 +478,18 @@ impl<'a> UiFrame<'a> {
     pub fn glass_panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
         let rect =
             anchored_rect(anchor, size, self.viewport, self.theme.screen_margin * self.ui.scale);
-        let mut frost = Sprite::new(rect.world_center(self.viewport), [rect.w, rect.h], self.ui.panel_uv);
+        let mut frost = Sprite::new(
+            rect.world_center(self.viewport),
+            [rect.w, rect.h],
+            self.atlas.region("ui/panel").unwrap_or([0.0; 4]),
+        );
         frost.tint = self.theme.glass;
         frost.tint_end = self.theme.glass;
         frost.layer = LAYER_PANEL;
         self.frost.push(frost);
 
         // Рамка поверх стекла (тонкая, полупрозрачный fill в текстуре).
+        self.ui.glass_patch.uv = self.uv("ui/panel_glass");
         let border = self.ui.glass_patch.sprites(rect, self.viewport, [1.0; 4], LAYER_PANEL);
         self.sprites.extend(border);
 
@@ -505,6 +536,7 @@ impl<'a> UiFrame<'a> {
         // Запоминаем индекс начала КОНТЕНА: после замыкания забираем всё,
         // что добавилось ПОСЛЕ рамки (в кадре могут быть и другие панели).
         let content_start = self.sprites.len();
+        self.ui.patch.uv = self.uv("ui/panel");
         let panel_sprites = self.ui.patch.sprites(rect, self.viewport, self.theme.panel, LAYER_PANEL);
         self.sprites.extend(panel_sprites);
 
@@ -556,7 +588,7 @@ impl<'a> UiFrame<'a> {
             let mut track = Sprite::new(
                 Rect::new(track_x, rect.y + 2.0, track_w, rect.h - 4.0).world_center(self.viewport),
                 [track_w, rect.h - 4.0],
-                self.ui.rect_uv,
+                self.uv("ui/rect"),
             );
             track.tint = self.theme.bar_bg;
             track.layer = LAYER_WIDGET + 1.0;
@@ -564,7 +596,7 @@ impl<'a> UiFrame<'a> {
             let mut thumb = Sprite::new(
                 Rect::new(track_x, ty, track_w, thumb_h).world_center(self.viewport),
                 [track_w, thumb_h],
-                self.ui.rect_uv,
+                self.uv("ui/rect"),
             );
             thumb.tint = self.theme.accent;
             thumb.layer = LAYER_WIDGET + 1.0;
@@ -742,6 +774,12 @@ impl<'a> Ctx<'a> {
         self.ui.scale
     }
 
+    /// Свежий UV региона по имени (атлас может расти прямо в кадре —
+    /// кэшировать UV между begin и пушем нельзя).
+    fn uv(&self, name: &str) -> [f32; 4] {
+        self.atlas.region(name).unwrap_or([0.0; 4])
+    }
+
     /// Уникальный id виджета: hash подписи + порядковый номер кадра.
     ///
     /// Контракт (заимствовано из gpui-component, «Keyed element state»):
@@ -791,7 +829,7 @@ impl<'a> Ctx<'a> {
     fn focus_ring(&mut self, rect: Rect) {
         let d = 2.0 * self.s();
         let ring = Rect::new(rect.x - d, rect.y - d, rect.w + 2.0 * d, rect.h + 2.0 * d);
-        let mut s = Sprite::new(ring.world_center(self.viewport), [ring.w, ring.h], self.ui.rect_uv);
+        let mut s = Sprite::new(ring.world_center(self.viewport), [ring.w, ring.h], self.uv("ui/rect"));
         s.tint = self.theme().accent;
         s.layer = LAYER_WIDGET; // пушится ДО тела виджета — под ним
         self.sprites.push(s);
@@ -817,7 +855,7 @@ impl<'a> Ctx<'a> {
         } else {
             self.theme().button
         };
-        let mut bg = Sprite::new(rect.world_center(self.viewport), [rect.w, rect.h], self.ui.rect_uv);
+        let mut bg = Sprite::new(rect.world_center(self.viewport), [rect.w, rect.h], self.uv("ui/rect"));
         bg.tint = tint;
         bg.layer = LAYER_WIDGET;
         self.sprites.push(bg);
@@ -848,6 +886,7 @@ impl<'a> Ctx<'a> {
             return None;
         }
 
+        self.ui.patch.uv = self.uv("ui/panel");
         let cells = self.ui.patch.sprites(popup, self.viewport, self.theme().panel, LAYER_TOOLTIP);
         self.sprites.extend(cells);
 
@@ -857,7 +896,7 @@ impl<'a> Ctx<'a> {
             let irect = Rect::new(popup.x + pad, y, popup.w - pad * 2.0, item_h);
             let hov = irect.contains(self.ui.cursor);
             if hov {
-                let mut hl = Sprite::new(irect.world_center(self.viewport), [irect.w, irect.h], self.ui.rect_uv);
+                let mut hl = Sprite::new(irect.world_center(self.viewport), [irect.w, irect.h], self.uv("ui/rect"));
                 hl.tint = self.theme().button_hover;
                 hl.layer = LAYER_TOOLTIP;
                 self.sprites.push(hl);
@@ -920,6 +959,7 @@ impl<'a> Ctx<'a> {
             tint
         };
 
+        self.ui.button_patch.uv = self.uv("ui/button");
         let cells = self.ui.button_patch.sprites(rect, self.viewport, tint, LAYER_WIDGET);
         self.sprites.extend(cells);
 
@@ -987,11 +1027,12 @@ impl<'a> Ctx<'a> {
         let ty = rect.y + (rect.h - box_h) * 0.5;
         let box_rect = Rect::new(rect.x, ty, box_h, box_h);
         let tint = if *value { self.theme().accent } else { self.theme().bar_bg };
-        let mut b = Sprite::new(box_rect.world_center(self.viewport), [box_h, box_h], self.ui.rect_uv);
+        let mut b = Sprite::new(box_rect.world_center(self.viewport), [box_h, box_h], self.uv("ui/rect"));
         b.tint = tint;
         b.layer = LAYER_WIDGET;
         self.sprites.push(b);
         // Рамка поверх (независимо от состояния — читаемость на любом фоне).
+        self.ui.button_patch.uv = self.uv("ui/button");
         let cells = self
             .ui
             .button_patch
@@ -1036,7 +1077,7 @@ impl<'a> Ctx<'a> {
         let thumb_d = 20.0 * dpi;
         let ty = rect.y + (rect.h - track_h) * 0.5;
         let track = Rect::new(rect.x, ty, track_w, track_h);
-        let mut t = Sprite::new(track.world_center(self.viewport), [track_w, track_h], self.ui.rect_uv);
+        let mut t = Sprite::new(track.world_center(self.viewport), [track_w, track_h], self.uv("ui/rect"));
         t.tint = if *value { self.theme().accent } else { self.theme().bar_bg };
         t.layer = LAYER_WIDGET;
         self.sprites.push(t);
@@ -1046,7 +1087,7 @@ impl<'a> Ctx<'a> {
         let pos = self.animate(id, motion::channels::THUMB, if *value { 1.0 } else { 0.0 });
         let cx = track.x + 2.0 * dpi + travel * pos + thumb_d * 0.5;
         let cy = track.y + 2.0 * dpi + thumb_d * 0.5;
-        let thumb_uv = self.ui.thumb_uv;
+        let thumb_uv = self.uv("ui/thumb");
         let mut th_sprite = Sprite::new(
             [cx - self.viewport[0] * 0.5, self.viewport[1] * 0.5 - cy],
             [thumb_d, thumb_d],
@@ -1110,7 +1151,7 @@ impl<'a> Ctx<'a> {
         let mut track = Sprite::new(
             [rect.x + rect.w * 0.5 - self.viewport[0] * 0.5, self.viewport[1] * 0.5 - cy],
             [rect.w, track_h],
-            self.ui.rect_uv,
+            self.uv("ui/rect"),
         );
         track.tint = self.theme().bar_bg;
         track.layer = LAYER_WIDGET;
@@ -1120,7 +1161,7 @@ impl<'a> Ctx<'a> {
         let fill_w = rect.w * shown;
         if fill_w > 0.0 {
             let fill = Rect::new(rect.x, cy - track_h * 0.5, fill_w, track_h);
-            let mut f = Sprite::new(fill.world_center(self.viewport), [fill.w, fill.h], self.ui.rect_uv);
+            let mut f = Sprite::new(fill.world_center(self.viewport), [fill.w, fill.h], self.uv("ui/rect"));
             f.tint = self.theme().accent;
             f.layer = LAYER_WIDGET;
             self.sprites.push(f);
@@ -1128,7 +1169,7 @@ impl<'a> Ctx<'a> {
 
         let thumb_d = 18.0 * self.s();
         let thumb_x = rect.x + fill_w.max(thumb_d * 0.5) - thumb_d * 0.5;
-        let thumb_uv = self.ui.thumb_uv;
+        let thumb_uv = self.uv("ui/thumb");
         let mut thumb = Sprite::new(
             [thumb_x + thumb_d * 0.5 - self.viewport[0] * 0.5, self.viewport[1] * 0.5 - cy],
             [thumb_d, thumb_d],
@@ -1253,7 +1294,7 @@ impl<'a> Panel<'a> {
 
         let bar_h = size.bar_h() * self.ctx.s();
         let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, bar_h);
-        let mut bg = Sprite::new(rect.world_center(self.ctx.viewport), [rect.w, rect.h], self.ctx.ui.rect_uv);
+        let mut bg = Sprite::new(rect.world_center(self.ctx.viewport), [rect.w, rect.h], self.ctx.uv("ui/rect"));
         bg.tint = self.ctx.theme().bar_bg;
         bg.layer = LAYER_WIDGET;
         self.ctx.sprites.push(bg);
@@ -1262,7 +1303,7 @@ impl<'a> Panel<'a> {
         if shown > 0.0 {
             let w = (rect.w - 2.0) * shown;
             let fill = Rect::new(rect.x + 1.0, rect.y + 1.0, w, rect.h - 2.0);
-            let mut s = Sprite::new(fill.world_center(self.ctx.viewport), [fill.w, fill.h], self.ctx.ui.rect_uv);
+            let mut s = Sprite::new(fill.world_center(self.ctx.viewport), [fill.w, fill.h], self.ctx.uv("ui/rect"));
             s.tint = self.ctx.theme().bar_fill;
             s.layer = LAYER_WIDGET;
             self.ctx.sprites.push(s);
@@ -1300,7 +1341,7 @@ impl<'a> Panel<'a> {
     pub fn separator(&mut self) {
         let h = 2.0 * self.ctx.s();
         let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, h);
-        let mut s = Sprite::new(rect.world_center(self.ctx.viewport), [rect.w, rect.h], self.ctx.ui.rect_uv);
+        let mut s = Sprite::new(rect.world_center(self.ctx.viewport), [rect.w, rect.h], self.ctx.uv("ui/rect"));
         s.tint = self.ctx.theme().text_muted;
         s.layer = LAYER_WIDGET;
         self.ctx.sprites.push(s);
@@ -1383,6 +1424,11 @@ impl<'a> Row<'a> {
         let rect = self.take(w, 36.0 * self.ctx.s());
         self.ctx.slider_at(rect, label, value)
     }
+}
+
+/// Нижний tint градиента панели: чуть темнее и холоднее верха.
+fn panel_bottom(t: [f32; 4]) -> [f32; 4] {
+    [t[0] * 0.82, t[1] * 0.85, t[2] * 0.94, t[3]]
 }
 
 /// Линейная интерполяция tint'а (для плавной подсветки hover).

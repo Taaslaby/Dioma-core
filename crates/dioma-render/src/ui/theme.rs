@@ -78,6 +78,8 @@ pub struct UiTheme {
     pub button_border: [u8; 4],
     /// Стекло панели: RGB множитель размытой сцены, A — плотность.
     pub glass: [f32; 4],
+    /// Тень панели (обычно полупрозрачный чёрный).
+    pub shadow: [f32; 4],
     /// Отступы (spacing-токены, px).
     pub content_margin: f32,
     pub row_gap: f32,
@@ -103,6 +105,7 @@ impl UiTheme {
             panel_fill: [22, 26, 38, 216],
             panel_border: [188, 196, 214, 255],
             glass: [0.82, 0.88, 1.0, 0.78],
+            shadow: [0.0, 0.0, 0.0, 0.55],
             button_fill: [232, 238, 248, 255],
             button_border: [96, 106, 130, 255],
             content_margin: 12.0,
@@ -139,6 +142,7 @@ impl UiTheme {
             panel_fill: [245, 247, 252, 240],
             panel_border: [120, 130, 150, 255],
             glass: [0.96, 0.98, 1.0, 0.85],
+            shadow: [0.30, 0.35, 0.45, 0.35],
             button_fill: [255, 255, 255, 255],
             button_border: [110, 120, 145, 255],
             ..Self::dark()
