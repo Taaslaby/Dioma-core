@@ -412,6 +412,13 @@ impl UiSystem {
     }
 }
 
+/// Фон панели: непрозрачная (тень+градиент) или стеклянная (frost+рамка).
+#[derive(Clone, Copy, PartialEq)]
+enum PanelKindBg {
+    Solid,
+    Glass,
+}
+
 /// Кадр UI: собирает спрайты виджетов, потом заливается в батч.
 pub struct UiFrame<'a> {
     ui: &'a mut UiSystem,
@@ -449,79 +456,87 @@ impl<'a> UiFrame<'a> {
     /// Панель, приколоченная якорем `anchor` к краю экрана; содержимое —
     /// вертикальный стек внутри замыкания ([`Panel`]).
     pub fn panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
-        let rect =
-            anchored_rect(anchor, size, self.viewport, self.theme.screen_margin * self.ui.scale);
-        self.ui.hit_rects.push(rect);
-        self.draw_shadow(rect);
-        self.ui.patch.uv = self.uv("ui/panel");
-        // Градиент по рядам nine-patch: верхняя строка светлее нижней.
-        let (top, bottom) = (self.theme.panel, panel_bottom(self.theme.panel));
-        let mid = lerp_tint(top, bottom, 0.5);
-        let row_tints = [top, mid, bottom];
-        let mut panel_sprites = self.ui.patch.sprites(rect, self.viewport, [1.0; 4], LAYER_PANEL);
-        for (i, sp) in panel_sprites.iter_mut().enumerate() {
-            sp.tint = row_tints[i / 3];
-        }
-        self.sprites.extend(panel_sprites);
-
-        let s = self.ui.scale;
-        let mut cursor_y = rect.y + self.theme.content_margin * s;
-        let mut panel = Panel {
-            ctx: Ctx {
-                ui: &mut *self.ui,
-                atlas: &mut *self.atlas,
-                queue: self.queue,
-                sprites: &mut self.sprites,
-                viewport: self.viewport,
-                input: self.input,
-            },
-            content: rect.inner(self.theme.content_margin * s),
-            cursor_y: &mut cursor_y,
-            row_gap: self.theme.row_gap * s,
-        };
-        content(&mut panel);
+        self.build_panel(anchor, size, PanelKindBg::Solid, content);
     }
 
     /// Стеклянная панель: размытая сцена за прямоугольником (frosted glass).
-    ///
-    /// Подложка уходит в отдельный батч для `Renderer::render_ui_frost`
-    /// (вызывается ДО `render_ui`); сверху рисуется тонкая рамка темы и
-    /// обычное содержимое. Требует `renderer.set_ui_backdrop(..)`.
     pub fn glass_panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
-        let rect =
-            anchored_rect(anchor, size, self.viewport, self.theme.screen_margin * self.ui.scale);
-        self.ui.hit_rects.push(rect);
-        let mut frost = Sprite::new(
-            rect.world_center(self.viewport),
-            [rect.w, rect.h],
-            self.atlas.region("ui/panel").unwrap_or([0.0; 4]),
-        );
-        frost.tint = self.theme.glass;
-        frost.tint_end = self.theme.glass;
-        frost.layer = LAYER_PANEL;
-        self.frost.push(frost);
-
-        // Рамка поверх стекла (тонкая, полупрозрачный fill в текстуре).
-        self.ui.glass_patch.uv = self.uv("ui/panel_glass");
-        let border = self.ui.glass_patch.sprites(rect, self.viewport, [1.0; 4], LAYER_PANEL);
-        self.sprites.extend(border);
-
-        let mut cursor_y = rect.y + self.theme.content_margin;
-        let mut panel = Panel {
-            ctx: Ctx {
-                ui: &mut *self.ui,
-                atlas: &mut *self.atlas,
-                queue: self.queue,
-                sprites: &mut self.sprites,
-                viewport: self.viewport,
-                input: self.input,
-            },
-            content: rect.inner(self.theme.content_margin),
-            cursor_y: &mut cursor_y,
-            row_gap: self.theme.row_gap,
-        };
-        content(&mut panel);
+        self.build_panel(anchor, size, PanelKindBg::Glass, content);
     }
+
+    /// Общая сборка панели: контент строится ВО ВРЕМЕННЫЙ список, по нему
+    /// вычисляется фактическая высота (авторазмер — `size[1]` = минимум),
+    /// затем рисуются тень/фон и подкладывается контент. Контент никогда
+    /// не вылезает за фон.
+    fn build_panel(
+        &mut self,
+        anchor: Anchor,
+        size: [f32; 2],
+        bg: PanelKindBg,
+        content: impl FnOnce(&mut Panel),
+    ) {
+        let s = self.ui.scale;
+        let rect0 =
+            anchored_rect(anchor, size, self.viewport, self.theme.screen_margin * s);
+        // 1) Контент во временный список — меряем высоту.
+        let mut content_sprites: Vec<Sprite> = Vec::new();
+        let mut cursor_y = rect0.y + self.theme.content_margin * s;
+        {
+            let mut panel = Panel {
+                ctx: Ctx {
+                    ui: &mut *self.ui,
+                    atlas: &mut *self.atlas,
+                    queue: self.queue,
+                    sprites: &mut content_sprites,
+                    viewport: self.viewport,
+                    input: self.input,
+                },
+                content: rect0.inner(self.theme.content_margin * s),
+                cursor_y: &mut cursor_y,
+                row_gap: self.theme.row_gap * s,
+            };
+            content(&mut panel);
+        }
+        let content_h = (cursor_y + self.theme.content_margin * s) - rect0.y;
+        // 2) Финальный прямоугольник: не ниже заданного размера.
+        let mut rect = rect0;
+        rect.h = rect0.h.max(content_h);
+        self.ui.hit_rects.push(rect);
+
+        // 3) Фон (тень + заливка) с финальным размером.
+        match bg {
+            PanelKindBg::Solid => {
+                self.draw_shadow(rect);
+                self.ui.patch.uv = self.uv("ui/panel");
+                let (top, bottom) = (self.theme.panel, panel_bottom(self.theme.panel));
+                let mid = lerp_tint(top, bottom, 0.5);
+                let row_tints = [top, mid, bottom];
+                let mut cells = self.ui.patch.sprites(rect, self.viewport, [1.0; 4], LAYER_PANEL);
+                for (i, sp) in cells.iter_mut().enumerate() {
+                    sp.tint = row_tints[i / 3];
+                }
+                self.sprites.extend(cells);
+            }
+            PanelKindBg::Glass => {
+                let mut frost = Sprite::new(
+                    rect.world_center(self.viewport),
+                    [rect.w, rect.h],
+                    self.atlas.region("ui/panel").unwrap_or([0.0; 4]),
+                );
+                frost.tint = self.theme.glass;
+                frost.tint_end = self.theme.glass;
+                frost.layer = LAYER_PANEL;
+                self.frost.push(frost);
+                self.ui.glass_patch.uv = self.uv("ui/panel_glass");
+                let border =
+                    self.ui.glass_patch.sprites(rect, self.viewport, [1.0; 4], LAYER_PANEL);
+                self.sprites.extend(border);
+            }
+        }
+        // 4) Контент поверх.
+        self.sprites.extend(content_sprites);
+    }
+
 
     /// Панель со скроллом: контент выше панели прокручивается колесом мыши
     /// (`UiInput.scroll`), обрезается по прямоугольнику панели (scissor),

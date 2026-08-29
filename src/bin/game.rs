@@ -32,7 +32,10 @@ use dioma::view::{
     CritterView, GameCommand, InputMapper, Presenter, Sex, SimView, TICK, TimeOfDay, LAYER_TINT,
 };
 use dioma_render::ui::{Panel, UiKey, UiSystem};
-use dioma_render::{Camera, Renderer, Sprite, SpriteAtlas, SpriteBatch, SpriteFx};
+use dioma_render::{
+    Camera, GlassBackdrop, PostFx, PostProcess, Renderer, Sprite, SpriteAtlas, SpriteBatch,
+    SpriteFx,
+};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -107,6 +110,8 @@ struct Game {
     /// Наш спрайтовый UI: информационные панели (HUD/инспектор).
     /// egui остаётся для настроек/меню/графиков (разделение ролей).
     ui_sys: Option<dioma_render::ui::UiSystem>,
+    post: Option<PostProcess>,
+    backdrop: Option<GlassBackdrop>,
     mouse_down: bool,
     mouse_down_prev: bool,
     ui_key: Option<dioma_render::ui::UiKey>,
@@ -151,6 +156,8 @@ impl Game {
             presenter: None,
             batch: None,
             ui_sys: None,
+            post: None,
+            backdrop: None,
             mouse_down: false,
             mouse_down_prev: false,
             ui_key: None,
@@ -309,7 +316,13 @@ impl Game {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("game encoder"),
         });
-        renderer.render(queue, &mut encoder, &view_tex, atlas, batch, &self.camera);
+        let Some(post) = &mut self.post else { return };
+        let Some(backdrop) = &self.backdrop else { return };
+        // Сцена -> текстура пост-процессора; блюр -> бэкдроп стекла.
+        renderer.render(queue, &mut encoder, post.scene_view(), atlas, batch, &self.camera);
+        post.apply(queue, &mut encoder, backdrop.view(), PostFx::Blur { radius: 6.0 }, t);
+        renderer.set_ui_backdrop(device, backdrop.view());
+        post.apply(queue, &mut encoder, &view_tex, PostFx::None, t);
 
         // 5) Наш спрайтовый UI: информационные панели (HUD/инспектор).
         let vp = self.camera.viewport;
@@ -382,8 +395,7 @@ impl Game {
                             state = if c.alive { "живо" } else { "мертво" },
                             zzz = if c.sleeping { " 💤" } else { "" },
                         );
-                        let mut b =
-                            dioma_render::ui::Button::owned(label).small();
+                        let mut b = dioma_render::ui::Button::owned(label);
                         if *selected == Some(c.id) {
                             b = b.tooltip("выбрано (повторный клик — снять)");
                         }
@@ -637,6 +649,10 @@ impl ApplicationHandler for Game {
         let mut ui_sys = UiSystem::new(&device, &queue, &mut atlas);
         ui_sys.set_scale(&mut atlas, &queue, window.scale_factor() as f32);
         let presenter = Presenter::new(&queue, &mut atlas);
+        let mut post = PostProcess::new(&device, format);
+        post.resize(&device, size.width.max(1), size.height.max(1));
+        let backdrop =
+            GlassBackdrop::new(&device, format, size.width.max(1), size.height.max(1));
 
         let mut renderer = Renderer::new(&device, format);
         renderer.set_clear_color(wgpu::Color { r: 0.05, g: 0.07, b: 0.10, a: 1.0 });
@@ -665,6 +681,8 @@ impl ApplicationHandler for Game {
         self.renderer = Some(renderer);
         self.atlas = Some(atlas);
         self.ui_sys = Some(ui_sys);
+        self.post = Some(post);
+        self.backdrop = Some(backdrop);
         self.presenter = Some(presenter);
         self.batch = Some(batch);
         self.egui_state = Some(egui_state);
@@ -688,6 +706,12 @@ impl ApplicationHandler for Game {
                     config.width = size.width.max(1);
                     config.height = size.height.max(1);
                     surface.configure(self.device.as_ref().unwrap(), config);
+                }
+                if let (Some(post), Some(backdrop), Some(device)) =
+                    (&mut self.post, &mut self.backdrop, &self.device)
+                {
+                    post.resize(device, size.width.max(1), size.height.max(1));
+                    backdrop.resize(device, size.width.max(1), size.height.max(1));
                 }
                 self.camera.viewport = [size.width as f32, size.height as f32];
             }
