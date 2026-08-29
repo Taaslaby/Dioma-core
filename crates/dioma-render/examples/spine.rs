@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use dioma_render::{Camera, MeshBatch, MeshBlend, Renderer, SpriteAtlas};
 
-const VIEWPORT: [f32; 2] = [1280.0, 720.0];
+/// Начальный размер окна; живой вьюпорт камеры — self.viewport (Resized).
+const START_SIZE: [f32; 2] = [1280.0, 720.0];
 const ASSET_DIR: &str = "assets/spine/strawberry";
 
 fn main() {
@@ -19,7 +20,7 @@ fn main() {
     }
     let events = winit::event_loop::EventLoop::new().unwrap();
     events.set_control_flow(winit::event_loop::ControlFlow::Poll);
-    let mut app = SpineDemo { smoke, ..Default::default() };
+    let mut app = SpineDemo { smoke, viewport: START_SIZE, ..Default::default() };
     events.run_app(&mut app).unwrap();
 }
 
@@ -37,6 +38,7 @@ struct SpineDemo {
     mesh_batch: Option<MeshBatch>,
     spine: Option<dioma_render::spine::SpineInstance>,
     last_frame: Option<std::time::Instant>,
+    viewport: [f32; 2],
 }
 
 impl SpineDemo {
@@ -77,8 +79,8 @@ impl SpineDemo {
         renderer.begin_frame(dt);
         let camera = Camera {
             center: [0.0, 0.0],
-            zoom: 0.85, // модель ~760 мировых px → влезает в 720
-            viewport: VIEWPORT,
+            zoom: 0.85, // модель ~760 мировых px
+            viewport: self.viewport,
         };
         renderer.render_meshes(
             &mut encoder,
@@ -102,8 +104,8 @@ impl winit::application::ApplicationHandler for SpineDemo {
                     winit::window::Window::default_attributes()
                         .with_title("dioma-render — Spine 2D")
                         .with_inner_size(winit::dpi::LogicalSize::new(
-                            VIEWPORT[0],
-                            VIEWPORT[1],
+                            START_SIZE[0],
+                            START_SIZE[1],
                         )),
                 )
                 .unwrap(),
@@ -197,6 +199,7 @@ impl winit::application::ApplicationHandler for SpineDemo {
                     config.height = size.height.max(1);
                     surface.configure(self.device.as_ref().unwrap(), config);
                 }
+                self.viewport = [size.width as f32, size.height as f32];
             }
             winit::event::WindowEvent::RedrawRequested => {
                 self.frame();

@@ -136,6 +136,9 @@ pub struct UiSystem {
     pub(crate) now: Instant,
     /// Глобальное отключение анимаций (доступность/скриншоты).
     pub reduced_motion: bool,
+    /// Масштаб DPI (pixels_per_point окна): все метрики UI умножаются.
+    /// Ставится `set_scale(..)` из события `ScaleFactorChanged`.
+    pub(crate) scale: f32,
     /// С какого кадра виджет в hover (для задержки tooltip'а).
     pub(crate) hover_since: HashMap<u64, Instant>,
     /// id виджета, который тащат мышью (slider).
@@ -242,6 +245,7 @@ impl UiSystem {
             motion: Motion::new(),
             now: Instant::now(),
             reduced_motion: false,
+            scale: 1.0,
             hover_since: HashMap::new(),
             dragging: None,
             frame_seq: 0,
@@ -283,6 +287,17 @@ impl UiSystem {
     /// Батч скролл-панели по id (см. [`Self::scroll_layers`]).
     pub fn scroll_batch(&self, id: u64) -> Option<&SpriteBatch> {
         self.scroll_pool.get(&id)
+    }
+
+    /// Масштаб DPI: множитель всех метрик (высоты кнопок, шрифты, отступы).
+    /// Передавайте `window.scale_factor()`; hit-test остаётся корректным.
+    pub fn set_scale(&mut self, pixels_per_point: f32) {
+        self.scale = pixels_per_point.max(0.25);
+    }
+
+    /// Текущий масштаб DPI.
+    pub fn scale(&self) -> f32 {
+        self.scale
     }
 
     /// Сменить тему (роли цветов, отступы). Текстуры панели/кнопки
@@ -404,11 +419,13 @@ impl<'a> UiFrame<'a> {
     /// Панель, приколоченная якорем `anchor` к краю экрана; содержимое —
     /// вертикальный стек внутри замыкания ([`Panel`]).
     pub fn panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
-        let rect = anchored_rect(anchor, size, self.viewport, self.theme.screen_margin);
+        let rect =
+            anchored_rect(anchor, size, self.viewport, self.theme.screen_margin * self.ui.scale);
         let panel_sprites = self.ui.patch.sprites(rect, self.viewport, self.theme.panel, LAYER_PANEL);
         self.sprites.extend(panel_sprites);
 
-        let mut cursor_y = rect.y + self.theme.content_margin;
+        let s = self.ui.scale;
+        let mut cursor_y = rect.y + self.theme.content_margin * s;
         let mut panel = Panel {
             ctx: Ctx {
                 ui: &mut *self.ui,
@@ -418,9 +435,9 @@ impl<'a> UiFrame<'a> {
                 viewport: self.viewport,
                 input: self.input,
             },
-            content: rect.inner(self.theme.content_margin),
+            content: rect.inner(self.theme.content_margin * s),
             cursor_y: &mut cursor_y,
-            row_gap: self.theme.row_gap,
+            row_gap: self.theme.row_gap * s,
         };
         content(&mut panel);
     }
@@ -431,7 +448,8 @@ impl<'a> UiFrame<'a> {
     /// (вызывается ДО `render_ui`); сверху рисуется тонкая рамка темы и
     /// обычное содержимое. Требует `renderer.set_ui_backdrop(..)`.
     pub fn glass_panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
-        let rect = anchored_rect(anchor, size, self.viewport, self.theme.screen_margin);
+        let rect =
+            anchored_rect(anchor, size, self.viewport, self.theme.screen_margin * self.ui.scale);
         let mut frost = Sprite::new(rect.world_center(self.viewport), [rect.w, rect.h], self.ui.panel_uv);
         frost.tint = self.theme.glass;
         frost.tint_end = self.theme.glass;
@@ -492,7 +510,7 @@ impl<'a> UiFrame<'a> {
         let saved_cursor = self.ui.cursor;
         self.ui.cursor = [saved_cursor[0], saved_cursor[1] + old_scroll];
 
-        let content_rect = rect.inner(self.theme.content_margin);
+        let content_rect = rect.inner(self.theme.content_margin * self.ui.scale);
         let mut cursor_y = content_rect.y - old_scroll;
         let mut panel = Panel {
             ctx: Ctx {
@@ -707,6 +725,11 @@ impl<'a> Ctx<'a> {
         &self.ui.theme
     }
 
+    /// Масштаб DPI текущего кадра.
+    fn s(&self) -> f32 {
+        self.ui.scale
+    }
+
     /// Уникальный id виджета: hash подписи + порядковый номер кадра.
     ///
     /// Контракт (заимствовано из gpui-component, «Keyed element state»):
@@ -754,7 +777,8 @@ impl<'a> Ctx<'a> {
 
     /// Акцентная рамка вокруг виджета в фокусе (токен `accent` темы).
     fn focus_ring(&mut self, rect: Rect) {
-        let ring = Rect::new(rect.x - 2.0, rect.y - 2.0, rect.w + 4.0, rect.h + 4.0);
+        let d = 2.0 * self.s();
+        let ring = Rect::new(rect.x - d, rect.y - d, rect.w + 2.0 * d, rect.h + 2.0 * d);
         let mut s = Sprite::new(ring.world_center(self.viewport), [ring.w, ring.h], self.ui.rect_uv);
         s.tint = self.theme().accent;
         s.layer = LAYER_WIDGET; // пушится ДО тела виджета — под ним
@@ -802,8 +826,8 @@ impl<'a> Ctx<'a> {
         }
 
         // Popup под кнопкой (флип наверх, если снизу нет места).
-        let item_h = 24.0;
-        let pad = 4.0;
+        let item_h = 24.0 * self.s();
+        let pad = 4.0 * self.s();
         let popup_size = [rect.w, items.len() as f32 * item_h + pad * 2.0];
         let popup = place_popup(rect, popup_size, self.viewport, layout::Side::Below, 4.0);
         // Клик вне кнопки и вне popup — закрыть (только закрытие, без выбора).
@@ -826,11 +850,11 @@ impl<'a> Ctx<'a> {
                 hl.layer = LAYER_TOOLTIP;
                 self.sprites.push(hl);
             }
-            let it_th = self.line_height(Size::Small.text_scale());
+            let it_th = self.line_height(Size::Small.text_scale() * self.s());
             self.push_text(
                 item,
-                [irect.x + 6.0, irect.y + (irect.h - it_th) * 0.5],
-                Size::Small.text_scale(),
+                [irect.x + 6.0 * self.s(), irect.y + (irect.h - it_th) * 0.5],
+                Size::Small.text_scale() * self.s(),
                 self.theme().text,
             );
             if hov && self.input.just_released {
@@ -888,7 +912,7 @@ impl<'a> Ctx<'a> {
         self.sprites.extend(cells);
 
         // Подпись по центру кнопки.
-        let scale = size.text_scale();
+        let scale = size.text_scale() * self.s();
         let tw = self.text_width(label, scale);
         let th = self.line_height(scale);
         let text_color = if disabled {
@@ -906,16 +930,17 @@ impl<'a> Ctx<'a> {
         // Tooltip: только после задержки hover, поверх всего, с флипом у края.
         if !disabled && tooltip.is_some() && self.tooltip_due(id, hovered) {
             let text = tooltip.unwrap_or_default();
-            let scale = Size::Small.text_scale();
+            let dpi = self.s();
+            let scale = Size::Small.text_scale() * dpi;
             let tw = self.text_width(text, scale);
             let th = self.line_height(scale);
-            let popup = [tw + 16.0, th + 10.0];
-            let where_ = place_popup(rect, popup, self.viewport, layout::Side::Above, 6.0);
+            let popup = [tw + 16.0 * dpi, th + 10.0 * dpi];
+            let where_ = place_popup(rect, popup, self.viewport, layout::Side::Above, 6.0 * dpi);
             let cells = self.ui.patch.sprites(where_, self.viewport, self.theme().panel, LAYER_TOOLTIP);
             self.sprites.extend(cells);
             self.push_text(
                 text,
-                [where_.x + 8.0, where_.y + 5.0],
+                [where_.x + 8.0 * dpi, where_.y + 5.0 * dpi],
                 scale,
                 self.theme().text,
             );
@@ -944,9 +969,9 @@ impl<'a> Ctx<'a> {
             self.focus_ring(Rect::new(rect.x, rect.y, w, rect.h));
         }
 
-        // Коробка 18×18: включена — залита акцентом, выключена — рамка.
-        let scale = Size::Small.text_scale();
-        let box_h = 18.0;
+        // Коробка 18×18 (× DPI): включена — залита акцентом, выключена — рамка.
+        let scale = Size::Small.text_scale() * self.s();
+        let box_h = 18.0 * self.s();
         let ty = rect.y + (rect.h - box_h) * 0.5;
         let box_rect = Rect::new(rect.x, ty, box_h, box_h);
         let tint = if *value { self.theme().accent } else { self.theme().bar_bg };
@@ -965,7 +990,7 @@ impl<'a> Ctx<'a> {
         let th = self.line_height(scale);
         self.push_text(
             label,
-            [rect.x + box_h + 8.0, ty + (box_h - th) * 0.5],
+            [rect.x + box_h + 8.0 * self.s(), ty + (box_h - th) * 0.5],
             scale,
             self.theme().text,
         );
@@ -992,26 +1017,27 @@ impl<'a> Ctx<'a> {
             self.focus_ring(Rect::new(rect.x, rect.y, w, rect.h));
         }
 
-        // Трек: 44×24, бегунок 20 px, ход 44-24=20 px (паддинг 2).
-        const TRACK_W: f32 = 44.0;
-        const TRACK_H: f32 = 24.0;
-        const THUMB: f32 = 20.0;
-        let ty = rect.y + (rect.h - TRACK_H) * 0.5;
-        let track = Rect::new(rect.x, ty, TRACK_W, TRACK_H);
-        let mut t = Sprite::new(track.world_center(self.viewport), [TRACK_W, TRACK_H], self.ui.rect_uv);
+        // Трек: 44×24 (× DPI), бегунок 20 px, ход 20 px (паддинг 2).
+        let dpi = self.s();
+        let track_w = 44.0 * dpi;
+        let track_h = 24.0 * dpi;
+        let thumb_d = 20.0 * dpi;
+        let ty = rect.y + (rect.h - track_h) * 0.5;
+        let track = Rect::new(rect.x, ty, track_w, track_h);
+        let mut t = Sprite::new(track.world_center(self.viewport), [track_w, track_h], self.ui.rect_uv);
         t.tint = if *value { self.theme().accent } else { self.theme().bar_bg };
         t.layer = LAYER_WIDGET;
         self.sprites.push(t);
 
         // Бегунок плавно скользит (keyed transition по каналу THUMB).
-        let travel = TRACK_W - THUMB - 4.0;
+        let travel = track_w - thumb_d - 4.0 * dpi;
         let pos = self.animate(id, motion::channels::THUMB, if *value { 1.0 } else { 0.0 });
-        let cx = track.x + 2.0 + travel * pos + THUMB * 0.5;
-        let cy = track.y + 2.0 + THUMB * 0.5;
+        let cx = track.x + 2.0 * dpi + travel * pos + thumb_d * 0.5;
+        let cy = track.y + 2.0 * dpi + thumb_d * 0.5;
         let thumb_uv = self.ui.thumb_uv;
         let mut th_sprite = Sprite::new(
             [cx - self.viewport[0] * 0.5, self.viewport[1] * 0.5 - cy],
-            [THUMB, THUMB],
+            [thumb_d, thumb_d],
             thumb_uv,
         );
         th_sprite.tint = self.theme().button;
@@ -1019,9 +1045,9 @@ impl<'a> Ctx<'a> {
         self.sprites.push(th_sprite);
 
         // Подпись справа.
-        let scale = Size::Small.text_scale();
+        let scale = Size::Small.text_scale() * dpi;
         let th = self.line_height(scale);
-        self.push_text(label, [rect.x + TRACK_W + 8.0, ty + (TRACK_H - th) * 0.5], scale, self.theme().text);
+        self.push_text(label, [rect.x + track_w + 8.0 * dpi, ty + (track_h - th) * 0.5], scale, self.theme().text);
 
         Response { hovered, clicked, disabled: false, changed }
     }
@@ -1066,12 +1092,12 @@ impl<'a> Ctx<'a> {
             self.ui.dragging = None;
         }
 
-        // Дорожка по вертикальному центру + заполнение + бегунок.
-        const TRACK_H: f32 = 6.0;
+        // Дорожка по вертикальному центру + заполнение + бегунок (x DPI).
+        let track_h = 6.0 * self.s();
         let cy = rect.y + rect.h * 0.5;
         let mut track = Sprite::new(
             [rect.x + rect.w * 0.5 - self.viewport[0] * 0.5, self.viewport[1] * 0.5 - cy],
-            [rect.w, TRACK_H],
+            [rect.w, track_h],
             self.ui.rect_uv,
         );
         track.tint = self.theme().bar_bg;
@@ -1081,19 +1107,19 @@ impl<'a> Ctx<'a> {
         let shown = self.animate(id, motion::channels::FILL, *value);
         let fill_w = rect.w * shown;
         if fill_w > 0.0 {
-            let fill = Rect::new(rect.x, cy - TRACK_H * 0.5, fill_w, TRACK_H);
+            let fill = Rect::new(rect.x, cy - track_h * 0.5, fill_w, track_h);
             let mut f = Sprite::new(fill.world_center(self.viewport), [fill.w, fill.h], self.ui.rect_uv);
             f.tint = self.theme().accent;
             f.layer = LAYER_WIDGET;
             self.sprites.push(f);
         }
 
-        const THUMB_D: f32 = 18.0;
-        let thumb_x = rect.x + fill_w.max(THUMB_D * 0.5) - THUMB_D * 0.5;
+        let thumb_d = 18.0 * self.s();
+        let thumb_x = rect.x + fill_w.max(thumb_d * 0.5) - thumb_d * 0.5;
         let thumb_uv = self.ui.thumb_uv;
         let mut thumb = Sprite::new(
-            [thumb_x + THUMB_D * 0.5 - self.viewport[0] * 0.5, self.viewport[1] * 0.5 - cy],
-            [THUMB_D, THUMB_D],
+            [thumb_x + thumb_d * 0.5 - self.viewport[0] * 0.5, self.viewport[1] * 0.5 - cy],
+            [thumb_d, thumb_d],
             thumb_uv,
         );
         thumb.tint = if dragging { self.theme().accent } else { self.theme().button };
@@ -1101,7 +1127,7 @@ impl<'a> Ctx<'a> {
         self.sprites.push(thumb);
 
         // Подпись слева над дорожкой, значение — справа.
-        let scale = Size::Small.text_scale();
+        let scale = Size::Small.text_scale() * self.s();
         let th = self.line_height(scale);
         self.push_text(label, [rect.x, rect.y], scale, self.theme().text_muted);
         let val_text = format!("{}", (*value * 100.0).round() as u32);
@@ -1146,7 +1172,7 @@ impl<'a> Panel<'a> {
 
     /// Строка текста с явным цветом/размером (для нестандартных случаев).
     pub fn label_sized(&mut self, text: &str, color: [f32; 4], size: Size) {
-        let scale = size.text_scale();
+        let scale = size.text_scale() * self.ctx.s();
         let h = self.ctx.line_height(scale);
         self.ctx.push_text(text, [self.content.x, *self.cursor_y], scale, color);
         *self.cursor_y += h + self.row_gap;
@@ -1155,7 +1181,7 @@ impl<'a> Panel<'a> {
     /// Кнопка во всю ширину содержимого. Принимает `&str` или [`Button`].
     pub fn button<'s>(&mut self, spec: impl Into<Button<'s>>) -> Response {
         let b = spec.into();
-        let h = b.size.button_h();
+        let h = b.size.button_h() * self.ctx.s();
         let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, h);
         let r = self.ctx.button_at(rect, b);
         *self.cursor_y += h + self.row_gap;
@@ -1164,7 +1190,7 @@ impl<'a> Panel<'a> {
 
     /// Checkbox во всю ширину содержимого: клик переключает `value`.
     pub fn checkbox(&mut self, label: &str, value: &mut bool) -> Response {
-        let h = 26.0;
+        let h = 26.0 * self.ctx.s();
         let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, h);
         let r = self.ctx.checkbox_at(rect, label, value);
         *self.cursor_y += h + self.row_gap;
@@ -1173,7 +1199,7 @@ impl<'a> Panel<'a> {
 
     /// Switch во всю ширину содержимого: клик переключает `value`.
     pub fn switch(&mut self, label: &str, value: &mut bool) -> Response {
-        let h = 30.0;
+        let h = 30.0 * self.ctx.s();
         let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, h);
         let r = self.ctx.switch_at(rect, label, value);
         *self.cursor_y += h + self.row_gap;
@@ -1182,7 +1208,7 @@ impl<'a> Panel<'a> {
 
     /// Slider 0..=1 во всю ширину содержимого: drag меняет `value`.
     pub fn slider(&mut self, label: &str, value: &mut f32) -> Response {
-        let h = 36.0;
+        let h = 36.0 * self.ctx.s();
         let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, h);
         let r = self.ctx.slider_at(rect, label, value);
         *self.cursor_y += h + self.row_gap;
@@ -1203,7 +1229,7 @@ impl<'a> Panel<'a> {
         let id = self.ctx.id(caption);
 
         // Подпись мелкая над баром.
-        let cap_scale = size.text_scale() * 0.75;
+        let cap_scale = size.text_scale() * 0.75 * self.ctx.s();
         let cap_h = self.ctx.line_height(cap_scale);
         self.ctx.push_text(
             caption,
@@ -1211,9 +1237,9 @@ impl<'a> Panel<'a> {
             cap_scale,
             self.ctx.theme().text_muted,
         );
-        *self.cursor_y += cap_h + 4.0;
+        *self.cursor_y += cap_h + 4.0 * self.ctx.s();
 
-        let bar_h = size.bar_h();
+        let bar_h = size.bar_h() * self.ctx.s();
         let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, bar_h);
         let mut bg = Sprite::new(rect.world_center(self.ctx.viewport), [rect.w, rect.h], self.ctx.ui.rect_uv);
         bg.tint = self.ctx.theme().bar_bg;
@@ -1242,7 +1268,7 @@ impl<'a> Panel<'a> {
             x: self.content.x,
             y,
             row_h: 0.0,
-            gap_x: 8.0,
+            gap_x: 8.0 * self.ctx.s(),
             max_x,
             ctx: Ctx {
                 ui: &mut *self.ctx.ui,
@@ -1260,7 +1286,7 @@ impl<'a> Panel<'a> {
 
     /// Разделитель: тонкая линия во всю ширину содержимого.
     pub fn separator(&mut self) {
-        let h = 2.0;
+        let h = 2.0 * self.ctx.s();
         let rect = Rect::new(self.content.x, *self.cursor_y, self.content.w, h);
         let mut s = Sprite::new(rect.world_center(self.ctx.viewport), [rect.w, rect.h], self.ctx.ui.rect_uv);
         s.tint = self.ctx.theme().text_muted;
@@ -1315,8 +1341,9 @@ impl<'a> Row<'a> {
         let label = b.label.as_ref();
         let scale = b.size.text_scale();
         let tw = self.ctx.text_width(label, scale);
-        let w = (tw + 28.0).min((self.max_x - self.x).max(0.0));
-        let rect = self.take(w, b.size.button_h());
+        let dpi = self.ctx.s();
+        let w = (tw + 28.0 * dpi).min((self.max_x - self.x).max(0.0));
+        let rect = self.take(w, b.size.button_h() * dpi);
         self.ctx.button_at(rect, b)
     }
 
@@ -1324,7 +1351,8 @@ impl<'a> Row<'a> {
     pub fn checkbox(&mut self, label: &str, value: &mut bool) -> Response {
         let scale = Size::Small.text_scale();
         let tw = self.ctx.text_width(label, scale);
-        let rect = self.take(18.0 + 8.0 + tw, 26.0);
+        let dpi = self.ctx.s();
+        let rect = self.take((18.0 + 8.0) * dpi + tw, 26.0 * dpi);
         self.ctx.checkbox_at(rect, label, value)
     }
 
@@ -1332,14 +1360,15 @@ impl<'a> Row<'a> {
     pub fn switch(&mut self, label: &str, value: &mut bool) -> Response {
         let scale = Size::Small.text_scale();
         let tw = self.ctx.text_width(label, scale);
-        let rect = self.take(44.0 + 8.0 + tw, 30.0);
+        let dpi = self.ctx.s();
+        let rect = self.take((44.0 + 8.0) * dpi + tw, 30.0 * dpi);
         self.ctx.switch_at(rect, label, value)
     }
 
     /// Slider фиксированной ширины (дорожка с подписью).
     pub fn slider(&mut self, label: &str, width: f32, value: &mut f32) -> Response {
-        let w = width.min((self.max_x - self.x).max(0.0));
-        let rect = self.take(w, 36.0);
+        let w = (width * self.ctx.s()).min((self.max_x - self.x).max(0.0));
+        let rect = self.take(w, 36.0 * self.ctx.s());
         self.ctx.slider_at(rect, label, value)
     }
 }

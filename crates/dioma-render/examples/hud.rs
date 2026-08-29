@@ -16,7 +16,9 @@ use dioma_render::{
     SpriteAtlas, SpriteBatch, SpriteFx,
 };
 
-const VIEWPORT: [f32; 2] = [1280.0, 720.0];
+/// Начальный размер окна; живой вьюпорт — в `self.viewport` (обновляется
+/// в Resized: максимизация/фуллскрин/DPI меняют физический размер).
+const START_SIZE: [f32; 2] = [1280.0, 720.0];
 
 fn main() {
     let smoke_frames = std::env::args()
@@ -65,6 +67,8 @@ struct HudDemo {
     mouse_down_last_frame: bool,
     key: Option<dioma_render::ui::UiKey>,
     wheel: f32,
+    /// Живой размер поверхности (физические пиксели) — вьюпорт UI и камеры.
+    viewport: [f32; 2],
     started: Instant,
     last_frame: Option<Instant>,
 }
@@ -99,6 +103,7 @@ impl HudDemo {
             mouse_down_last_frame: false,
             key: None,
             wheel: 0.0,
+            viewport: START_SIZE,
             started: Instant::now(),
             last_frame: None,
         }
@@ -121,6 +126,7 @@ impl HudDemo {
         let Some(post) = &mut self.post else { return };
         let Some(backdrop) = &self.backdrop else { return };
         let Some(ui) = &mut self.ui else { return };
+        let vp = self.viewport;
 
         // ── Сцена: два «существа» на орбитах (пауза останавливает время). ──
         let sim_t = if self.state.paused { 0.0 } else { t };
@@ -173,7 +179,7 @@ impl HudDemo {
         self.wheel = 0.0;
 
         {
-            let mut frame = ui.begin(atlas, queue, input, VIEWPORT);
+            let mut frame = ui.begin(atlas, queue, input, vp);
             let state = &mut self.state;
             state.load = 0.5 + 0.45 * (t * 0.7).sin(); // бар плавно двигается
             frame.panel(Anchor::TopLeft, [300.0, 190.0], |p| {
@@ -212,7 +218,7 @@ impl HudDemo {
         let view = fg.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("hud") });
-        let camera = Camera::new(VIEWPORT);
+        let camera = Camera::new(vp);
         // Сцена и свет — в текстуру пост-процессора.
         renderer.render(queue, &mut encoder, post.scene_view(), &*atlas, batch, &camera);
         renderer.render_lights(queue, &mut encoder, post.scene_view(), &camera, lights);
@@ -221,8 +227,8 @@ impl HudDemo {
         renderer.set_ui_backdrop(device, backdrop.view());
         // Стеклянные подложки панелей поверх финальной картинки, затем виджеты.
         post.apply(queue, &mut encoder, &view, PostFx::None, t);
-        renderer.render_ui_frost(queue, &mut encoder, &view, &*atlas, ui.frost_batch(), VIEWPORT);
-        renderer.render_ui(queue, &mut encoder, &view, &*atlas, ui.batch(), VIEWPORT);
+        renderer.render_ui_frost(queue, &mut encoder, &view, &*atlas, ui.frost_batch(), vp);
+        renderer.render_ui(queue, &mut encoder, &view, &*atlas, ui.batch(), vp);
         // Скролл-панели: каждый слой обрезается по своему прямоугольнику.
         for layer in ui.scroll_layers() {
             let batch = ui.scroll_batch(layer.id).expect("батч слоя после upload");
@@ -232,7 +238,7 @@ impl HudDemo {
                 &view,
                 &*atlas,
                 batch,
-                VIEWPORT,
+                vp,
                 Some(layer.clip()),
             );
         }
@@ -249,8 +255,8 @@ impl winit::application::ApplicationHandler for HudDemo {
                     winit::window::Window::default_attributes()
                         .with_title("dioma-render — UI каркас")
                         .with_inner_size(winit::dpi::LogicalSize::new(
-                            VIEWPORT[0],
-                            VIEWPORT[1],
+                            START_SIZE[0],
+                            START_SIZE[1],
                         )),
                 )
                 .unwrap(),
@@ -300,7 +306,10 @@ impl winit::application::ApplicationHandler for HudDemo {
         let mut renderer = Renderer::new(&device, format);
         renderer.set_clear_color(wgpu::Color { r: 0.05, g: 0.07, b: 0.10, a: 1.0 });
 
-        self.ui = Some(UiSystem::new(&device, &queue, &mut atlas));
+        let mut ui_system = UiSystem::new(&device, &queue, &mut atlas);
+        // DPI Windows (125/150%): метрики UI умножаются на pixels_per_point.
+        ui_system.set_scale(window.scale_factor() as f32);
+        self.ui = Some(ui_system);
 
         self.window = Some(window);
         self.surface = Some(surface);
@@ -338,9 +347,15 @@ impl winit::application::ApplicationHandler for HudDemo {
                     post.resize(device, size.width.max(1), size.height.max(1));
                     backdrop.resize(device, size.width.max(1), size.height.max(1));
                 }
+                self.viewport = [size.width as f32, size.height as f32];
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = [position.x as f32, position.y as f32];
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if let Some(ui) = &mut self.ui {
+                    ui.set_scale(scale_factor as f32);
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // LinearPixels — привычные «щелчки» колеса.
