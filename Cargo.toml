@@ -62,6 +62,18 @@ path = "src/bin/sardana_probe.rs"
 name = "grow-viz"
 path = "src/bin/grow_viz.rs"
 
+# ── Экспортёр коннектома для Unity-порта (golden trace паритета) ──
+
+[[bin]]
+name = "export_connectome"
+path = "src/bin/export_connectome.rs"
+
+# ── Экспортёр золотого следа биохимии (паритет Bio-модуля) ──
+
+[[bin]]
+name = "export_bio"
+path = "src/bin/export_bio.rs"
+
 # ── Игра: смоук `--frames=N`; окно «dioma» ──
 
 [[bin]]
