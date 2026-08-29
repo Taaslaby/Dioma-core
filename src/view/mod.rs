@@ -35,4 +35,4 @@ pub use dioma_engine::creature::Sex;
 pub use dioma_engine::env::{Season, TimeOfDay};
 pub use input::{GameCommand, InputMapper};
 pub use present::{DrawScene, Presenter, LAYER_TINT};
-pub use snapshot::SimView;
+pub use snapshot::{CritterView, SimView};

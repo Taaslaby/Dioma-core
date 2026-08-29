@@ -152,6 +152,9 @@ pub struct UiSystem {
     focus_order_prev: Vec<u64>,
     /// Открытое popup-меню (id его кнопки); одновременно открыто одно.
     menu_open: Option<u64>,
+    /// Прямоугольники панелей кадра — для гейта мировых кликов
+    /// (`pointer_in_ui`): клик по панели не должен провалиться в мир.
+    hit_rects: Vec<Rect>,
     /// Смещения скролла по id панели (между кадрами).
     scroll_offsets: HashMap<u64, f32>,
     /// Скролл-слои завершённого кадра (для `Renderer::render_ui_clip`).
@@ -263,6 +266,7 @@ impl UiSystem {
             focus_order: Vec::new(),
             focus_order_prev: Vec::new(),
             menu_open: None,
+            hit_rects: Vec::new(),
             scroll_offsets: HashMap::new(),
             scroll_layers: Vec::new(),
             scroll_pool: HashMap::new(),
@@ -279,6 +283,12 @@ impl UiSystem {
     /// Батч стекла последнего кадра (см. [`UiFrame::frost_batch`]).
     pub fn frost_batch(&self) -> &SpriteBatch {
         &self.frost_batch
+    }
+
+    /// Курсор над какой-либо панелью UI этого кадра? (гейт мировых кликов:
+    /// игра не должна реагировать на клик, попавший в панель).
+    pub fn pointer_in_ui(&self, cursor: [f32; 2]) -> bool {
+        self.hit_rects.iter().any(|r| r.contains(cursor))
     }
 
     /// Скролл-слои последнего кадра (см. [`UiFrame::scroll_panel`]):
@@ -387,6 +397,7 @@ impl UiSystem {
         }
         self.frost_sprites.clear();
         self.scroll_layers.clear();
+        self.hit_rects.clear();
         UiFrame {
             ui: self,
             atlas,
@@ -440,6 +451,7 @@ impl<'a> UiFrame<'a> {
     pub fn panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
         let rect =
             anchored_rect(anchor, size, self.viewport, self.theme.screen_margin * self.ui.scale);
+        self.ui.hit_rects.push(rect);
         self.draw_shadow(rect);
         self.ui.patch.uv = self.uv("ui/panel");
         // Градиент по рядам nine-patch: верхняя строка светлее нижней.
@@ -478,6 +490,7 @@ impl<'a> UiFrame<'a> {
     pub fn glass_panel(&mut self, anchor: Anchor, size: [f32; 2], content: impl FnOnce(&mut Panel)) {
         let rect =
             anchored_rect(anchor, size, self.viewport, self.theme.screen_margin * self.ui.scale);
+        self.ui.hit_rects.push(rect);
         let mut frost = Sprite::new(
             rect.world_center(self.viewport),
             [rect.w, rect.h],

@@ -13,7 +13,12 @@
 //! синяя ночь). Сезоны визуально не меняют мир — только текст (документировано).
 //!
 //! Управление: Space — пауза, 1/2/3 — скорость ×1/×2/×4, Esc — снять
-//! выделение, Shift+клик — спавн существа, B — спавн ягоды у курсора.
+//! выделение, Shift+клик — спавн существа, B — спавн ягоды у курсора,
+//! стрелки/Enter — навигация по списку существ.
+//!
+//! РОЛИ UI: наш спрайтовый каркас — информационные панели (стеклянный
+//! инспектор + скролл-список существ); egui — настройки/меню/графики
+//! (окно «⚙ Настройки»); DebugFont убран (инфопанель заменила оверлей).
 //!
 //! Запуск: `cargo run -p dioma --bin game` или смоук `-- --frames=150`.
 
@@ -21,12 +26,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dioma::env::map::WorldMap;
-use dioma::env::{Substance, SUBSTANCES};
+use dioma::env::{Season, Substance, SUBSTANCES};
 use dioma::sim::Arena;
 use dioma::view::{
-    GameCommand, InputMapper, Presenter, Season, Sex, SimView, TICK, TimeOfDay, LAYER_TINT,
+    CritterView, GameCommand, InputMapper, Presenter, Sex, SimView, TICK, TimeOfDay, LAYER_TINT,
 };
-use dioma_render::{Camera, DebugFont, Renderer, Sprite, SpriteAtlas, SpriteBatch, SpriteFx};
+use dioma_render::ui::{Panel, UiKey, UiSystem};
+use dioma_render::{Camera, Renderer, Sprite, SpriteAtlas, SpriteBatch, SpriteFx};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -98,7 +104,14 @@ struct Game {
     atlas: Option<SpriteAtlas>,
     presenter: Option<Presenter>,
     batch: Option<SpriteBatch>,
-    font: Option<DebugFont>,
+    /// Наш спрайтовый UI: информационные панели (HUD/инспектор).
+    /// egui остаётся для настроек/меню/графиков (разделение ролей).
+    ui_sys: Option<dioma_render::ui::UiSystem>,
+    mouse_down: bool,
+    mouse_down_prev: bool,
+    ui_key: Option<dioma_render::ui::UiKey>,
+    wheel: f32,
+    exit_requested: bool,
     // egui-оверлей (0.31 — пара к wgpu 24): контекст живёт всегда, окно/рендерер — в resumed.
     egui_ctx: egui::Context,
     egui_state: Option<egui_winit::State>,
@@ -137,7 +150,12 @@ impl Game {
             atlas: None,
             presenter: None,
             batch: None,
-            font: None,
+            ui_sys: None,
+            mouse_down: false,
+            mouse_down_prev: false,
+            ui_key: None,
+            wheel: 0.0,
+            exit_requested: false,
             egui_ctx: egui::Context::default(),
             egui_state: None,
             egui_renderer: None,
@@ -243,17 +261,13 @@ impl Game {
             scene.tint.push(tint);
         }
 
-        // Строки оверлея собираем до мутабельного заимствования рендерера.
-        let lines = self.overlay_lines(&view);
-
         let Some(device) = &self.device else { return };
         let Some(queue) = &self.queue else { return };
         let Some(surface) = &self.surface else { return };
         let Some(config) = &self.config else { return };
-        let Some(atlas) = &self.atlas else { return };
+        let Some(atlas) = self.atlas.as_mut() else { return };
         let Some(renderer) = &mut self.renderer else { return };
         let Some(batch) = &mut self.batch else { return };
-        let Some(font) = &self.font else { return };
 
         // 3) Слои в один батч (внутри батча — сортировка по layer/depth).
         batch.clear();
@@ -297,15 +311,116 @@ impl Game {
         });
         renderer.render(queue, &mut encoder, &view_tex, atlas, batch, &self.camera);
 
-        // 5) Оверлей (DebugFont — ASCII, поэтому строки транслитом).
-        renderer.render_debug_overlay(
-            &mut encoder,
+        // 5) Наш спрайтовый UI: информационные панели (HUD/инспектор).
+        let vp = self.camera.viewport;
+        let arena_tick = self.arena.tick;
+        let stats = *renderer.stats();
+        {
+            let Some(ui_sys) = &mut self.ui_sys else { return };
+            let input = dioma_render::ui::UiInput {
+                cursor: self.cursor,
+                down: self.mouse_down,
+                just_pressed: self.mouse_down && !self.mouse_down_prev,
+                just_released: !self.mouse_down && self.mouse_down_prev,
+                key: self.ui_key,
+                scroll: self.wheel,
+            };
+            self.mouse_down_prev = self.mouse_down;
+            self.ui_key = None;
+            self.wheel = 0.0;
+
+            let mut frame = ui_sys.begin(atlas, queue, input, vp);
+            let selected = &mut self.selected;
+            frame.glass_panel(
+                dioma_render::ui::Anchor::TopLeft,
+                [300.0, 210.0],
+                |p| {
+                    p.label(&format!(
+                        "FPS {:.1} · тик {}",
+                        stats.fps,
+                        arena_tick,
+                    ));
+                    p.label_muted(&format!(
+                        "{} · день {} · {}",
+                        tod_latin(view.time_of_day),
+                        view.day_in_season + 1,
+                        season_name(view.season),
+                    ));
+                    p.label(&format!(
+                        "существ: {} · ягод: {} · комнат: {}",
+                        view.critters.len(),
+                        view.berries.len(),
+                        view.rooms.len(),
+                    ));
+                    p.separator();
+                    if let Some(id) = *selected {
+                        if let Some(c) = view.critters.iter().find(|c| c.id == id) {
+                            p.label(&format!("Существо #{}", id.0));
+                            need_bars(p, c);
+                        } else {
+                            p.label_muted("существо исчезло");
+                        }
+                    } else {
+                        p.label_muted("кликните существо в списке ↓ или в мире");
+                    }
+                },
+            );
+            // Список существ — скролл-панель; клик по строке выбирает.
+            frame.scroll_panel(
+                dioma_render::ui::Anchor::BottomLeft,
+                [300.0, 190.0],
+                |p| {
+                    let sleeping = view.critters.iter().filter(|c| c.sleeping).count();
+                    if sleeping > 0 {
+                        p.label_muted(&format!("💤 спит: {sleeping}"));
+                    }
+                    for c in &view.critters {
+                        let label = format!(
+                            "#{id} · {sex} · {state}{zzz}",
+                            id = c.id.0,
+                            sex = if matches!(c.sex, Sex::Male) { "M" } else { "F" },
+                            state = if c.alive { "живо" } else { "мертво" },
+                            zzz = if c.sleeping { " 💤" } else { "" },
+                        );
+                        let mut b =
+                            dioma_render::ui::Button::owned(label).small();
+                        if *selected == Some(c.id) {
+                            b = b.tooltip("выбрано (повторный клик — снять)");
+                        }
+                        if p.button(b).clicked {
+                            *selected = if *selected == Some(c.id) { None } else { Some(c.id) };
+                        }
+                    }
+                },
+            );
+            frame.upload(queue);
+            
+        }
+        renderer.render_ui(
             queue,
+            &mut encoder,
             &view_tex,
-            font,
-            &Camera::new(self.camera.viewport),
-            &lines,
+            atlas,
+            self.ui_sys.as_ref().expect("ui_sys").batch(),
+            vp,
         );
+        for layer in self.ui_sys.as_ref().expect("ui_sys").scroll_layers() {
+            let batch = self
+                .ui_sys
+                .as_ref()
+                .expect("ui_sys")
+                .scroll_batch(layer.id)
+                .expect("батч слоя после upload");
+            renderer.render_ui_clip(
+                queue,
+                &mut encoder,
+                &view_tex,
+                atlas,
+                batch,
+                vp,
+                Some(layer.clip()),
+            );
+        }
 
         // 6) egui-оверлей (Load — сцена и DebugFont уже нарисованы): HUD с
         //    кнопками паузы/скорости, список существ и инспектор выбранного.
@@ -316,16 +431,14 @@ impl Game {
             let stats = *renderer.stats();
 
             let raw_input = egui_state.take_egui_input(window);
+            let mut exit_requested = false;
             let full_output = self.egui_ctx.run(raw_input, |ctx| {
-                game_ui(
-                    ctx,
-                    &mut self.paused,
-                    &mut self.speed,
-                    &mut self.selected,
-                    &view,
-                    &stats,
-                )
+                game_ui(ctx, &mut self.paused, &mut self.speed, &mut exit_requested, &stats)
             });
+            if exit_requested {
+                // Выход через egui обрабатываем после отрисовки кадра.
+                self.exit_requested = true;
+            }
             egui_state.handle_platform_output(window, full_output.platform_output);
             let clipped =
                 self.egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
@@ -366,97 +479,30 @@ impl Game {
         queue.submit(Some(encoder.finish()));
         frame.present();
     }
+}
 
-    /// Строки оверлея: FPS, тик, пауза, скорость, выделенное существо.
-    ///
-    /// DebugFont умеет только ASCII 32..=126 (кириллица → '?'), поэтому
-    /// строки — транслит (см. доки dioma-render/debug.rs).
-    fn overlay_lines(&self, view: &SimView) -> Vec<String> {
-        let s = self.renderer.as_ref().map(|r| *r.stats()).unwrap_or_default();
-        let mut lines = vec![format!(
-            "FPS {:.1} | tick {} | pauza {} | skorost x{}",
-            s.fps,
-            self.arena.tick,
-            onoff(self.paused),
-            self.speed,
-        )];
-        lines.push(format!(
-            "sushestv {} | yagod {} | komnat {}",
-            view.critters.len(),
-            view.berries.len(),
-            view.rooms.len(),
-        ));
-        // Время суток и сезон: «Utro | Den 2 Vesny». Транслит (DebugFont —
-        // ASCII); у сезона пока нет визуала, только текст (документировано).
-        lines.push(format!(
-            "{} | Den {} {}",
-            tod_latin(view.time_of_day),
-            view.day_in_season + 1,
-            season_genitive(view.season),
-        ));
-        if let Some(sel) = self.selected {
-            if let Some(c) = view.critters.iter().find(|c| c.id == sel) {
-                lines.push(format!(
-                    "vydeleno #{}: golod {} glukoza {} ustalost {}",
-                    sel.0,
-                    bar(c.hunger),
-                    bar(c.glucose),
-                    bar(c.fatigue),
-                ));
-                lines.push(format!(
-                    "  syedeno {} | skorost {:.2} | ziv {} | pol {}",
-                    c.food_eaten,
-                    c.speed,
-                    onoff(c.alive),
-                    sex_glyph(c.sex),
-                ));
-                // Стадия B: зрение существа (левый/правый глаз-бин).
-                lines.push(format!(
-                    "  vizhu edu: {} (L {:.2} R {:.2})",
-                    if c.vis_l > 0.0 || c.vis_r > 0.0 { "da" } else { "net" },
-                    c.vis_l,
-                    c.vis_r,
-                ));
-            } else {
-                lines.push(format!("vydeleno #{}: net v snimke", sel.0));
-            }
-        }
-        lines.push("Space pauza | 1/2/3 skorost | Esc snyat | Shift+klik spawn | B yagoda".to_string());
-        lines
+/// Сезон по-русски (egui/инфопанель).
+fn season_name(s: Season) -> &'static str {
+    match s {
+        Season::Spring => "весна",
+        Season::Summer => "лето",
+        Season::Autumn => "осень",
+        Season::Winter => "зима",
     }
 }
 
-/// egui-панель: HUD (FPS/тик/время суток), кнопки паузы и скорости,
-/// список существ для выбора и инспектор выбранного.
-///
-/// Кириллица здесь — ок (шрифт egui её умеет), в отличие от DebugFont.
+/// egui-окно настроек: пауза/скорость/выход (графики — будущее).
 fn game_ui(
     ctx: &egui::Context,
     paused: &mut bool,
     speed: &mut u32,
-    selected: &mut Option<dioma::env::AgentId>,
-    view: &SimView,
+    exit: &mut bool,
     stats: &dioma_render::RenderStats,
 ) {
-    egui::Window::new("dioma")
-        .default_width(260.0)
+    egui::Window::new("⚙ Настройки")
+        .default_width(220.0)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!("FPS {:.1}", stats.fps));
-            });
-            ui.label(format!(
-                "{} · день {} · {}",
-                tod_latin(view.time_of_day),
-                view.day_in_season + 1,
-                season_name(view.season),
-            ));
-            ui.label(format!(
-                "существ: {} · ягод: {} · комнат: {}",
-                view.critters.len(),
-                view.berries.len(),
-                view.rooms.len(),
-            ));
-
+            ui.label(format!("FPS {:.1}", stats.fps));
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui.button(if *paused { "▶ Пуск" } else { "⏸ Пауза" }).clicked() {
@@ -468,97 +514,16 @@ fn game_ui(
                     }
                 }
             });
-
             ui.add_space(6.0);
             ui.separator();
-            ui.heading("Существа");
-            egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                let sleeping = view.critters.iter().filter(|c| c.sleeping).count();
-                if sleeping > 0 {
-                    ui.label(format!("💤 спит: {sleeping}"));
-                }
-                for c in &view.critters {
-                    let label = format!("#{id} · {sex} · {state}{zzz}", id = c.id.0,
-                        sex = if matches!(c.sex, Sex::Male) { "M" } else { "F" },
-                        state = if c.alive { "живо" } else { "мертво" },
-                        zzz = if c.sleeping { " 💤" } else { "" });
-                    if ui.selectable_label(*selected == Some(c.id), label).clicked() {
-                        *selected = if *selected == Some(c.id) { None } else { Some(c.id) };
-                    }
-                }
-            });
-
-            if let Some(id) = *selected {
-                if let Some(c) = view.critters.iter().find(|c| c.id == id) {
-                    ui.separator();
-                    ui.heading(format!("Существо #{}", id.0));
-                    need_bar(ui, "Голод", c.hunger);
-                    need_bar(ui, "Глюкоза", c.glucose);
-                    need_bar(ui, "Усталость", c.fatigue);
-                    ui.label(format!(
-                        "съедено: {} · скорость: {:.2} · пол: {}",
-                        c.food_eaten,
-                        c.speed,
-                        if matches!(c.sex, Sex::Male) { "M" } else { "F" },
-                    ));
-                    ui.label(format!("видит еду: L {:.2} · R {:.2}", c.vis_l, c.vis_r));
-                    ui.separator();
-                    ui.label("Настроение (дофамин/серотонин/кортизол)");
-                    need_bar(ui, "Дофамин", c.dopamine);
-                    need_bar(ui, "Серот.", c.serotonin);
-                    need_bar(ui, "Стресс", c.cortisol);
-                    need_bar(ui, "Мозг", c.spike_rate);
-                    ui.label(format!(
-                        "сон: {} · память мест: {} · мотор: {:.2}",
-                        if c.sleeping { "спит 💤" } else { "бодрствует" },
-                        c.memory_places,
-                        c.moto_tone,
-                    ));
-                }
+            if ui.button("Выход").clicked() {
+                *exit = true;
             }
+            ui.weak("Space — пауза · 1/2/3 — скорость · Esc — снять");
         });
 }
 
-/// Потребность как прогресс-бар с подписью.
-fn need_bar(ui: &mut egui::Ui, name: &str, v: f32) {
-    ui.horizontal(|ui| {
-        ui.label(name);
-        ui.add(
-            egui::ProgressBar::new(v.clamp(0.0, 1.0))
-                .show_percentage()
-                .desired_width(140.0),
-        );
-    });
-}
-
-/// Сезон по-русски (egui — кириллица ок).
-fn season_name(s: Season) -> &'static str {
-    match s {
-        Season::Spring => "весна",
-        Season::Summer => "лето",
-        Season::Autumn => "осень",
-        Season::Winter => "зима",
-    }
-}
-
-/// Полоса состояния как текст: `[#####---]`.
-fn bar(v: f32) -> String {    const N: usize = 10;
-    let filled = (v.clamp(0.0, 1.0) * N as f32).round() as usize;
-    let mut s = String::with_capacity(N + 2);
-    s.push('[');
-    for i in 0..N {
-        s.push(if i < filled { '#' } else { '-' });
-    }
-    s.push(']');
-    s
-}
-
-/// «вкл»/«выкл» для строк оверлея.
-fn onoff(b: bool) -> &'static str {
-    if b { "vkl" } else { "vykl" }
-}
-
-/// Фаза суток транслитом (DebugFont — ASCII, кириллица → «?»).
+/// Фаза суток транслитом (для строки даты в инфопанели).
 fn tod_latin(t: TimeOfDay) -> &'static str {
     match t {
         TimeOfDay::Dawn => "Rassvet",
@@ -569,17 +534,31 @@ fn tod_latin(t: TimeOfDay) -> &'static str {
     }
 }
 
-/// Сезон в родительном падеже: «Den 2 Vesny» / «Den 1 Zimy».
-fn season_genitive(s: Season) -> &'static str {
-    match s {
-        Season::Spring => "Vesny",
-        Season::Summer => "Leta",
-        Season::Autumn => "Oseni",
-        Season::Winter => "Zimy",
-    }
+/// Инспектор существа в нашем спрайтовом UI: потребности, гормоны, состояние.
+fn need_bars(p: &mut Panel, c: &CritterView) {
+    p.progress_bar("Голод", c.hunger);
+    p.progress_bar("Глюкоза", c.glucose);
+    p.progress_bar("Усталость", c.fatigue);
+    p.label(&format!(
+        "съедено: {} · скорость: {:.2} · пол: {}",
+        c.food_eaten,
+        c.speed,
+        if matches!(c.sex, Sex::Male) { "M" } else { "F" },
+    ));
+    p.label_muted(&format!("видит еду: L {:.2} · R {:.2}", c.vis_l, c.vis_r));
+    p.progress_bar("Дофамин", c.dopamine);
+    p.progress_bar("Серотонин", c.serotonin);
+    p.progress_bar("Стресс", c.cortisol);
+    p.progress_bar("Мозг", c.spike_rate);
+    p.label_muted(&format!(
+        "сон: {} · память мест: {} · мотор: {:.2}",
+        if c.sleeping { "спит 💤" } else { "бодрствует" },
+        c.memory_places,
+        c.moto_tone,
+    ));
 }
 
-/// Пол существа: «M»/«F» (DebugFont — ASCII, без ♂/♀).
+/// Пол существа: «M»/«F» (для нашего UI).
 fn sex_glyph(sex: Sex) -> &'static str {
     match sex {
         Sex::Male => "M",
@@ -651,13 +630,16 @@ impl ApplicationHandler for Game {
         };
         surface.configure(&device, &config);
 
-        // Атлас: тело, тень, 4 лица, 4 фазы ягоды, тайлсет пола/стен.
-        let mut atlas = SpriteAtlas::new(&device, 256);
+        // Атлас: тело, тень, 4 лица, 4 фазы ягоды, тайлсет пола/стен + UI.
+        // 1024 — запас: ленивые глифы UI растят атлас и переупаковывают
+        // регионы; Presenter::new обязан резолвить UV ПОСЛЕ UiSystem::new.
+        let mut atlas = SpriteAtlas::new(&device, 1024);
+        let mut ui_sys = UiSystem::new(&device, &queue, &mut atlas);
+        ui_sys.set_scale(&mut atlas, &queue, window.scale_factor() as f32);
         let presenter = Presenter::new(&queue, &mut atlas);
 
         let mut renderer = Renderer::new(&device, format);
         renderer.set_clear_color(wgpu::Color { r: 0.05, g: 0.07, b: 0.10, a: 1.0 });
-        let font = DebugFont::new(&device, &queue);
         let batch = SpriteBatch::new(&device, BATCH_CAPACITY);
 
         let mut camera = Camera::new([size.width as f32, size.height as f32]);
@@ -682,9 +664,9 @@ impl ApplicationHandler for Game {
         self.config = Some(config);
         self.renderer = Some(renderer);
         self.atlas = Some(atlas);
+        self.ui_sys = Some(ui_sys);
         self.presenter = Some(presenter);
         self.batch = Some(batch);
-        self.font = Some(font);
         self.egui_state = Some(egui_state);
         self.egui_renderer = Some(egui_renderer);
         self.camera = camera;
@@ -716,22 +698,51 @@ impl ApplicationHandler for Game {
             WindowEvent::ModifiersChanged(m) => {
                 self.shift = m.state().shift_key();
             }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Left,
-                ..
-            } => {
-                if let Some(cmd) = self.input.on_click(self.shift, &self.arena) {
-                    self.apply(cmd);
+            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                let pressed = state == ElementState::Pressed;
+                self.mouse_down_prev = self.mouse_down;
+                self.mouse_down = pressed;
+                if pressed {
+                    // Клик по нашим панелям не должен доходить до мира.
+                    let over_ui = self
+                        .ui_sys
+                        .as_ref()
+                        .map(|u| u.pointer_in_ui(self.cursor))
+                        .unwrap_or(false);
+                    if !over_ui {
+                        if let Some(cmd) = self.input.on_click(self.shift, &self.arena) {
+                            self.apply(cmd);
+                        }
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     if event.state == ElementState::Pressed {
+                        // Стрелки/Enter — нашему UI (навигация списком).
+                        self.ui_key = match code {
+                            winit::keyboard::KeyCode::ArrowUp => Some(UiKey::Up),
+                            winit::keyboard::KeyCode::ArrowDown => Some(UiKey::Down),
+                            winit::keyboard::KeyCode::Enter => Some(UiKey::Enter),
+                            _ => self.ui_key,
+                        };
                         if let Some(cmd) = self.input.on_key(code) {
                             self.apply(cmd);
                         }
                     }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.wheel += match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                };
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if let (Some(ui), Some(atlas), Some(queue)) =
+                    (&mut self.ui_sys, &mut self.atlas, &self.queue)
+                {
+                    ui.set_scale(atlas, queue, scale_factor as f32);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -749,7 +760,11 @@ impl ApplicationHandler for Game {
     }
 
     /// Непрерывная анимация: каждый тик цикла просим перерисовку.
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.exit_requested {
+            event_loop.exit();
+            return;
+        }
         if let Some(window) = &self.window {
             window.request_redraw();
         }
