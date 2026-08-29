@@ -117,6 +117,26 @@ pub struct RegionAttachment {
     pub height: f32,
 }
 
+/// Mesh-attachment: произвольная сетка. UV — сразу в пространстве страницы
+/// (Spine 3.8 отдаёт готовые).
+#[derive(Clone, Debug)]
+pub struct MeshAttachment {
+    /// Взвешенные вершины: на вершину — список (кость, x, y, вес).
+    /// Мировая позиция = Σ вес × (bone_world × (x, y)).
+    pub weighted: Vec<Vec<[f32; 4]>>,
+    /// UV каждой вершины (пространство страницы).
+    pub uvs: Vec<[f32; 2]>,
+    /// Треугольники (индексы вершин, порядок как в JSON).
+    pub triangles: Vec<u32>,
+}
+
+/// Attachment слота.
+#[derive(Clone, Debug)]
+pub enum Attachment {
+    Region(RegionAttachment),
+    Mesh(MeshAttachment),
+}
+
 /// Слот: кость + attachment по умолчанию (порядок массива = draw order).
 #[derive(Clone, Debug)]
 pub struct SlotDef {
@@ -178,14 +198,19 @@ impl Animation {
 pub struct SpineSkeleton {
     pub bones: Vec<BoneDef>,
     pub slots: Vec<SlotDef>,
-    /// Имя слота → регион-attachment (default-скин).
-    pub attachments: HashMap<String, RegionAttachment>,
+    /// Имя слота → attachment (default-скин).
+    pub attachments: HashMap<String, Attachment>,
     pub animations: HashMap<String, Animation>,
     /// Центрирующий сдвиг из границ JSON (skeleton.x/y/width/height).
     pub offset: [f32; 2],
 }
 
 impl SpineSkeleton {
+    /// Имя первой анимации (порядок вставки JSON; для демо/дефолта).
+    pub fn first_animation(&self) -> Option<&str> {
+        self.animations.keys().next().map(|s| s.as_str())
+    }
+
     pub fn from_str(json: &str) -> Result<Self, String> {
         let v: Value = serde_json::from_str(json).map_err(|e| format!("skeleton JSON: {e}"))?;
         let e = |m: &str| format!("skeleton: {m}");
@@ -223,16 +248,81 @@ impl SpineSkeleton {
         if let Some(skin) = v["skins"][0]["attachments"].as_object() {
             for (slot_name, atts) in skin {
                 if let Some((_, def)) = atts.as_object().and_then(|o| o.iter().next()) {
-                    attachments.insert(
-                        slot_name.clone(),
-                        RegionAttachment {
+                    let att = if def["type"].as_str() == Some("mesh") {
+                        let nums: Vec<f32> = def["vertices"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()
+                            })
+                            .unwrap_or_default();
+                        let uvs: Vec<[f32; 2]> = def["uvs"]
+                            .as_array()
+                            .map(|a| {
+                                a.chunks(2)
+                                    .filter(|c| c.len() == 2)
+                                    .map(|c| {
+                                        [c[0].as_f64().unwrap_or(0.0) as f32,
+                                         c[1].as_f64().unwrap_or(0.0) as f32]
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        // Spine 3.8: вершины либо пары (x, y) — без весов, либо
+                        // группы [n, (boneIdx, x, y, вес)×n] — взвешенные. Индекс
+                        // кости — абсолютный в skeleton.bones.
+                        let mut weighted: Vec<Vec<[f32; 4]>> = Vec::new();
+                        if nums.len() == uvs.len() * 2 {
+                            for pair in nums.chunks(2) {
+                                weighted.push(vec![[0.0, pair[0], pair[1], 1.0]]);
+                            }
+                        } else {
+                            let mut i = 0usize;
+                            while i < nums.len() {
+                                let n = nums[i] as usize;
+                                i += 1;
+                                let mut groups = Vec::with_capacity(n);
+                                for _ in 0..n {
+                                    if i + 3 >= nums.len() + 1 && i + 4 > nums.len() {
+                                        return Err(format!("mesh «{slot_name}»: битые взвешенные вершины"));
+                                    }
+                                    if i + 4 > nums.len() {
+                                        return Err(format!("mesh «{slot_name}»: битые взвешенные вершины"));
+                                    }
+                                    groups.push([
+                                        nums[i],
+                                        nums[i + 1],
+                                        nums[i + 2],
+                                        nums[i + 3],
+                                    ]);
+                                    i += 4;
+                                }
+                                weighted.push(groups);
+                            }
+                        }
+                        if weighted.len() != uvs.len() || weighted.is_empty() {
+                            return Err(format!(
+                                "mesh «{slot_name}»: вершин {} ≠ uv {}",
+                                weighted.len(),
+                                uvs.len()
+                            ));
+                        }
+                        let triangles: Vec<u32> = def["triangles"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter().map(|t| t.as_u64().unwrap_or(0) as u32).collect()
+                            })
+                            .unwrap_or_default();
+                        Attachment::Mesh(MeshAttachment { weighted, uvs, triangles })
+                    } else {
+                        Attachment::Region(RegionAttachment {
                             x: def["x"].as_f64().unwrap_or(0.0) as f32,
                             y: def["y"].as_f64().unwrap_or(0.0) as f32,
                             rotation: def["rotation"].as_f64().unwrap_or(0.0) as f32,
                             width: def["width"].as_f64().unwrap_or(0.0) as f32,
                             height: def["height"].as_f64().unwrap_or(0.0) as f32,
-                        },
-                    );
+                        })
+                    };
+                    attachments.insert(slot_name.clone(), att);
                 }
             }
         }
@@ -371,6 +461,14 @@ fn sample(keys: &[Key], time: f32, out: &mut (f32, f32)) {
 
 /// Аффин `[a, b, c, d, tx, ty]`: точка' = (a·x + c·y + tx, b·x + d·y + ty).
 type Affine = [f32; 6];
+
+fn push_vert(mesh: &mut Mesh, m: &Affine, offset: [f32; 2], x: f32, y: f32, u: f32, v: f32) {
+    mesh.vertices.push(MeshVertex {
+        position: [m[0] * x + m[2] * y + m[4] + offset[0], m[1] * x + m[3] * y + m[5] + offset[1]],
+        uv: [u, v],
+        color: [1.0, 1.0, 1.0, 1.0],
+    });
+}
 
 fn compose(p: &Affine, l: &Affine) -> Affine {
     [
@@ -529,39 +627,67 @@ impl SpineInstance {
         }
     }
 
-    /// Квады слотов в draw order — готовый меш для `render_meshes`.
+    /// Слоты в draw order — готовый меш для `render_meshes`.
+    ///
+    /// Region — квад по углам; mesh (без весов) — вершины прямо из JSON,
+    /// трансформированные матрицей кости (Spine 3.8: без отдельного
+    /// attachment-трансформа). Деформ-таймлайны пока не применяются — сетка
+    /// в setup-форме (задокументировано в доке модуля).
     pub fn build_mesh(&self) -> Mesh {
         let mut mesh = Mesh { vertices: Vec::new(), indices: Vec::new() };
         for slot in &self.skeleton.slots {
             let Some(att) = self.skeleton.attachments.get(&slot.attachment) else {
                 continue;
             };
-            let Some(uvs) = self.corner_uvs.get(&slot.attachment) else {
-                continue;
-            };
             let bone = self.world[slot.bone];
-            let att_local = local_affine(att.rotation, att.x, att.y, 1.0, 1.0);
-            let m = compose(&bone, &att_local);
-            let (hw, hh) = (att.width / 2.0, att.height / 2.0);
-            // Углы: TL, TR, BL, BR (x — вправо, y — вверх) + UV каждого.
-            let corners = [
-                (-hw, hh, uvs[0]),
-                (hw, hh, uvs[1]),
-                (-hw, -hh, uvs[2]),
-                (hw, -hh, uvs[3]),
-            ];
-            let base = mesh.vertices.len() as u32;
-            for (cx, cy, (u, v)) in corners {
-                mesh.vertices.push(MeshVertex {
-                    position: [
-                        m[0] * cx + m[2] * cy + m[4] + self.offset[0],
-                        m[1] * cx + m[3] * cy + m[5] + self.offset[1],
-                    ],
-                    uv: [u, v],
-                    color: [1.0, 1.0, 1.0, 1.0],
-                });
+            match att {
+                Attachment::Region(r) => {
+                    let Some(uvs) = self.corner_uvs.get(&slot.attachment) else {
+                        continue;
+                    };
+                    let att_local = local_affine(r.rotation, r.x, r.y, 1.0, 1.0);
+                    let m = compose(&bone, &att_local);
+                    let (hw, hh) = (r.width / 2.0, r.height / 2.0);
+                    // Углы: TL, TR, BL, BR (x — вправо, y — вверх) + UV.
+                    let corners = [
+                        (-hw, hh, uvs[0]),
+                        (hw, hh, uvs[1]),
+                        (-hw, -hh, uvs[2]),
+                        (hw, -hh, uvs[3]),
+                    ];
+                    let base = mesh.vertices.len() as u32;
+                    for (cx, cy, (u, v)) in corners {
+                        push_vert(&mut mesh, &m, self.offset, cx, cy, u, v);
+                    }
+                    mesh.indices.extend([base, base + 1, base + 2, base + 2, base + 1, base + 3]);
+                }
+                Attachment::Mesh(m_att) => {
+                    let base = mesh.vertices.len() as u32;
+                    for (groups, uv) in m_att.weighted.iter().zip(m_att.uvs.iter()) {
+                        // Мировая позиция = Σ вес × (bone_world × (x, y)).
+                        let mut px = 0.0f32;
+                        let mut py = 0.0f32;
+                        for g in groups {
+                            let b = &self.world[g[0] as usize];
+                            let w = g[3];
+                            px += w * (b[0] * g[1] + b[2] * g[2] + b[4]);
+                            py += w * (b[1] * g[1] + b[3] * g[2] + b[5]);
+                        }
+                        push_vert(
+                            &mut mesh,
+                            &[1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                            self.offset,
+                            px,
+                            py,
+                            uv[0],
+                            uv[1],
+                        );
+                    }
+                    for t in &m_att.triangles {
+                        mesh.indices.push(base + t);
+                    }
+                }
             }
-            mesh.indices.extend([base, base + 1, base + 2, base + 2, base + 1, base + 3]);
         }
         mesh
     }

@@ -398,7 +398,13 @@ fn load_spine() -> Option<(dioma_render::spine::SpineData, dioma_render::spine::
         &json,
     )
     .expect("spine загружается");
-    let inst = data.instance("animation");
+    // Первая анимация экспорта (у strawberry это beat/beat2).
+    let anim = data
+        .skeleton
+        .first_animation()
+        .expect("есть анимации")
+        .to_string();
+    let inst = data.instance(&anim);
     Some((data, inst))
 }
 
@@ -406,27 +412,29 @@ fn load_spine() -> Option<(dioma_render::spine::SpineData, dioma_render::spine::
 fn spine_parse_and_pose() {
     let Some((data, mut inst)) = load_spine() else { return };
 
-    // Атлас: 3 региона, один повернут, страница 346×132.
+    // Атлас: размер страницы из заголовка, регионы на месте.
     let text = std::fs::read_to_string(format!("{SPINE_DIR}/skeleton.atlas")).unwrap();
     let (w, h, regions) = dioma_render::spine::parse_atlas(&text).unwrap();
-    assert_eq!((w, h), (346, 132));
-    assert_eq!(regions.len(), 3);
-    assert!(regions.iter().any(|r| r.rotate), "есть rotate-регион");
+    assert_eq!((w, h), (1083, 459));
+    assert!(regions.len() >= 10, "регионы на месте: {}", regions.len());
 
-    // Скелет: 4 кости, 3 слота, анимация с длительностью ~0.5.
-    assert_eq!(data.skeleton.bones.len(), 4);
-    assert_eq!(data.skeleton.slots.len(), 3);
+    // Скелет: кости/слоты экспорта, все attachment'ы на месте.
+    assert_eq!(data.skeleton.bones.len(), 15);
+    assert_eq!(data.skeleton.slots.len(), 14);
+    // 13: один слот пуст по умолчанию, два ссылаются на attachment'ы вне
+    // default-скина (скрытые копии) — build_mesh их пропускает без паники.
+    assert_eq!(data.skeleton.attachments.len(), 13);
     let dur = inst.duration();
-    assert!(dur > 0.4 && dur < 0.7, "длительность анимации ~0.5: {dur}");
+    assert!(dur > 0.0, "таймлайны анимации распарсены: {dur}");
 
-    // Позирование: 12 вершин (3 квада), все конечные.
+    // Позирование: 13 attachment'ов = 11 квадов (44 вершины) + 2 mesh-сетки,
+    // все вершины конечны.
     inst.update(dur * 0.25);
     let mesh = inst.build_mesh();
-    assert_eq!(mesh.vertices.len(), 12);
-    assert_eq!(mesh.indices.len(), 18);
+    assert_eq!(mesh.vertices.len(), 44);
     assert!(mesh.vertices.iter().all(|v| v.position[0].is_finite() && v.position[1].is_finite()));
 
-    // Поза зависит от времени: вершины при t=0.25 ≠ t=0.5 (кость bone4 вертится).
+    // Поза зависит от времени: вершины при t=0.25 ≠ t=0.5.
     let mut inst2 = inst.clone();
     inst2.time = dur * 0.5;
     inst2.update(0.0);

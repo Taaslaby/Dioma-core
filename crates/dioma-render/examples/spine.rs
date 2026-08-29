@@ -153,9 +153,20 @@ impl winit::application::ApplicationHandler for SpineDemo {
         let png = std::fs::read(dir.join("skeleton.png")).expect("skeleton.png");
         let data = dioma_render::spine::SpineData::load(&device, &queue, &atlas_text, &png, &json)
             .expect("Spine загружается");
-        let spine = data.instance("animation");
-        println!("Spine: костей {}, слотов {}, длительность {:.2}с",
-            data.skeleton.bones.len(), data.skeleton.slots.len(), spine.duration());
+        // Первая анимация из экспорта (в strawberry это beat/beat2).
+        let anim = data
+            .skeleton
+            .first_animation()
+            .expect("в скелете нет анимаций")
+            .to_string();
+        let spine = data.instance(&anim);
+        println!(
+            "Spine: костей {}, слотов {}, анимация «{}» ({:.2}с)",
+            data.skeleton.bones.len(),
+            data.skeleton.slots.len(),
+            anim,
+            spine.duration()
+        );
 
         let mut renderer = Renderer::new(&device, format);
         renderer.set_clear_color(wgpu::Color { r: 0.05, g: 0.07, b: 0.10, a: 1.0 });
