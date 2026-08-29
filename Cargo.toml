@@ -74,6 +74,12 @@ path = "src/bin/export_connectome.rs"
 name = "export_bio"
 path = "src/bin/export_bio.rs"
 
+# ── Экспортёр протокола обучения (ящик Скиннера: мозг УЧИТСЯ) ──
+
+[[bin]]
+name = "export_learning"
+path = "src/bin/export_learning.rs"
+
 # ── Игра: смоук `--frames=N`; окно «dioma» ──
 
 [[bin]]
