@@ -291,8 +291,10 @@ impl UiSystem {
 
     /// Масштаб DPI: множитель всех метрик (высоты кнопок, шрифты, отступы).
     /// Передавайте `window.scale_factor()`; hit-test остаётся корректным.
-    pub fn set_scale(&mut self, pixels_per_point: f32) {
+    pub fn set_scale(&mut self, atlas: &mut SpriteAtlas, queue: &wgpu::Queue, pixels_per_point: f32) {
         self.scale = pixels_per_point.max(0.25);
+        // Прогрев глифов под новый размер — резкий текст без хичча на кадре.
+        self.font.prepare(queue, atlas, self.scale);
     }
 
     /// Текущий масштаб DPI.
@@ -572,6 +574,16 @@ impl<'a> UiFrame<'a> {
 
     /// Заливает собранные спрайты в батч (`Renderer::render_ui` рисует его).
     pub fn upload(&mut self, queue: &wgpu::Queue) {
+        // Гарды переполнения: батч паникует на push за вместимостью, а
+        // DPI-масштаб умножает число глифов — обрезаем с предупреждением.
+        let overflow = self.sprites.len().saturating_sub(UI_BATCH_CAPACITY);
+        if overflow > 0 {
+            eprintln!(
+                "[ui] батч переполнен: {} спрайтов не влезли (вместимость {}) — обрезано",
+                overflow, UI_BATCH_CAPACITY
+            );
+            self.sprites.truncate(UI_BATCH_CAPACITY);
+        }
         // Стекло — в свой батч.
         self.ui.frost_batch.clear();
         for s in self.frost.drain(..) {

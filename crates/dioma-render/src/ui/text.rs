@@ -5,10 +5,11 @@
 //! которые складываются в ОБЩИЙ атлас крейта (`SpriteAtlas::add_rgba`) —
 //! поэтому UI рисуется одним спрайтовым батчем без второй текстуры.
 //!
-//! Базовый размер глифа — [`BASE_PX`] px; стили масштабируют его (дробные
-//! масштабы дают лёгкое размягчение краёв — сглаживание растеризации).
-//! Глифы базового набора (ASCII + кириллица А-я, Ёё) создаются при старте,
-//! остальные — лениво при первом использовании.
+//! Глифы кэшируются ПО РАЗМЕРУ: ключ `(символ, px)`. При DPI-масштабе
+//! (`UiSystem::set_scale`) текст запрашивается в фактическом размере —
+//! глифы растеризуются заново и остаются резкими (без апскейла 32px).
+//! Базовый набор (ASCII + кириллица А-я, Ёё) создаётся при старте для 32px;
+//! [`UiFont::prepare`] прогревает набор под новый масштаб при смене DPI.
 
 use std::collections::HashMap;
 
@@ -25,11 +26,11 @@ pub const FONT_BYTES: &[u8] = include_bytes!("../../assets/fonts/PTSans-Regular.
 /// Слой спрайтов текста в UI-батче (см. `super::LAYER_*`).
 pub const LAYER_TEXT: f32 = 1002.0;
 
-/// Метрики глифа в px при [`BASE_PX`] (масштабируются стилем).
+/// Метрики глифа в px при размере растеризации `px`.
 #[derive(Clone, Debug)]
 pub struct GlyphInfo {
-    /// Имя региона в атласе (`ui/glyph/U+XXXX`); UV резолвится при пуше —
-    /// атлас может расти и переупаковывать регионы.
+    /// Имя региона в атласе (`ui/glyph/{px}/{U+XXXX}`); UV резолвится при
+    /// пуше — атлас может расти и переупаковывать регионы.
     pub name: String,
     /// Размер растра (px).
     pub w: f32,
@@ -40,20 +41,32 @@ pub struct GlyphInfo {
     pub above: f32,
     /// Ширина шага пера (px).
     pub advance: f32,
+    /// Размер растеризации, для которого посчитаны метрики.
+    pub px: u32,
 }
 
-/// Шрифт UI + кэш глифов в атласе.
+/// Шрифт UI + кэш глифов (по символу И размеру).
 pub struct UiFont {
     font: Font,
-    glyphs: HashMap<char, GlyphInfo>,
-    /// Подъём строки над базовой линией (px, >0).
+    glyphs: HashMap<(char, u32), GlyphInfo>,
+    /// Подъём строки над базовой линией (px при [`BASE_PX`], >0).
     pub ascent: f32,
-    /// Спуск строки (px, <0) — низ строки = базовая линия + descent.
+    /// Спуск строки (px при [`BASE_PX`], <0) — низ = базовая линия + descent.
     pub descent: f32,
 }
 
+/// Базовый набор глифов: печатный ASCII + кириллица А-я, Ёё + «№».
+fn base_chars() -> Vec<char> {
+    let mut chars: Vec<char> = (32u32..127).map(|c| char::from_u32(c).unwrap()).collect();
+    chars.extend((0x410u32..=0x44F).map(|c| char::from_u32(c).unwrap()));
+    chars.push('Ё');
+    chars.push('ё');
+    chars.push('№');
+    chars
+}
+
 impl UiFont {
-    /// Создаёт шрифт и растеризует базовый набор глифов в общий атлас.
+    /// Создаёт шрифт и растеризует базовый набор глифов (32px) в общий атлас.
     pub fn new(_device: &wgpu::Device, queue: &wgpu::Queue, atlas: &mut SpriteAtlas) -> Self {
         let font = Font::from_bytes(FONT_BYTES, fontdue::FontSettings {
             collection_index: 0,
@@ -70,32 +83,41 @@ impl UiFont {
             ascent: line.ascent,
             descent: line.descent,
         };
-        // Базовый набор: печатный ASCII + кириллица А-я, Ёё, а также «№».
-        let mut chars: Vec<char> = (32u32..127).map(|c| char::from_u32(c).unwrap()).collect();
-        chars.extend((0x410u32..=0x44F).map(|c| char::from_u32(c).unwrap()));
-        chars.push('Ё');
-        chars.push('ё');
-        chars.push('№');
-        for c in chars {
-            this.ensure_glyph(queue, atlas, c);
+        for c in base_chars() {
+            this.ensure_glyph(queue, atlas, c, BASE_PX as u32);
         }
         this
     }
 
-    /// Глиф из кэша; при отсутствии — растеризует и добавляет в атлас.
-    pub fn glyph(&mut self, queue: &wgpu::Queue, atlas: &mut SpriteAtlas, c: char) -> GlyphInfo {
-        if !self.glyphs.contains_key(&c) {
-            self.ensure_glyph(queue, atlas, c);
+    /// Прогревает базовый набор под новый масштаб DPI (без хичча на кадре).
+    pub fn prepare(&mut self, queue: &wgpu::Queue, atlas: &mut SpriteAtlas, scale: f32) {
+        let px = (BASE_PX * scale).round().max(1.0) as u32;
+        for c in base_chars() {
+            self.ensure_glyph(queue, atlas, c, px);
         }
-        self.glyphs[&c].clone()
     }
 
-    fn ensure_glyph(&mut self, queue: &wgpu::Queue, atlas: &mut SpriteAtlas, c: char) {
-        let (m, coverage) = self.font.rasterize(c, BASE_PX);
+    /// Глиф из кэша (по символу и размеру); при отсутствии — растеризует.
+    pub fn glyph(&mut self, queue: &wgpu::Queue, atlas: &mut SpriteAtlas, c: char, px: u32) -> GlyphInfo {
+        let key = (c, px);
+        if !self.glyphs.contains_key(&key) {
+            self.ensure_glyph(queue, atlas, c, px);
+        }
+        self.glyphs[&key].clone()
+    }
+
+    fn ensure_glyph(&mut self, queue: &wgpu::Queue, atlas: &mut SpriteAtlas, c: char, px: u32) {
+        let (m, coverage) = self.font.rasterize(c, px as f32);
         // Пустой глиф (пробел): квада нет, шаг пера остаётся.
         if m.width == 0 || m.height == 0 {
-            self.glyphs.insert(c, GlyphInfo {
-                name: String::new(), w: 0.0, h: 0.0, left: 0.0, above: 0.0, advance: m.advance_width,
+            self.glyphs.insert((c, px), GlyphInfo {
+                name: String::new(),
+                w: 0.0,
+                h: 0.0,
+                left: 0.0,
+                above: 0.0,
+                advance: m.advance_width,
+                px,
             });
             return;
         }
@@ -107,16 +129,15 @@ impl UiFont {
             rgba[i * 4 + 2] = 255;
             rgba[i * 4 + 3] = a;
         }
-        let name = format!("ui/glyph/{:04X}", c as u32);
-        if let Err(e) = atlas.add_rgba(queue, &name, m.width.max(1) as u32, m.height.max(1) as u32, &rgba) {
-            // Атлас не вырос (без устройства) — заменяем пустотой: текст без
-            // этого глифа, но UI не падает. На практике не происходит:
-            // атлас создан через SpriteAtlas::new и умеет расти.
-            eprintln!("[ui] глиф {c:?} не добавлен: {e}");
+        let name = format!("ui/glyph/{px:03}/{:04X}", c as u32);
+        if let Err(e) = atlas.add_rgba(queue, &name, m.width as u32, m.height as u32, &rgba) {
+            // Атлас не вырос (без устройства) — текст без этого глифа, но UI
+            // не падает. На практике не происходит: атлас умеет расти.
+            eprintln!("[ui] глиф {c:?}@{px} не добавлен: {e}");
             return;
         }
         self.glyphs.insert(
-            c,
+            (c, px),
             GlyphInfo {
                 name,
                 w: m.width as f32,
@@ -126,19 +147,26 @@ impl UiFont {
                 // ymin = низ растра относительно базовой линии.
                 above: (m.ymin + m.height as i32) as f32,
                 advance: m.advance_width,
+                px,
             },
         );
     }
 
+    /// Высота строки текста при масштабе `scale` (px).
+    pub fn line_height(&self, scale: f32) -> f32 {
+        (self.ascent - self.descent) * scale
+    }
+
     /// Ширина текста по метрикам шрифта БЕЗ атласа (для лэйаута/тестов;
-    /// не растеризует новые глифы).
+    /// не растеризует новые глифы в атлас).
     pub fn measure(&self, text: &str, scale: f32) -> f32 {
+        let px = (BASE_PX * scale).round().max(1.0);
         text.chars()
-            .map(|c| match self.glyphs.get(&c) {
-                Some(g) => g.advance * scale,
+            .map(|c| match self.glyphs.get(&(c, px as u32)) {
+                Some(g) => g.advance,
                 None => {
-                    let (m, _) = self.font.rasterize(c, BASE_PX);
-                    m.advance_width * scale
+                    let (m, _) = self.font.rasterize(c, px);
+                    m.advance_width
                 }
             })
             .sum()
@@ -173,20 +201,17 @@ impl UiFont {
         lines
     }
 
-    /// Высота строки текста при масштабе `scale` (px).
-    pub fn line_height(&self, scale: f32) -> f32 {
-        (self.ascent - self.descent) * scale
-    }
-
-    /// Ширина однострочного текста (px) при масштабе `scale`.
+    /// Ширина однострочного текста (px) при масштабе `scale` (с атласом).
     pub fn text_width(&mut self, queue: &wgpu::Queue, atlas: &mut SpriteAtlas, text: &str, scale: f32) -> f32 {
+        let px = (BASE_PX * scale).round().max(1.0) as u32;
         text.chars()
-            .map(|c| self.glyph(queue, atlas, c).advance * scale)
+            .map(|c| self.glyph(queue, atlas, c, px).advance)
             .sum()
     }
 
     /// Пушит текст спрайтами глифов; `at` — левый ВЕРХНИЙ угол блока
-    /// (экранные px, Y вниз). Многострочность — по `\n`, без переноса слов.
+    /// (экранные px, Y вниз). Многострочность — по `\n`. Глифы растеризуются
+    /// под фактический размер (`BASE_PX × scale`) — резкость на любом DPI.
     #[allow(clippy::too_many_arguments)]
     pub fn push_text(
         &mut self,
@@ -199,30 +224,31 @@ impl UiFont {
         color: [f32; 4],
         viewport: [f32; 2],
     ) {
+        let px = (BASE_PX * scale).round().max(1.0) as u32;
         let line_h = self.line_height(scale);
         for (li, line) in text.split('\n').enumerate() {
             let mut pen_x = at[0];
             let baseline = at[1] + self.ascent * scale + li as f32 * line_h;
             for c in line.chars() {
-                let g = self.glyph(queue, atlas, c);
-                // UV на момент отрисовки: атлас мог вырасти и переупаковать
-                // регионы, поэтому кэшировать UV глифов нельзя.
-                let uv = atlas.region(&g.name).unwrap_or([0.0; 4]);
-                pen_x += g.left * scale;
+                let g = self.glyph(queue, atlas, c, px);
+                pen_x += g.left;
                 if g.w > 0.0 && g.h > 0.0 {
+                    // UV на момент отрисовки: атлас мог вырасти и переупаковать
+                    // регионы, поэтому кэшировать UV глифов нельзя.
+                    let uv = atlas.region(&g.name).unwrap_or([0.0; 4]);
                     // Верх растра на экране: базовая линия − «над базовой линией».
-                    let top = baseline - g.above * scale;
-                    let center_screen = [pen_x + g.w * scale * 0.5, top + g.h * scale * 0.5];
+                    let top = baseline - g.above;
+                    let center_screen = [pen_x + g.w * 0.5, top + g.h * 0.5];
                     let world = [
                         center_screen[0] - viewport[0] * 0.5,
                         viewport[1] * 0.5 - center_screen[1],
                     ];
-                    let mut s = Sprite::new(world, [g.w * scale, g.h * scale], uv);
+                    let mut s = Sprite::new(world, [g.w, g.h], uv);
                     s.tint = color;
                     s.layer = LAYER_TEXT;
                     out.push(s);
                 }
-                pen_x += g.advance * scale - g.left * scale;
+                pen_x += g.advance - g.left;
             }
         }
     }
@@ -241,7 +267,18 @@ mod tests {
         let (p, _) = font.rasterize('p', BASE_PX);
         assert!(p.ymin < 0, "хвост «p» ниже базовой линии: ymin={}", p.ymin);
         assert!(a.ymin >= 0, "«A» стоит на базовой линии: ymin={}", a.ymin);
-        assert!(p.ymin + i32::try_from(p.height).unwrap() < a.ymin + i32::try_from(a.height).unwrap(), "верх «p» ниже верха «A»");
+        assert!(
+            p.ymin + i32::try_from(p.height).unwrap() < a.ymin + i32::try_from(a.height).unwrap(),
+            "верх «p» ниже верха «A»"
+        );
+    }
+
+    #[test]
+    fn line_metrics_sane() {
+        let font = Font::from_bytes(FONT_BYTES, Default::default()).unwrap();
+        let line = font.horizontal_line_metrics(BASE_PX).unwrap();
+        assert!(line.ascent > 0.0 && line.descent < 0.0);
+        assert!(line.new_line_size > line.ascent);
     }
 
     fn test_font() -> UiFont {
@@ -273,9 +310,7 @@ mod tests {
     #[test]
     fn wrap_respects_paragraph_breaks() {
         let f = test_font();
-        let lines = f.wrap("один
-
-два", 300.0, 0.5);
+        let lines = f.wrap("один\n\nдва", 300.0, 0.5);
         assert_eq!(lines, vec!["один".to_string(), "".to_string(), "два".to_string()], "{lines:?}");
     }
 
@@ -286,11 +321,15 @@ mod tests {
         assert!(lines.iter().any(|l| l == "ДлинноеСлово"), "длинное слово целиком: {lines:?}");
     }
 
+    /// Метрики линейны по размеру: measure при 0.5 и 1.0 соотносятся как px.
     #[test]
-    fn line_metrics_sane() {
-        let font = Font::from_bytes(FONT_BYTES, Default::default()).unwrap();
-        let line = font.horizontal_line_metrics(BASE_PX).unwrap();
-        assert!(line.ascent > 0.0 && line.descent < 0.0);
-        assert!(line.new_line_size > line.ascent);
+    fn measure_scales_linearly() {
+        let f = test_font();
+        let w_half = f.measure("Тест", 0.5);
+        let w_full = f.measure("Тест", 1.0);
+        assert!(
+            (w_full / w_half - 2.0).abs() < 0.02,
+            "линейность: {w_half} vs {w_full}"
+        );
     }
 }

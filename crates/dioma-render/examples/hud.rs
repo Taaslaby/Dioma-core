@@ -308,7 +308,7 @@ impl winit::application::ApplicationHandler for HudDemo {
 
         let mut ui_system = UiSystem::new(&device, &queue, &mut atlas);
         // DPI Windows (125/150%): метрики UI умножаются на pixels_per_point.
-        ui_system.set_scale(window.scale_factor() as f32);
+        ui_system.set_scale(&mut atlas, &queue, window.scale_factor() as f32);
         self.ui = Some(ui_system);
 
         self.window = Some(window);
@@ -353,8 +353,11 @@ impl winit::application::ApplicationHandler for HudDemo {
                 self.cursor = [position.x as f32, position.y as f32];
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if let Some(ui) = &mut self.ui {
-                    ui.set_scale(scale_factor as f32);
+                // Прогрев глифов под новый DPI — нужны атлас и очередь.
+                if let (Some(ui), Some(atlas), Some(queue)) =
+                    (&mut self.ui, &mut self.atlas, &self.queue)
+                {
+                    ui.set_scale(atlas, queue, scale_factor as f32);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
