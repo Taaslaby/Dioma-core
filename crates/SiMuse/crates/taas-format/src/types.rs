@@ -2,7 +2,7 @@
 //! секции вместо научных тензоров. Секция = имя + kind + данные; читатель
 //! достаёт по имени, игре не нужно знать shape наугад.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 pub const TAAS_MAGIC: &[u8; 5] = b"TAAS2";
 /// Магия старого научного формата — его читатель авто-мигрирует на v2.
@@ -92,6 +92,9 @@ pub struct TaasManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game: Option<String>,
     pub sections: Vec<SectionEntry>,
+    /// BTreeMap, а не HashMap: порядок ключей в JSON манифеста должен быть
+    /// стабильным, иначе два сохранения одних и тех же данных дают разные
+    /// байты (и эталонные файлы нельзя сверять побайтово).
     #[serde(default)]
-    pub metadata: HashMap<String, String>,
+    pub metadata: BTreeMap<String, String>,
 }

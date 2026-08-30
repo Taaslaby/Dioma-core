@@ -1,7 +1,7 @@
 //! Писатель `.taas` v2: секции по именам, типизированные, с CRC и zstd.
 
 use crate::types::*;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Помощник: CRC32 байтов.
 pub(crate) fn compute_crc32(data: &[u8]) -> u32 {
@@ -13,9 +13,10 @@ pub(crate) fn compute_crc32(data: &[u8]) -> u32 {
 pub struct TaasWriter {
     sections: Vec<SectionEntry>,
     payload: Vec<u8>,
-    metadata: HashMap<String, String>,
+    metadata: BTreeMap<String, String>,
     compression: Option<i32>,
     game: Option<String>,
+    created: Option<String>,
 }
 
 impl Default for TaasWriter {
@@ -29,15 +30,24 @@ impl TaasWriter {
         Self {
             sections: Vec::new(),
             payload: Vec::new(),
-            metadata: HashMap::new(),
+            metadata: BTreeMap::new(),
             compression: None,
             game: None,
+            created: None,
         }
     }
 
     /// Пометить файл игрой/сценой (полезно при загрузке: какой мир открывать).
     pub fn game(&mut self, game: &str) -> &mut Self {
         self.game = Some(game.to_string());
+        self
+    }
+
+    /// Зафиксировать метку времени вместо часов машины. Нужно эталонным
+    /// файлам: иначе один и тот же снапшот даёт разные байты при каждом
+    /// экспорте и его нельзя сверять с закоммиченным.
+    pub fn created(&mut self, timestamp: &str) -> &mut Self {
+        self.created = Some(timestamp.to_string());
         self
     }
 
@@ -123,7 +133,7 @@ impl TaasWriter {
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
         let manifest = TaasManifest {
             version: TAAS_VERSION.to_string(),
-            created: crate::chrono_or_fallback(),
+            created: self.created.clone().unwrap_or_else(crate::chrono_or_fallback),
             game: self.game.clone(),
             sections: self.sections.clone(),
             metadata: self.metadata.clone(),

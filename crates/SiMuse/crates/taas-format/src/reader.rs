@@ -4,7 +4,7 @@
 //! при чтении — игре не нужно знать про легаси.
 
 use crate::types::*;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 
@@ -263,7 +263,7 @@ impl TaasReader {
         &self.manifest.sections
     }
 
-    pub fn metadata(&self) -> &HashMap<String, String> {
+    pub fn metadata(&self) -> &BTreeMap<String, String> {
         &self.manifest.metadata
     }
 

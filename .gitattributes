@@ -1,0 +1,17 @@
+# В индексе — всегда LF. Иначе Windows-клон помечает каждый файл изменённым
+# и git ругается на CRLF при каждом коммите.
+* text=auto eol=lf
+
+*.rs      text
+*.toml    text
+*.md      text
+*.json    text
+*.wgsl    text
+*.py      text
+*.sh      text eol=lf
+
+# Бинарные эталоны и ассеты: подстановка концов строк их портит.
+*.taas    binary
+*.ttf     binary
+*.png     binary
+*.svg     text

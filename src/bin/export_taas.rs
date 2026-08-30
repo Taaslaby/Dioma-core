@@ -43,6 +43,9 @@ fn main() {
 
     let mut w = TaasWriter::new();
     w.game("dioma");
+    // Метка времени зафиксирована: эталон должен быть побайтово
+    // воспроизводимым, иначе каждый прогон экспортёра даёт «изменение» файла.
+    w.created("2026-01-01T00:00:00Z");
     w.add_metadata("purpose", "паритет формата");
     w.add_metadata("connectome", "dioma_c");
     w.add_metadata("synapses", "32583");
