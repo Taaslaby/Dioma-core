@@ -341,7 +341,7 @@ impl Brain {
         grown: &Grown,
         gains: Vec<Vec<f32>>,
         params: PlasticityParams,
-        columns: &[[f32; crate::biology::physiology::N_COLS]],
+        columns: &[[f32; crate::body::physiology::N_COLS]],
     ) -> Self {
         Self::with_model(grown, gains, params, BrainModel::Haap, columns, false)
     }
@@ -351,7 +351,7 @@ impl Brain {
         gains: Vec<Vec<f32>>,
         params: PlasticityParams,
         model: BrainModel,
-        haap_columns: &[[f32; crate::biology::physiology::N_COLS]],
+        haap_columns: &[[f32; crate::body::physiology::N_COLS]],
         gpu: bool,
     ) -> Self {
         // STDP-следы затухают в денормали → SIMD замедляется ×10; FTZ+DAZ
@@ -408,7 +408,7 @@ impl Brain {
                     eprintln!("[dioma] GPU-динамика недоступна ({e}), фолбэк на CPU");
                     let mut runner = BrainRunner::new(conn, config).expect("BrainRunner init");
                     if model == BrainModel::Haap {
-                        crate::biology::physiology::apply_haap_columns(&mut runner, haap_columns);
+                        crate::body::physiology::apply_haap_columns(&mut runner, haap_columns);
                     }
                     Dynamics::Cpu(runner)
                 }
@@ -416,7 +416,7 @@ impl Brain {
         } else {
             let mut runner = BrainRunner::new(conn, config).expect("BrainRunner init");
             if model == BrainModel::Haap {
-                crate::biology::physiology::apply_haap_columns(&mut runner, haap_columns);
+                crate::body::physiology::apply_haap_columns(&mut runner, haap_columns);
             }
             Dynamics::Cpu(runner)
         };

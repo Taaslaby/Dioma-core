@@ -20,7 +20,7 @@
 //! цикл раскручивается один раз (семантика одного тика Пифии и так линейна).
 //! author: Atlasov anton
 // -------------------------------------------------------------------------
-use crate::logic::vm::Opcode as T;
+use crate::vm::vm::Opcode as T;
 use crate::brain::rules::{compile, Op, RuleGene, Var};
 
 /// База регистров стека (регистры 8..15).
@@ -276,7 +276,7 @@ pub fn compile_program(prog: &[Op]) -> Result<Vec<T>, String> {
 /// # Safety
 /// `states` должен содержать минимум `8 * n_cells` флоатов.
 pub unsafe fn execute_cells(states: &mut [f32], n_cells: usize, program: &[T]) {
-    unsafe { crate::logic::vm::execute(states.as_mut_ptr(), std::ptr::null(), n_cells, program) }
+    unsafe { crate::vm::vm::execute(states.as_mut_ptr(), std::ptr::null(), n_cells, program) }
 }
 
 #[cfg(test)]
@@ -412,7 +412,7 @@ mod tests {
             T::StoreState(0, 0),
         ];
         unsafe {
-            crate::logic::vm::execute(states.as_mut_ptr(), std::ptr::null(), n, &program);
+            crate::vm::vm::execute(states.as_mut_ptr(), std::ptr::null(), n, &program);
         }
         assert!(states[..n].iter().all(|&value| value == 0.5));
     }

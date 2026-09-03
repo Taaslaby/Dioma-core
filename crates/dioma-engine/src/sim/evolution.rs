@@ -11,7 +11,7 @@
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
 use super::{critter_max_age, Arena, Critter};
-use crate::biology::metabolism::chem;
+use crate::body::metabolism::chem;
 use crate::creature::genome::instinct_pair_key;
 use crate::creature::{Creature, Genome};
 use crate::env::map::WorldMap;

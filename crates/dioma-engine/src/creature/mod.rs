@@ -6,7 +6,7 @@
 //! [`Sense`], существо исполняет мозг и тело, затем возвращает [`Action`].
 //! Координаты, столкновения, еда и социальное наблюдение принадлежат хосту
 //! (`crate::sim::Arena`).
-use crate::biology::metabolism::{chem, locus, Blood};
+use crate::body::metabolism::{chem, locus, Blood};
 use crate::brain::grow::{grow, grow_gpu, stage_b_layout};
 use crate::brain::instincts::Instinct;
 use crate::brain::neurons::{gains_from, Brain, PlasticityParams, BRAIN_STEPS_PER_TICK};
@@ -15,19 +15,20 @@ use crate::Grown;
 
 pub mod builder;
 pub mod dna;
+pub mod dna_legacy;
 pub mod genome;
 pub mod memory;
 pub mod metrics;
 
 pub use builder::CreatureBuilder;
 pub use builder::BrainLayout;
-pub use dna::Genome;
+pub use dna::{Genome, GeneKind, Coat, Eye, Memory};
 pub use genome::{CreatureGenome, MetabolismGene, Sex};
 pub use metrics::{BloodState, BrainStats, CreatureEvent, CreatureMetrics};
 
 /// Регионы stage_c_lite_layout (см. brain::grow::stage_c_lite_layout).
 /// Индексы регионов мозга в layout'е стадии C-lite (см. [`crate::brain::grow::stage_c_lite_layout`]).
-/// Публичные: научные тулзы ([`crate::sci`]) и оверлеи группируют нейроны по регионам.
+/// Публичные: научные тулзы ([`crate::tools`]) и оверлеи группируют нейроны по регионам.
 /// Ядро 0..6 — как в avoidance_layout; зрение и кора добавлены В КОНЕЦ
 /// (append-only): старые индексы не сдвинуты.
 pub const REGION_SL: usize = 0; // запах слева
@@ -91,6 +92,9 @@ const WALL_CURRENT: f32 = 4.0;
 /// у рта. 0.7 подобрано на детур-тесте (см. отчёт): охота стала прямее,
 /// но запах остался главным рулём у цели.
 const VISION_CURRENT: f32 = 0.7 * SMELL_CURRENT;
+/// Ток символа «слово» → ассоциативная кора. Сила как у запаха — символ
+/// должен конкурировать с таксисом на равных, иначе STDP не свяжет его с едой.
+const TEXT_CURRENT: f32 = 4.0;
 /// Порог близости стены, с которого фиксируется облегчение (стена отодвинулась).
 const RELIEF_MIN: f32 = 0.05;
 /// Дофамин за облегчение (стена отодвинулась — побег успешен).
@@ -169,6 +173,9 @@ pub struct Sense {
     /// true — видел соседа за едой в этом/прошлом тике (зеркальный сигнал
     /// для социального обучения). Заполняет хост.
     pub see_eat: bool,
+    /// 0..1 — символ «слово» (якорь текста). 0 = нет, 1 = предъявлено.
+    /// Подаётся в кору напрямую — ассоциативная зона учит связать слово с едой/болью.
+    pub text: f32,
 }
 
 /// Решение существа, которое применяет игровой хост после `tick`.
@@ -602,7 +609,7 @@ impl Creature {
 
     /// Пачка векторов спайков последнего тика: по одному вектору на подшаг
     /// мозга (`BRAIN_STEPS_PER_TICK` элементов), каждый — спайки нейронов
-    /// подшага. Питает спайк-растр научных тулзов ([`crate::sci`]).
+    /// подшага. Питает спайк-растр научных тулзов ([`crate::tools`]).
     pub fn spike_hist(&self) -> &[Vec<i32>] {
         &self.spike_hist
     }
@@ -712,6 +719,13 @@ impl Creature {
         }
         for e in &mut ext[self.bounds.vr.0..self.bounds.vr.1] {
             *e += vr_current;
+        }
+        // Текст-символ → ассоциативная кора: якорь «слово → еда/боль».
+        // Идёт в CORTEX_E напрямую — кора учит связать символ с наградой STDP-ом.
+        if sense.text > 0.0 {
+            let t = sense.text.clamp(0.0, 1.0) * gain * TEXT_CURRENT;
+            let (a, b) = self.brain.region_bounds(REGION_CORTEX_E);
+            for e in &mut ext[a..b] { *e += t; }
         }
         // Пейсмейкер «сердце»: тонический ток прикладывается каждый тик
         // (ext пересчитывается целиком — иначе `fill` выше затёр бы ток,

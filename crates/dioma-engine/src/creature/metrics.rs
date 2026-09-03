@@ -1,6 +1,6 @@
 //! Метрики и телеметрия для профилирования и отладки существ.
 
-use crate::biology::metabolism::chem;
+use crate::body::metabolism::chem;
 use crate::creature::Creature;
 
 /// Метрики существа за один тик.

@@ -16,7 +16,7 @@
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
 
-use crate::logic::vm::Opcode as T;
+use crate::vm::vm::Opcode as T;
 use crate::rng::XorShift;
 
 /// Количество регистров ВМ (совпадает с logic::vm).
@@ -297,7 +297,7 @@ impl BehaviorProgram {
     /// заполнены вызывающим слоем до вызова.
     pub fn execute(&self, states: &mut [f32], n: usize) {
         assert!(states.len() >= slots::N_STATE * n, "буфер состояния мал");
-        unsafe { crate::logic::vm::execute(states.as_mut_ptr(), core::ptr::null(), n, &self.bytecode) }
+        unsafe { crate::vm::vm::execute(states.as_mut_ptr(), core::ptr::null(), n, &self.bytecode) }
     }
 
     /// Возвращает исходные операции программы для инспекции и мутаций.

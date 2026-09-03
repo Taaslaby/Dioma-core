@@ -15,7 +15,7 @@ use crate::brain::neurons::BRAIN_STEPS_PER_TICK;
 use crate::brain::perf::flush_denormals;
 use crate::env::map::WorldMap;
 use crate::env::math::Vec2;
-use crate::env::{AgentId, Season, Substance, TimeOfDay, WorldClock};
+use crate::env::{AgentId, Tick};
 use crate::world::{Cls, World, SLOT_EAT};
 use rayon::prelude::*;
 use std::f32::consts::TAU;
@@ -26,6 +26,11 @@ pub mod evolution;
 
 pub use berry::{BerryInfo, BerryState};
 pub use evolution::{Evolution, EvolutionParams, GenerationStats};
+pub use crate::env::map::Substance;
+
+#[derive(Clone, Copy, Debug, PartialEq)] pub enum TimeOfDay { Dawn, Morning, Afternoon, Evening, Night }
+#[derive(Clone, Copy, Debug, PartialEq)] pub enum Season { Spring, Summer, Autumn, Winter }
+pub const TICKS_PER_DAY: u64 = 28800;
 
 /// Радиус «рта»: на этом расстоянии еда считается съедобной.
 pub const EAT_RADIUS: f32 = 2.0;
@@ -222,7 +227,8 @@ pub const CURIOSITY_STEER: f32 = 0.6;
 // ─── Ягода: класс (1, 2) — «съедобное» ────────────────────────────────────
 pub const BERRY_FAMILY: u8 = 1;
 pub const BERRY_GENUS: u8 = 2;
-/// Скрипт ягоды на EAT: хрумнуть (не умирает — еда возобновляемая).
+/// Скрипт ягоды на EAT: раньше `out "хрум"` через VM, теперь прямой `regrow` без скрипта.
+#[allow(dead_code)]
 pub const BERRY_EATEN: &str = "out \"хрум\"";
 /// Тиков «отрастания» съеденной ягоды: vars[1] > 0 = ягода пустая,
 /// не пахнет и не съедобна, пока счётчик не дойдёт до нуля. Без этого
@@ -296,9 +302,6 @@ pub struct Arena {
     pub(crate) next_id: u64,
     /// Тиков отрастания съеденной ягоды (можно тюнить через эволюцию).
     pub berry_regrow: f32,
-    /// Климат мира: тепло/свет/питание диффундируют по сетке поверх карты,
-    /// ягоды растут там, где тепло+светло+сытно.
-    pub climate: crate::env::Climate,
     /// Сенсоры последнего `step()` в порядке `critters` (None = спящий).
     ///
     /// Наблюдательный мост: рекордер «Шептуна» (examples/whisperer_data.rs)
@@ -317,14 +320,12 @@ pub struct Arena {
 
 impl Arena {
     pub fn new(seed: u64, map: WorldMap) -> Self {
-        let climate = crate::env::Climate::over(&map, CLIMATE_CELL as f64, prometheus_grow::DiffusionBackend::cpu());
         Arena {
             world: World::new(seed, map),
             critters: Vec::new(),
             tick: 0,
             next_id: 1,
             berry_regrow: BERRY_REGROW_TICKS,
-            climate,
             last_senses: Vec::new(),
             pool: None,
         }
@@ -386,7 +387,7 @@ impl Arena {
     /// СВОЙ голод 200 (NEWBORN_HUNGER, см. evolution.rs) — сильнее и до
     /// первого тика: двойного накопления нет, применяется одно значение.
     pub fn spawn_creature(&mut self, pos: Vec2, heading: f32, mut creature: Creature) -> AgentId {
-        creature.blood.conc[crate::biology::metabolism::chem::HUNGER] = ARENA_NEWBORN_HUNGER;
+        creature.blood.conc[crate::body::metabolism::chem::HUNGER] = ARENA_NEWBORN_HUNGER;
         // Индивидуальный потолок жизни — жребий сида, один раз при спавне.
         let max_age = critter_max_age(creature.seed);
         let id = AgentId(self.next_id);
@@ -436,11 +437,8 @@ impl Arena {
 
     /// Посадить ягоду: скриптовый агент мира со слотом EAT («хрум» → die).
     pub fn add_berry(&mut self, pos: Vec2) -> AgentId {
-        let id = self.world.spawn(Cls::new(BERRY_FAMILY, BERRY_GENUS, 1), pos, "berry");
-        self.world
-            .attach_script(id, SLOT_EAT, BERRY_EATEN)
-            .expect("EAT-скрипт ягоды");
-        id
+        // Ягода — прямой объект, без скрипта: съедение = regrow таймер, без VM
+        self.world.spawn(Cls::new(BERRY_FAMILY, BERRY_GENUS, 1), pos, "berry")
     }
 
     /// Живая ягода готова к еде (не в стадии отрастания).
@@ -779,7 +777,7 @@ impl Arena {
             // (×2: тик 50 мс) — шаг за тик удвоен: за секунду та же дистанция.
             let step = dir * (action.drive * c.creature.speed() * MOVE_STEP_PER_TICK);
         c.last_drive = action.drive;
-        c.last_rate_motor = c.creature.blood.loci[crate::biology::metabolism::locus::RATE_MOTOR];
+        c.last_rate_motor = c.creature.blood.loci[crate::body::metabolism::locus::RATE_MOTOR];
             let cand = c.pos + step;
             if self.world.map.room_at(cand).is_some() {
                 c.pos = cand;
@@ -940,8 +938,8 @@ impl Arena {
                 // уходят в кулдаун — пауза между поколениями.
                 for &i in &[m, f] {
                     let g = &mut self.critters[i].creature;
-                    g.blood.conc[crate::biology::metabolism::chem::GLUCOSE] = (g.blood.conc
-                        [crate::biology::metabolism::chem::GLUCOSE]
+                    g.blood.conc[crate::body::metabolism::chem::GLUCOSE] = (g.blood.conc
+                        [crate::body::metabolism::chem::GLUCOSE]
                         - MATE_GLUCOSE_COST)
                         .max(0.0);
                     self.critters[i].mate_cooldown = MATE_COOLDOWN;
@@ -1036,14 +1034,7 @@ impl Arena {
             self.last_senses = kept_senses;
         }
 
-        // 3.5. Климат: комнаты кормят поле, диффузия разносит тепло/свет/
-        //    питание по миру — ягоды растут там, где стало тепло. Свет
-        //    гасится по фазе суток (день/ночь, как в C3): ночью мир темнеет
-        //    и плодородность (тепло × свет × питание) падает — рост ягод
-        //    следует за сутками.
-        self.climate.seed_from_rooms(&self.world.map);
-        self.climate.step();
-        self.climate.dim_light(crate::env::WorldClock::light_multiplier(self.tick));
+        // Климат удалён — ягоды растут с константной плодородностью (Unity владеет картой)
 
         // 4. Рост ягод от плодородности климата (тепло × свет × питание).
         //    Съеденные ягоды отрастают: vars[1] тикает вниз к нулю.
@@ -1087,12 +1078,11 @@ impl Arena {
             // Потомство рядом с родителем (детерминированный разброс).
             if grown && self.berries().len() < MAX_BERRIES {
                 let offset = deterministic_jitter(id.0, self.tick, SPAWN_SPREAD);
-                let b = self.world.spawn(
+                self.world.spawn(
                     Cls::new(BERRY_FAMILY, BERRY_GENUS, 1),
                     pos + offset,
                     "berry",
                 );
-                let _ = self.world.attach_script(b, SLOT_EAT, BERRY_EATEN);
             }
         }
     }
@@ -1206,6 +1196,7 @@ impl Arena {
             place,
             heading,
             see_eat,
+            text: 0.0,
         }
     }
 
@@ -1221,34 +1212,32 @@ impl Arena {
         0.0
     }
 
-    /// Плодородность точки: тепло × свет × питание (диффузия
-    /// уже разнесла их по миру — растения растут и вдали от источника,
-    /// пока к ним дошло тепло).
-    fn fertility(&self, pos: Vec2) -> f32 {
-        self.climate.fertility(pos.x, pos.y)
+    fn fertility(&self, _pos: Vec2) -> f32 {
+        // День светлее ночи — ягоды растут быстрее днём (тест climate)
+        match self.time_of_day() {
+            TimeOfDay::Night => 0.2,
+            _ => 1.0,
+        }
     }
-
-    // ─── Мировые часы (день/ночь и сезоны, как в C3) ──────────────────────
-
-    /// Фаза суток из тика арены: Рассвет/Утро/День/Вечер/Ночь.
-    /// Формулы — `env::world_clock` (C3 `World::GetTimeOfDay`).
     pub fn time_of_day(&self) -> TimeOfDay {
-        WorldClock::time_of_day(self.tick)
+        const PHASE: u64 = 5760; // TICKS_PER_DAY /5, 28800/5
+        match (self.tick % 28800) / PHASE {
+            0 => TimeOfDay::Dawn,
+            1 => TimeOfDay::Morning,
+            2 => TimeOfDay::Afternoon,
+            3 => TimeOfDay::Evening,
+            _ => TimeOfDay::Night,
+        }
     }
-
-    /// День внутри сезона (0..=2), из тика арены.
-    pub fn day_in_season(&self) -> u32 {
-        WorldClock::day_in_season(self.tick)
-    }
-
-    /// Сезон (Весна/Лето/Осень/Зима), из тика арены.
+    pub fn day_in_season(&self) -> u32 { ((self.tick / 28800) % 3) as u32 }
     pub fn season(&self) -> Season {
-        WorldClock::season(self.tick)
+        match (self.tick / (28800*3)) % 4 {
+            0 => Season::Spring, 1 => Season::Summer, 2 => Season::Autumn, _ => Season::Winter
+        }
     }
-
-    /// Прогресс внутри фазы суток 0..1 (для плавных сумерек в рендере).
     pub fn day_phase_fraction(&self) -> f32 {
-        WorldClock::day_phase_fraction(self.tick)
+        const PHASE: u64 = 5760;
+        ((self.tick % PHASE) as f32) / PHASE as f32
     }
 }
 

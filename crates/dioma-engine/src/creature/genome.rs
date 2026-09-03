@@ -11,7 +11,7 @@
 //!              ребёнок рождается с рефлексами родителей.
 //! author: Atlasov anton
 //! -------------------------------------------------------------------------
-use crate::biology::metabolism::Blood;
+use crate::body::metabolism::Blood;
 use crate::brain::grow::{stage_c_lite_layout, Steering};
 use crate::brain::instincts::Instinct;
 use crate::brain::rules::RuleGene;

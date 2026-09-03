@@ -4,6 +4,12 @@ version = "0.2.0"
 edition = "2021"
 description = "Runtime движка Dioma: существа, биохимия, мир и симуляция"
 
+[features]
+default = []
+# Визуализация мозга (brain/viz.rs) и научные снапшоты (sci). Для Unity-бекенда не нужны.
+viz = []
+sci-tools = []
+
 [dependencies]
 pillars = { path = "../SiMuse/crates/pillars" }
 pillars-connectome = { path = "../SiMuse/crates/pillars-connectome" }

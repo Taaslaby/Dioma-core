@@ -9,10 +9,10 @@
 pub mod agent;
 pub mod sim;
 
-pub use agent::{slot, Agent, Cls, Message, Script};
+pub use agent::{Agent, Cls, Message};
 pub use sim::World;
 
-pub use agent::slot::{
-    ACTIVATE1 as SLOT_ACTIVATE1, ACTIVATE2 as SLOT_ACTIVATE2, DEACTIVATE as SLOT_DEACTIVATE,
-    EAT as SLOT_EAT, HIT as SLOT_HIT, TIMER as SLOT_TIMER,
-};
+// Legacy slot ids (VM удалена, константы оставлены для совместимости)
+pub const SLOT_ACTIVATE1: u8 = 0;
+pub const SLOT_EAT: u8 = 4;
+pub const SLOT_TIMER: u8 = 5;

@@ -1,7 +1,8 @@
-//! Игровое приложение Dioma.
-//! Основная логика находится в отдельном крейте `dioma-engine`.
+//! Headless backend for Unity (cdylib).
+//! Вся симуляция — в `dioma-engine`; этот крейт — только тонкий cdylib +
+//! экспортёры golden для `com.dioma.engine`.
 
 pub use dioma_engine::*;
 
-/// Мост «сим ↔ рендер»: снимок арены, презентация в спрайты, ввод.
-pub mod view;
+/// Стабильный C ABI для Unity: один тик существа за вызов, без GUI/рендера.
+pub mod unity_bridge;

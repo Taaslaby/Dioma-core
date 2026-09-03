@@ -3,7 +3,7 @@
 // дереве, все тесты видят приватные элементы как раньше.
 
     use super::*;
-    use crate::biology::metabolism::chem;
+    use crate::body::metabolism::chem;
 
     #[test]
     fn creature_hunts_berry_and_it_crunches() {
@@ -83,7 +83,7 @@
         let mut a = Arena::new(42, map);
         a.spawn(Vec2::new(5.0, 5.0), 0.0, 1);
         for _ in 0..2 {
-            a.critters[0].creature.blood = crate::biology::metabolism::Blood::creature(false);
+            a.critters[0].creature.blood = crate::body::metabolism::Blood::creature(false);
             a.critters[0].creature.blood.conc[chem::HUNGER] = 255.0;
             // Свежая ягода триала: прошлые убрать (см. док теста).
             for id in a.berries() {
@@ -185,7 +185,7 @@
         map.add_room(20.0, 10.0, 60.0, 20.0);
         let mut a = Arena::new(42, map);
         a.spawn(Vec2::new(5.0, 5.0), 0.0, 1);
-        a.critters[0].creature.blood = crate::biology::metabolism::Blood::creature(false);
+        a.critters[0].creature.blood = crate::body::metabolism::Blood::creature(false);
         a.critters[0].creature.blood.conc[chem::HUNGER] = 255.0;
         a.add_berry(Vec2::new(55.0, 15.0));
 
@@ -741,7 +741,7 @@
     /// «тик арены → accessors Arena::{time_of_day, day_in_season, season}».
     #[test]
     fn world_clock_phases_and_seasons() {
-        use crate::env::TICKS_PER_DAY;
+        use crate::sim::TICKS_PER_DAY;
 
         let mut map = WorldMap::default();
         map.add_room(0.0, 0.0, 40.0, 14.0);
@@ -779,7 +779,7 @@
     /// уровня) и ягоды растут медленнее — свет движет ростом, как в C3.
     #[test]
     fn night_reduces_light_field() {
-        use crate::env::TICKS_PER_DAY;
+        use crate::sim::TICKS_PER_DAY;
 
         let mut map = WorldMap::default();
         map.add_room(0.0, 0.0, 40.0, 14.0);
@@ -791,21 +791,14 @@
         ca[Substance::Temperature.idx()] = 200.0;
         ca[Substance::Nutrients.idx()] = 200.0;
 
-        let phase = TICKS_PER_DAY / 5;
-        // День: часы на фазу Afternoon, даём свету устояться.
+        let phase = 5760; // TICKS_PER_DAY/5
         arena.tick = TimeOfDay::Afternoon as u64 * phase;
-        for _ in 0..100 {
-            arena.step();
-        }
-        let day_fert = arena.climate.fertility(20.0, 7.0);
+        for _ in 0..100 { arena.step(); }
+        let day_fert = arena.fertility(Vec2::new(20.0, 7.0));
         assert!(day_fert > 0.4, "днём плодородие высокое: {day_fert}");
-
-        // Ночь: та же комната, свет почти гаснет.
         arena.tick = TimeOfDay::Night as u64 * phase;
-        for _ in 0..100 {
-            arena.step();
-        }
-        let night_fert = arena.climate.fertility(20.0, 7.0);
+        for _ in 0..100 { arena.step(); }
+        let night_fert = arena.fertility(Vec2::new(20.0, 7.0));
         assert!(
             night_fert < day_fert * 0.7,
             "ночь должна заметно снизить плодородие: {day_fert} → {night_fert}"

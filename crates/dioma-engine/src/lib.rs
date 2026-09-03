@@ -1,33 +1,40 @@
-//! # Dioma Engine
+//! # Dioma Engine — чистый headless runtime
 //!
-//! Игровой runtime для живых существ: нейронный мозг, тело и биохимия,
-//! скриптовый мир, климат и детерминированная симуляция.
+//! Headless: без окна/GUI. Unity грузит `dioma.dll` и зовёт `unity_bridge`.
 //!
-//! Верхние слои (`dioma-render` и game executable) могут зависеть от этого
-//! crate, но движок не зависит от окна или графического API. Поэтому одна и
-//! та же симуляция запускается в игре, headless-тестах, replay-инструментах
-//! и GPU-бенчмарках.
+//! ## Структура (по доменам, а не по файлам)
 //!
-//! ## Слои
-//!
-//! - [`brain`] — нейроны, пластичность, геном и рост коннектома.
-//! - [`biology`] — органы, кровь, обмен веществ и клеточные ВМ.
-//! - [`logic`] — общие ВМ (регистровая, скрипт-машина мира).
-//! - [`creature`] — мост между сенсорами, мозгом и телом.
-//! - [`mod@env`] — карта комнат и диффундирующие вещества.
-//! - [`world`] — пассивные игровые объекты и их события.
-//! - [`sim`] — композиция всех слоёв в игровой цикл.
+//! ```text
+//! brain/     — нейроны, STDP, гены, рост коннектома
+//! body/      — тело: кровь, органы, биоклетки (ex-biology)
+//! creature/  — существо: мост Sense → мозг → Action + ДНК
+//! world/     — мир: arena + ягоды + карта + климат
+//!   env/       карта комнат, вещества, время
+//!   world/     агенты-ягоды (скоро схлопнется в world)
+//!   sim/       Arena — композиция мира + существ
+//! vm/        — виртуалки: TNMT, BioVM, Пифия, a1-script (ex-logic)
+//! tools/     — наблюдение: SpikeRaster, Trace (ex-sci)
+//! support    — rng, error
+//! ```
 
-pub mod biology;
+pub mod body;
 pub mod brain;
 pub mod creature;
 pub mod env;
 pub mod error;
-pub mod logic;
+pub mod vm;
 pub mod rng;
-pub mod sci;
+pub mod tools;
 pub mod sim;
 pub mod world;
+
+// Совместимость
+#[deprecated(note = "use crate::body instead")]
+pub use body as biology;
+#[deprecated(note = "use crate::vm instead")]
+pub use vm as logic;
+#[deprecated(note = "use crate::tools instead")]
+pub use tools as sci;
 
 /// Удобный экспорт генетической проводки существа.
 pub use brain::Grown;

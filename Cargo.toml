@@ -4,64 +4,25 @@
 # SiMuse против dioma (вложенные воркспейсы не поддерживаются) и падал бы на
 # отсутствующих workspace.package/workspace.dependencies. Без [workspace] у
 # dioma крейты SiMuse находят свой корень обычным walk-up, как до переноса.
-# crates/dioma-render — самостоятельный пакет (пока никем не используется).
 
 [package]
 name = "dioma"
 version = "0.2.0"
 edition = "2021"
-description = "Игра о выращиваемых спикинг-агентах поверх движка taas-checkmate"
+description = "Headless backend for Unity: выращиваемые спайковые существа (cdylib). Референс для com.dioma.engine"
+
+[lib]
+# Unity загружает cdylib через P/Invoke; rlib остаётся для Rust-бинов и тестов.
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 dioma-engine = { path = "crates/dioma-engine" }
-prometheus-grow = { path = "crates/SiMuse/crates/prometheus-grow", features = ["gpu"] }
-pillars-connectome = { path = "crates/SiMuse/crates/pillars-connectome" }
 taas-format = { path = "crates/SiMuse/crates/taas-format" }
 serde_json = "1"
-pollster = "0.3"
-pillars-wgpu = { path = "crates/SiMuse/crates/pillars-wgpu" }
+rayon = "1"
 
-# ── Мост «сим ↔ рендер»: рендерер и wgpu 24 (пара к egui-wgpu 0.31, как в
-#    dioma-render) + winit 0.30 (в dioma-render winit — dev-dep, игре нужен
-#    напрямую). dioma-engine/SiMuse остаются на wgpu 22 — версии сосуществуют.
-dioma-render = { path = "crates/dioma-render" }
-wgpu = { version = "24", features = ["wgsl"] }
-winit = "0.30"
-egui = "0.31"
-egui-wgpu = "0.31"
-egui-winit = "0.31"
-
-# Стейлы-примеры используют `pillars` (ядро нейродинамики), которое рефакторинг
-# «тонких зависимостей» вынес из runtime-зависимостей — примерам оно всё ещё
-# нужно, поэтому живёт здесь как dev-зависимость.
 [dev-dependencies]
 pillars = { path = "crates/SiMuse/crates/pillars" }
-
-# ── Активные бины (протоколы); история — в archive/bins ──
-
-[[bin]]
-name = "dynasty"
-path = "src/bin/dynasty.rs"
-
-[[bin]]
-name = "evolved-rules"
-path = "src/bin/evolved_rules.rs"
-
-[[bin]]
-name = "skinner-box"
-path = "src/bin/skinner_box.rs"
-
-[[bin]]
-name = "conditioning"
-path = "src/bin/conditioning.rs"
-
-[[bin]]
-name = "sardana-probe"
-path = "src/bin/sardana_probe.rs"
-
-[[bin]]
-name = "grow-viz"
-path = "src/bin/grow_viz.rs"
 
 # ── Экспортёр коннектома для Unity-порта (golden trace паритета) ──
 
@@ -87,8 +48,4 @@ path = "src/bin/export_taas.rs"
 name = "export_learning"
 path = "src/bin/export_learning.rs"
 
-# ── Игра: смоук `--frames=N`; окно «dioma» ──
 
-[[bin]]
-name = "game"
-path = "src/bin/game.rs"
